@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "CellTypeDialog.h"
@@ -66,7 +46,7 @@ CellTypeDialog::CellTypeDialog(const Vector<Position>& positions, Sheet& sheet, 
     resize(285, 360);
 
     auto& main_widget = set_main_widget<GUI::Widget>();
-    main_widget.set_layout<GUI::VerticalBoxLayout>().set_margins({ 4, 4, 4, 4 });
+    main_widget.set_layout<GUI::VerticalBoxLayout>().set_margins(4);
     main_widget.set_fill_with_background_color(true);
 
     auto& tab_widget = main_widget.add<GUI::TabWidget>();
@@ -98,6 +78,7 @@ constexpr static CellTypeDialog::VerticalAlignment vertical_alignment_from(Gfx::
     case Gfx::TextAlignment::TopLeft:
         return CellTypeDialog::VerticalAlignment::Top;
 
+    case Gfx::TextAlignment::BottomLeft:
     case Gfx::TextAlignment::BottomRight:
         return CellTypeDialog::VerticalAlignment::Bottom;
     }
@@ -111,13 +92,14 @@ constexpr static CellTypeDialog::HorizontalAlignment horizontal_alignment_from(G
     case Gfx::TextAlignment::Center:
         return CellTypeDialog::HorizontalAlignment::Center;
 
-    case Gfx::TextAlignment::CenterRight:
     case Gfx::TextAlignment::TopRight:
+    case Gfx::TextAlignment::CenterRight:
     case Gfx::TextAlignment::BottomRight:
         return CellTypeDialog::HorizontalAlignment::Right;
 
     case Gfx::TextAlignment::TopLeft:
     case Gfx::TextAlignment::CenterLeft:
+    case Gfx::TextAlignment::BottomLeft:
         return CellTypeDialog::HorizontalAlignment::Left;
     }
 
@@ -130,14 +112,14 @@ void CellTypeDialog::setup_tabs(GUI::TabWidget& tabs, const Vector<Position>& po
     for (auto& type_name : CellType::names())
         g_types.append(type_name);
 
-    Vector<Cell*> cells;
+    Vector<Cell&> cells;
     for (auto& position : positions) {
         if (auto cell = sheet.at(position))
-            cells.append(cell);
+            cells.append(*cell);
     }
 
     if (cells.size() == 1) {
-        auto& cell = *cells.first();
+        auto& cell = cells.first();
         m_format = cell.type_metadata().format;
         m_length = cell.type_metadata().length;
         m_type = &cell.type();
@@ -148,7 +130,7 @@ void CellTypeDialog::setup_tabs(GUI::TabWidget& tabs, const Vector<Position>& po
     }
 
     auto& type_tab = tabs.add_tab<GUI::Widget>("Type");
-    type_tab.set_layout<GUI::HorizontalBoxLayout>().set_margins({ 4, 4, 4, 4 });
+    type_tab.set_layout<GUI::HorizontalBoxLayout>().set_margins(4);
     {
         auto& left_side = type_tab.add<GUI::Widget>();
         left_side.set_layout<GUI::VerticalBoxLayout>();
@@ -159,7 +141,8 @@ void CellTypeDialog::setup_tabs(GUI::TabWidget& tabs, const Vector<Position>& po
         auto& type_list = left_side.add<GUI::ListView>();
         type_list.set_model(*GUI::ItemListModel<String>::create(g_types));
         type_list.set_should_hide_unnecessary_scrollbars(true);
-        type_list.on_selection = [&](auto& index) {
+        type_list.on_selection_change = [&] {
+            const auto& index = type_list.selection().first();
             if (!index.is_valid()) {
                 m_type = nullptr;
                 return;
@@ -209,14 +192,14 @@ void CellTypeDialog::setup_tabs(GUI::TabWidget& tabs, const Vector<Position>& po
     }
 
     auto& alignment_tab = tabs.add_tab<GUI::Widget>("Alignment");
-    alignment_tab.set_layout<GUI::VerticalBoxLayout>().set_margins({ 4, 4, 4, 4 });
+    alignment_tab.set_layout<GUI::VerticalBoxLayout>().set_margins(4);
     {
         // FIXME: Frame?
         // Horizontal alignment
         {
             auto& horizontal_alignment_selection_container = alignment_tab.add<GUI::Widget>();
             horizontal_alignment_selection_container.set_layout<GUI::HorizontalBoxLayout>();
-            horizontal_alignment_selection_container.layout()->set_margins({ 0, 4, 0, 0 });
+            horizontal_alignment_selection_container.layout()->set_margins({ 4, 0, 0 });
             horizontal_alignment_selection_container.set_fixed_height(22);
 
             auto& horizontal_alignment_label = horizontal_alignment_selection_container.add<GUI::Label>();
@@ -248,7 +231,7 @@ void CellTypeDialog::setup_tabs(GUI::TabWidget& tabs, const Vector<Position>& po
         {
             auto& vertical_alignment_container = alignment_tab.add<GUI::Widget>();
             vertical_alignment_container.set_layout<GUI::HorizontalBoxLayout>();
-            vertical_alignment_container.layout()->set_margins({ 0, 4, 0, 0 });
+            vertical_alignment_container.layout()->set_margins({ 4, 0, 0 });
             vertical_alignment_container.set_fixed_height(22);
 
             auto& vertical_alignment_label = vertical_alignment_container.add<GUI::Label>();
@@ -278,21 +261,20 @@ void CellTypeDialog::setup_tabs(GUI::TabWidget& tabs, const Vector<Position>& po
     }
 
     auto& colors_tab = tabs.add_tab<GUI::Widget>("Color");
-    colors_tab.set_layout<GUI::VerticalBoxLayout>().set_margins({ 4, 4, 4, 4 });
+    colors_tab.set_layout<GUI::VerticalBoxLayout>().set_margins(4);
     {
         // Static formatting
         {
             auto& static_formatting_container = colors_tab.add<GUI::Widget>();
             static_formatting_container.set_layout<GUI::VerticalBoxLayout>();
-            static_formatting_container.set_shrink_to_fit(true);
 
             // Foreground
             {
                 // FIXME: Somehow allow unsetting these.
                 auto& foreground_container = static_formatting_container.add<GUI::Widget>();
                 foreground_container.set_layout<GUI::HorizontalBoxLayout>();
-                foreground_container.layout()->set_margins({ 0, 4, 0, 0 });
-                foreground_container.set_fixed_height(22);
+                foreground_container.layout()->set_margins({ 4, 0, 0 });
+                foreground_container.set_shrink_to_fit(true);
 
                 auto& foreground_label = foreground_container.add<GUI::Label>();
                 foreground_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
@@ -311,8 +293,8 @@ void CellTypeDialog::setup_tabs(GUI::TabWidget& tabs, const Vector<Position>& po
                 // FIXME: Somehow allow unsetting these.
                 auto& background_container = static_formatting_container.add<GUI::Widget>();
                 background_container.set_layout<GUI::HorizontalBoxLayout>();
-                background_container.layout()->set_margins({ 0, 4, 0, 0 });
-                background_container.set_fixed_height(22);
+                background_container.layout()->set_margins({ 4, 0, 0 });
+                background_container.set_shrink_to_fit(true);
 
                 auto& background_label = background_container.add<GUI::Label>();
                 background_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);

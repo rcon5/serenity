@@ -1,33 +1,15 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Function.h>
+#include <AK/OwnPtr.h>
 #include <AK/String.h>
+#include <AK/Variant.h>
 #include <AK/WeakPtr.h>
 #include <LibCore/Object.h>
 #include <LibGUI/FocusSource.h>
@@ -49,6 +31,9 @@ public:
 
     static Window* from_window_id(int);
 
+    bool is_modified() const;
+    void set_modified(bool);
+
     bool is_modal() const { return m_modal; }
     void set_modal(bool);
 
@@ -56,15 +41,21 @@ public:
     void set_fullscreen(bool);
 
     bool is_maximized() const;
+    void set_maximized(bool);
 
     bool is_frameless() const { return m_frameless; }
     void set_frameless(bool);
+
+    void set_forced_shadow(bool);
 
     bool is_resizable() const { return m_resizable; }
     void set_resizable(bool resizable) { m_resizable = resizable; }
 
     bool is_minimizable() const { return m_minimizable; }
     void set_minimizable(bool minimizable) { m_minimizable = minimizable; }
+
+    bool is_closeable() const { return m_closeable; }
+    void set_closeable(bool closeable) { m_closeable = closeable; }
 
     void set_double_buffering_enabled(bool);
     void set_has_alpha_channel(bool);
@@ -96,6 +87,7 @@ public:
     Function<void()> on_close;
     Function<CloseRequestDecision()> on_close_request;
     Function<void(bool is_active_input)> on_active_input_change;
+    Function<void(bool is_active_window)> on_active_window_change;
 
     int x() const { return rect().x(); }
     int y() const { return rect().y(); }
@@ -158,10 +150,6 @@ public:
     void update();
     void update(const Gfx::IntRect&);
 
-    void set_global_cursor_tracking_widget(Widget*);
-    Widget* global_cursor_tracking_widget() { return m_global_cursor_tracking_widget.ptr(); }
-    const Widget* global_cursor_tracking_widget() const { return m_global_cursor_tracking_widget.ptr(); }
-
     void set_automatic_cursor_tracking_widget(Widget*);
     Widget* automatic_cursor_tracking_widget() { return m_automatic_cursor_tracking_widget.ptr(); }
     const Widget* automatic_cursor_tracking_widget() const { return m_automatic_cursor_tracking_widget.ptr(); }
@@ -182,13 +170,13 @@ public:
     void set_resize_aspect_ratio(const Optional<Gfx::IntSize>& ratio);
 
     void set_cursor(Gfx::StandardCursor);
-    void set_cursor(const Gfx::Bitmap&);
+    void set_cursor(NonnullRefPtr<Gfx::Bitmap>);
 
     void set_icon(const Gfx::Bitmap*);
     void apply_icon();
     const Gfx::Bitmap* icon() const { return m_icon.ptr(); }
 
-    Vector<Widget*> focusable_widgets(FocusSource) const;
+    Vector<Widget&> focusable_widgets(FocusSource) const;
 
     void schedule_relayout();
 
@@ -207,18 +195,24 @@ public:
 
     Window* find_parent_window();
 
-    void set_progress(int);
+    void set_progress(Optional<int>);
 
     void update_cursor(Badge<Widget>) { update_cursor(); }
 
     void did_disable_focused_widget(Badge<Widget>);
 
-    void set_menubar(RefPtr<Menubar>);
+    Menu& add_menu(String name);
+
+    void flush_pending_paints_immediately();
 
 protected:
     Window(Core::Object* parent = nullptr);
     virtual void wm_event(WMEvent&);
-    virtual void screen_rect_change_event(ScreenRectChangeEvent&);
+    virtual void screen_rects_change_event(ScreenRectsChangeEvent&);
+    virtual void applet_area_rect_change_event(AppletAreaRectChangeEvent&);
+
+    virtual void enter_event(Core::Event&);
+    virtual void leave_event(Core::Event&);
 
 private:
     void update_cursor();
@@ -233,9 +227,12 @@ private:
     void handle_became_active_or_inactive_event(Core::Event&);
     void handle_close_request();
     void handle_theme_change_event(ThemeChangeEvent&);
-    void handle_screen_rect_change_event(ScreenRectChangeEvent&);
+    void handle_fonts_change_event(FontsChangeEvent&);
+    void handle_screen_rects_change_event(ScreenRectsChangeEvent&);
+    void handle_applet_area_rect_change_event(AppletAreaRectChangeEvent&);
     void handle_drag_move_event(DragEvent&);
-    void handle_left_event();
+    void handle_entered_event(Core::Event&);
+    void handle_left_event(Core::Event&);
 
     void server_did_destroy();
 
@@ -244,19 +241,21 @@ private:
     void flip(const Vector<Gfx::IntRect, 32>& dirty_rects);
     void force_update();
 
+    bool are_cursors_the_same(AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> const&, AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> const&) const;
+
+    WeakPtr<Widget> m_previously_focused_widget;
+
     OwnPtr<WindowBackingStore> m_front_store;
     OwnPtr<WindowBackingStore> m_back_store;
 
-    RefPtr<Menubar> m_menubar;
+    NonnullRefPtr<Menubar> m_menubar;
 
     RefPtr<Gfx::Bitmap> m_icon;
-    RefPtr<Gfx::Bitmap> m_custom_cursor;
     int m_window_id { 0 };
     float m_opacity_when_windowless { 1.0f };
     float m_alpha_hit_threshold { 0.0f };
     RefPtr<Widget> m_main_widget;
     WeakPtr<Widget> m_focused_widget;
-    WeakPtr<Widget> m_global_cursor_tracking_widget;
     WeakPtr<Widget> m_automatic_cursor_tracking_widget;
     WeakPtr<Widget> m_hovered_widget;
     Gfx::IntRect m_rect_when_windowless;
@@ -268,8 +267,8 @@ private:
     Gfx::IntSize m_base_size;
     Color m_background_color { Color::WarmGray };
     WindowType m_window_type { WindowType::Normal };
-    Gfx::StandardCursor m_cursor { Gfx::StandardCursor::None };
-    Gfx::StandardCursor m_effective_cursor { Gfx::StandardCursor::None };
+    AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> m_cursor { Gfx::StandardCursor::None };
+    AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> m_effective_cursor { Gfx::StandardCursor::None };
     bool m_is_active_input { false };
     bool m_has_alpha_channel { false };
     bool m_double_buffering_enabled { true };
@@ -277,8 +276,11 @@ private:
     bool m_resizable { true };
     Optional<Gfx::IntSize> m_resize_aspect_ratio {};
     bool m_minimizable { true };
+    bool m_closeable { true };
+    bool m_maximized_when_windowless { false };
     bool m_fullscreen { false };
     bool m_frameless { false };
+    bool m_forced_shadow { false };
     bool m_layout_pending { false };
     bool m_visible_for_timer_purposes { true };
     bool m_visible { false };

@@ -17,7 +17,7 @@
             min_width: 340
             min_height: 160
             layout: @GUI::HorizontalBoxLayout {
-                margins: [0, 0, 16, 0]
+                margins: [0, 16, 0, 0]
             }
 
             @GUI::Widget {
@@ -104,8 +104,8 @@
 
         @GUI::CheckBox{
             name: "startup_checkbox"
-            text: "Show this Welcome Screen next time SerenityOS starts"
-            fixed_width: 315
+            text: "Show Welcome the next time SerenityOS starts"
+            autosize: true
         }
 
         @GUI::Widget

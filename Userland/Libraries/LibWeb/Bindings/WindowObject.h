@@ -1,35 +1,18 @@
 /*
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/TypeCasts.h>
 #include <AK/Weakable.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibWeb/Forward.h>
+#include <LibWeb/HTML/GlobalEventHandlers.h>
 
 namespace Web {
 namespace Bindings {
@@ -48,6 +31,9 @@ public:
     const DOM::Window& impl() const { return *m_impl; }
 
     Origin origin() const;
+
+    LocationObject* location_object() { return m_location_object; }
+    LocationObject const* location_object() const { return m_location_object; }
 
     JS::Object* web_prototype(const String& class_name) { return m_prototypes.get(class_name).value_or(nullptr); }
     JS::NativeFunction* web_constructor(const String& class_name) { return m_constructors.get(class_name).value_or(nullptr); }
@@ -71,26 +57,42 @@ public:
             return *it->value;
         auto* constructor = heap().allocate<T>(*this, *this);
         m_constructors.set(class_name, constructor);
-        define_property(class_name, JS::Value(constructor), JS::Attribute::Writable | JS::Attribute::Configurable);
+        define_direct_property(class_name, JS::Value(constructor), JS::Attribute::Writable | JS::Attribute::Configurable);
         return *constructor;
     }
+
+    virtual JS::ThrowCompletionOr<bool> internal_set_prototype_of(JS::Object* prototype) override;
 
 private:
     virtual void visit_edges(Visitor&) override;
 
-    JS_DECLARE_NATIVE_GETTER(top_getter);
+    JS_DECLARE_NATIVE_FUNCTION(top_getter);
 
-    JS_DECLARE_NATIVE_GETTER(document_getter);
+    JS_DECLARE_NATIVE_FUNCTION(document_getter);
 
-    JS_DECLARE_NATIVE_GETTER(performance_getter);
-    JS_DECLARE_NATIVE_GETTER(screen_getter);
+    JS_DECLARE_NATIVE_FUNCTION(performance_getter);
+    JS_DECLARE_NATIVE_FUNCTION(history_getter);
+    JS_DECLARE_NATIVE_FUNCTION(screen_getter);
 
-    JS_DECLARE_NATIVE_GETTER(event_getter);
+    JS_DECLARE_NATIVE_FUNCTION(event_getter);
+    JS_DECLARE_NATIVE_FUNCTION(event_setter);
 
-    JS_DECLARE_NATIVE_GETTER(inner_width_getter);
-    JS_DECLARE_NATIVE_GETTER(inner_height_getter);
+    JS_DECLARE_NATIVE_FUNCTION(inner_width_getter);
+    JS_DECLARE_NATIVE_FUNCTION(inner_height_getter);
 
-    JS_DECLARE_NATIVE_GETTER(parent_getter);
+    JS_DECLARE_NATIVE_FUNCTION(parent_getter);
+
+    JS_DECLARE_NATIVE_FUNCTION(device_pixel_ratio_getter);
+
+    JS_DECLARE_NATIVE_FUNCTION(scroll_x_getter);
+    JS_DECLARE_NATIVE_FUNCTION(scroll_y_getter);
+    JS_DECLARE_NATIVE_FUNCTION(scroll);
+    JS_DECLARE_NATIVE_FUNCTION(scroll_by);
+
+    JS_DECLARE_NATIVE_FUNCTION(screen_x_getter);
+    JS_DECLARE_NATIVE_FUNCTION(screen_y_getter);
+    JS_DECLARE_NATIVE_FUNCTION(screen_left_getter);
+    JS_DECLARE_NATIVE_FUNCTION(screen_top_getter);
 
     JS_DECLARE_NATIVE_FUNCTION(alert);
     JS_DECLARE_NATIVE_FUNCTION(confirm);
@@ -104,7 +106,23 @@ private:
     JS_DECLARE_NATIVE_FUNCTION(atob);
     JS_DECLARE_NATIVE_FUNCTION(btoa);
 
+    JS_DECLARE_NATIVE_FUNCTION(get_computed_style);
+    JS_DECLARE_NATIVE_FUNCTION(match_media);
+    JS_DECLARE_NATIVE_FUNCTION(get_selection);
+
+    JS_DECLARE_NATIVE_FUNCTION(queue_microtask);
+
+    JS_DECLARE_NATIVE_FUNCTION(crypto_getter);
+
+#define __ENUMERATE(attribute, event_name)          \
+    JS_DECLARE_NATIVE_FUNCTION(attribute##_getter); \
+    JS_DECLARE_NATIVE_FUNCTION(attribute##_setter);
+    ENUMERATE_GLOBAL_EVENT_HANDLERS(__ENUMERATE);
+#undef __ENUMERATE
+
     NonnullRefPtr<DOM::Window> m_impl;
+
+    LocationObject* m_location_object { nullptr };
 
     HashMap<String, JS::Object*> m_prototypes;
     HashMap<String, JS::NativeFunction*> m_constructors;

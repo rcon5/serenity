@@ -1,30 +1,10 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/TestSuite.h>
+#include <LibTest/TestCase.h>
 
 #include "../CSV.h"
 #include "../XSV.h"
@@ -38,7 +18,7 @@ TEST_CASE(can_write)
         { 7, 8, 9 },
     };
 
-    auto buffer = ByteBuffer::create_uninitialized(1024);
+    auto buffer = ByteBuffer::create_uninitialized(1024).release_value();
     OutputMemoryStream stream { buffer };
 
     Writer::CSV csv(stream, data);
@@ -59,7 +39,7 @@ TEST_CASE(can_write_with_header)
         { 7, 8, 9 },
     };
 
-    auto buffer = ByteBuffer::create_uninitialized(1024);
+    auto buffer = ByteBuffer::create_uninitialized(1024).release_value();
     OutputMemoryStream stream { buffer };
 
     Writer::CSV csv(stream, data, { "A", "B\"", "C" });
@@ -73,17 +53,17 @@ TEST_CASE(can_write_with_header)
     EXPECT_EQ(StringView { stream.bytes() }, expected_output);
 }
 
-TEST_CASE(can_write_with_different_behaviours)
+TEST_CASE(can_write_with_different_behaviors)
 {
     Vector<Vector<String>> data = {
         { "Well", "Hello\"", "Friends" },
         { "We\"ll", "Hello,", "   Friends" },
     };
 
-    auto buffer = ByteBuffer::create_uninitialized(1024);
+    auto buffer = ByteBuffer::create_uninitialized(1024).release_value();
     OutputMemoryStream stream { buffer };
 
-    Writer::CSV csv(stream, data, { "A", "B\"", "C" }, Writer::WriterBehaviour::QuoteOnlyInFieldStart | Writer::WriterBehaviour::WriteHeaders);
+    Writer::CSV csv(stream, data, { "A", "B\"", "C" }, Writer::WriterBehavior::QuoteOnlyInFieldStart | Writer::WriterBehavior::WriteHeaders);
 
     auto expected_output = R"~(A,B",C
 Well,Hello",Friends
@@ -92,5 +72,3 @@ We"ll,"Hello,",   Friends
 
     EXPECT_EQ(StringView { stream.bytes() }, expected_output);
 }
-
-TEST_MAIN(XSV)

@@ -1,99 +1,102 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "SlavePTY.h"
-#include "MasterPTY.h"
+#include <AK/Singleton.h>
 #include <Kernel/Debug.h>
 #include <Kernel/FileSystem/DevPtsFS.h>
 #include <Kernel/Process.h>
+#include <Kernel/TTY/MasterPTY.h>
+#include <Kernel/TTY/SlavePTY.h>
 
 namespace Kernel {
 
-SlavePTY::SlavePTY(MasterPTY& master, unsigned index)
+static Singleton<SpinlockProtected<SlavePTY::List>> s_all_instances;
+
+SpinlockProtected<SlavePTY::List>& SlavePTY::all_instances()
+{
+    return s_all_instances;
+}
+
+bool SlavePTY::unref() const
+{
+    bool did_hit_zero = SlavePTY::all_instances().with([&](auto&) {
+        if (deref_base())
+            return false;
+        m_list_node.remove();
+        return true;
+    });
+    if (did_hit_zero) {
+        const_cast<SlavePTY&>(*this).before_removing();
+        delete this;
+    }
+    return did_hit_zero;
+}
+
+SlavePTY::SlavePTY(MasterPTY& master, unsigned index, NonnullOwnPtr<KString> tty_name)
     : TTY(201, index)
     , m_master(master)
     , m_index(index)
+    , m_tty_name(move(tty_name))
 {
-    m_tty_name = String::formatted("/dev/pts/{}", m_index);
-    auto process = Process::current();
-    set_uid(process->uid());
-    set_gid(process->gid());
-    DevPtsFS::register_slave_pty(*this);
+    auto& process = Process::current();
+    set_uid(process.uid());
+    set_gid(process.gid());
     set_size(80, 25);
+
+    SlavePTY::all_instances().with([&](auto& list) { list.append(*this); });
 }
 
 SlavePTY::~SlavePTY()
 {
     dbgln_if(SLAVEPTY_DEBUG, "~SlavePTY({})", m_index);
-    DevPtsFS::unregister_slave_pty(*this);
 }
 
-String SlavePTY::tty_name() const
+KString const& SlavePTY::tty_name() const
 {
-    return m_tty_name;
+    return *m_tty_name;
 }
 
 void SlavePTY::echo(u8 ch)
 {
     if (should_echo_input()) {
         auto buffer = UserOrKernelBuffer::for_kernel_buffer(&ch);
-        m_master->on_slave_write(buffer, 1);
+        [[maybe_unused]] auto result = m_master->on_slave_write(buffer, 1);
     }
 }
 
-void SlavePTY::on_master_write(const UserOrKernelBuffer& buffer, ssize_t size)
+void SlavePTY::on_master_write(const UserOrKernelBuffer& buffer, size_t size)
 {
-    ssize_t nread = buffer.read_buffered<128>(size, [&](const u8* data, size_t data_size) {
-        for (size_t i = 0; i < data_size; ++i)
-            emit(data[i], false);
-        return (ssize_t)data_size;
+    auto result = buffer.read_buffered<128>(size, [&](ReadonlyBytes data) {
+        for (const auto& byte : data)
+            emit(byte, false);
+        return data.size();
     });
-    if (nread > 0)
+    if (!result.is_error())
         evaluate_block_conditions();
 }
 
-ssize_t SlavePTY::on_tty_write(const UserOrKernelBuffer& data, ssize_t size)
+KResultOr<size_t> SlavePTY::on_tty_write(const UserOrKernelBuffer& data, size_t size)
 {
     m_time_of_last_write = kgettimeofday().to_truncated_seconds();
     return m_master->on_slave_write(data, size);
 }
 
-bool SlavePTY::can_write(const FileDescription&, size_t) const
+bool SlavePTY::can_write(const OpenFileDescription&, size_t) const
 {
     return m_master->can_write_from_slave();
 }
 
-bool SlavePTY::can_read(const FileDescription& description, size_t offset) const
+bool SlavePTY::can_read(const OpenFileDescription& description, size_t offset) const
 {
     if (m_master->is_closed())
         return true;
     return TTY::can_read(description, offset);
 }
 
-KResultOr<size_t> SlavePTY::read(FileDescription& description, u64 offset, UserOrKernelBuffer& buffer, size_t size)
+KResultOr<size_t> SlavePTY::read(OpenFileDescription& description, u64 offset, UserOrKernelBuffer& buffer, size_t size)
 {
     if (m_master->is_closed())
         return 0;
@@ -106,14 +109,9 @@ KResult SlavePTY::close()
     return KSuccess;
 }
 
-String SlavePTY::device_name() const
+FileBlockerSet& SlavePTY::blocker_set()
 {
-    return String::formatted("{}", minor());
-}
-
-FileBlockCondition& SlavePTY::block_condition()
-{
-    return m_master->block_condition();
+    return m_master->blocker_set();
 }
 
 }

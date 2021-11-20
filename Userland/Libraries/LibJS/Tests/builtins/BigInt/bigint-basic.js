@@ -7,6 +7,18 @@ describe("correct behavior", () => {
         expect("" + 123n).toBe("123");
     });
 
+    test("hex literals", () => {
+        expect(0xffn).toBe(255n);
+    });
+
+    test("octal literals", () => {
+        expect(0o10n).toBe(8n);
+    });
+
+    test("binary literals", () => {
+        expect(0b10n).toBe(2n);
+    });
+
     test("arithmetic operators", () => {
         let bigint = 123n;
         expect(-bigint).toBe(-123n);
@@ -28,6 +40,8 @@ describe("correct behavior", () => {
         expect(1n | 2n).toBe(3n);
         expect(5n ^ 3n).toBe(6n);
         expect(~1n).toBe(-2n);
+        expect(5n << 2n).toBe(20n);
+        expect(7n >> 1n).toBe(3n);
     });
 
     test("increment operators", () => {
@@ -59,6 +73,21 @@ describe("correct behavior", () => {
         const b = 704179908449526267977309288010258n;
         expect(a == a).toBeTrue();
         expect(a == b).toBeFalse();
+
+        expect(0n == Object(0n)).toBeTrue();
+        expect(Object(0n) == 0n).toBeTrue();
+        expect(0n != Object(0n)).toBeFalse();
+        expect(Object(0n) != 0n).toBeFalse();
+
+        expect(1n == Object(1n)).toBeTrue();
+        expect(Object(1n) == 1n).toBeTrue();
+        expect(1n != Object(1n)).toBeFalse();
+        expect(Object(1n) != 1n).toBeFalse();
+
+        expect(1n == Object(2n)).toBeFalse();
+        expect(Object(2n) == 1n).toBeFalse();
+        expect(1n != Object(2n)).toBeTrue();
+        expect(Object(2n) != 1n).toBeTrue();
     });
 
     test("strong equality operators", () => {

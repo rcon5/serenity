@@ -1,40 +1,20 @@
 /*
  * Copyright (c) 2020, Hüseyin Aslıtürk <asliturk@hotmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "CharacterMapFileListModel.h"
 #include <AK/JsonObject.h>
 #include <AK/QuickSort.h>
-#include <LibCore/ArgsParser.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
+#include <LibGUI/CheckBox.h>
 #include <LibGUI/ComboBox.h>
+#include <LibGUI/ItemListModel.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Menubar.h>
@@ -43,17 +23,20 @@
 #include <LibKeyboard/CharacterMap.h>
 #include <spawn.h>
 
+// Including this after to avoid LibIPC errors
+#include <LibConfig/Client.h>
+
 int main(int argc, char** argv)
 {
-    if (pledge("stdio rpath accept cpath wpath recvfd sendfd unix fattr proc exec", nullptr) < 0) {
+    if (pledge("stdio rpath cpath wpath recvfd sendfd unix proc exec", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
-    // If there is no command line parameter go for GUI.
     auto app = GUI::Application::construct(argc, argv);
+    Config::pledge_domains("KeyboardSettings");
 
-    if (pledge("stdio rpath accept recvfd sendfd proc exec", nullptr) < 0) {
+    if (pledge("stdio rpath cpath wpath recvfd sendfd proc exec", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -81,7 +64,7 @@ int main(int argc, char** argv)
     auto app_icon = GUI::Icon::default_icon("app-keyboard-settings");
 
     auto proc_keymap = Core::File::construct("/proc/keymap");
-    if (!proc_keymap->open(Core::IODevice::OpenMode::ReadOnly))
+    if (!proc_keymap->open(Core::OpenMode::ReadOnly))
         VERIFY_NOT_REACHED();
 
     auto json = JsonValue::from_string(proc_keymap->read_all());
@@ -100,8 +83,7 @@ int main(int argc, char** argv)
 
     while (iterator.has_next()) {
         auto name = iterator.next_path();
-        name.replace(".json", "");
-        character_map_files.append(name);
+        character_map_files.append(name.replace(".json", ""));
     }
     quick_sort(character_map_files);
 
@@ -114,14 +96,16 @@ int main(int argc, char** argv)
 
     auto window = GUI::Window::construct();
     window->set_title("Keyboard Settings");
-    window->resize(300, 70);
+    window->resize(300, 78);
+    window->set_resizable(false);
+    window->set_minimizable(false);
     window->set_icon(app_icon.bitmap_for_size(16));
 
     auto& root_widget = window->set_main_widget<GUI::Widget>();
     root_widget.set_layout<GUI::VerticalBoxLayout>();
     root_widget.set_fill_with_background_color(true);
     root_widget.layout()->set_spacing(0);
-    root_widget.layout()->set_margins({ 4, 4, 4, 4 });
+    root_widget.layout()->set_margins(4);
 
     auto& character_map_file_selection_container = root_widget.add<GUI::Widget>();
     character_map_file_selection_container.set_layout<GUI::HorizontalBoxLayout>();
@@ -134,8 +118,11 @@ int main(int argc, char** argv)
 
     auto& character_map_file_combo = character_map_file_selection_container.add<GUI::ComboBox>();
     character_map_file_combo.set_only_allow_values_from_model(true);
-    character_map_file_combo.set_model(*CharacterMapFileListModel::create(character_map_files));
+    character_map_file_combo.set_model(*GUI::ItemListModel<String>::create(character_map_files));
     character_map_file_combo.set_selected_index(initial_keymap_index);
+
+    auto& num_lock_checkbox = root_widget.add<GUI::CheckBox>("Enable Num Lock on login");
+    num_lock_checkbox.set_checked(Config::read_bool("KeyboardSettings", "StartupEnable", "NumLock", true));
 
     root_widget.layout()->add_spacer();
 
@@ -151,6 +138,9 @@ int main(int argc, char** argv)
             perror("posix_spawn");
             exit(1);
         }
+
+        Config::write_bool("KeyboardSettings", "StartupEnable", "NumLock", num_lock_checkbox.is_checked());
+
         if (quit)
             app->quit();
     };
@@ -158,14 +148,7 @@ int main(int argc, char** argv)
     auto& bottom_widget = root_widget.add<GUI::Widget>();
     bottom_widget.set_layout<GUI::HorizontalBoxLayout>();
     bottom_widget.layout()->add_spacer();
-    bottom_widget.set_fixed_height(22);
-
-    auto& apply_button = bottom_widget.add<GUI::Button>();
-    apply_button.set_text("Apply");
-    apply_button.set_fixed_width(60);
-    apply_button.on_click = [&](auto) {
-        apply_settings(false);
-    };
+    bottom_widget.set_fixed_height(30);
 
     auto& ok_button = bottom_widget.add<GUI::Button>();
     ok_button.set_text("OK");
@@ -181,6 +164,13 @@ int main(int argc, char** argv)
         app->quit();
     };
 
+    auto& apply_button = bottom_widget.add<GUI::Button>();
+    apply_button.set_text("Apply");
+    apply_button.set_fixed_width(60);
+    apply_button.on_click = [&](auto) {
+        apply_settings(false);
+    };
+
     auto quit_action = GUI::CommonActions::make_quit_action(
         [&](auto&) {
             app->quit();
@@ -188,13 +178,11 @@ int main(int argc, char** argv)
 
     auto menubar = GUI::Menubar::construct();
 
-    auto& app_menu = menubar->add_menu("File");
-    app_menu.add_action(quit_action);
+    auto& file_menu = window->add_menu("&File");
+    file_menu.add_action(quit_action);
 
-    auto& help_menu = menubar->add_menu("Help");
+    auto& help_menu = window->add_menu("&Help");
     help_menu.add_action(GUI::CommonActions::make_about_action("Keyboard Settings", app_icon, window));
-
-    window->set_menubar(move(menubar));
 
     window->show();
 

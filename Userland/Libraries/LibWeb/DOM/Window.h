@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -32,15 +12,20 @@
 #include <AK/RefPtr.h>
 #include <LibWeb/Bindings/WindowObject.h>
 #include <LibWeb/Bindings/Wrappable.h>
+#include <LibWeb/CSS/MediaQueryList.h>
 #include <LibWeb/CSS/Screen.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/DOM/EventTarget.h>
+#include <LibWeb/HTML/GlobalEventHandlers.h>
 
 namespace Web::DOM {
 
+class RequestAnimationFrameCallback;
+
 class Window final
     : public RefCounted<Window>
-    , public EventTarget {
+    , public EventTarget
+    , public HTML::GlobalEventHandlers {
 public:
     static NonnullRefPtr<Window> create_with_document(Document&);
     ~Window();
@@ -53,28 +38,34 @@ public:
     virtual bool dispatch_event(NonnullRefPtr<Event>) override;
     virtual JS::Object* create_wrapper(JS::GlobalObject&) override;
 
-    const Document& document() const { return m_document; }
-    Document& document() { return m_document; }
+    Page* page();
+    Page const* page() const;
 
-    void alert(const String&);
-    bool confirm(const String&);
-    String prompt(const String&, const String&);
-    i32 request_animation_frame(JS::Function&);
+    Document const& associated_document() const { return *m_associated_document; }
+    Document& associated_document() { return *m_associated_document; }
+
+    void alert(String const&);
+    bool confirm(String const&);
+    String prompt(String const&, String const&);
+    i32 request_animation_frame(JS::FunctionObject&);
     void cancel_animation_frame(i32);
 
-    i32 set_timeout(JS::Function&, i32);
-    i32 set_interval(JS::Function&, i32);
+    i32 set_timeout(JS::FunctionObject&, i32);
+    i32 set_interval(JS::FunctionObject&, i32);
     void clear_timeout(i32);
     void clear_interval(i32);
+
+    void queue_microtask(JS::FunctionObject&);
 
     int inner_width() const;
     int inner_height() const;
 
-    void did_set_location_href(Badge<Bindings::LocationObject>, const URL& new_href);
+    void did_set_location_href(Badge<Bindings::LocationObject>, AK::URL const& new_href);
     void did_call_location_reload(Badge<Bindings::LocationObject>);
+    void did_call_location_replace(Badge<Bindings::LocationObject>, String url);
 
     Bindings::WindowObject* wrapper() { return m_wrapper; }
-    const Bindings::WindowObject* wrapper() const { return m_wrapper; }
+    Bindings::WindowObject const* wrapper() const { return m_wrapper; }
 
     void set_wrapper(Badge<Bindings::WindowObject>, Bindings::WindowObject&);
 
@@ -84,23 +75,51 @@ public:
 
     HighResolutionTime::Performance& performance() { return *m_performance; }
 
+    Crypto::Crypto& crypto() { return *m_crypto; }
+
     CSS::Screen& screen() { return *m_screen; }
 
-    const Event* current_event() const { return m_current_event; }
+    Event const* current_event() const { return m_current_event; }
     void set_current_event(Event* event) { m_current_event = event; }
+
+    NonnullRefPtr<CSS::CSSStyleDeclaration> get_computed_style(DOM::Element&) const;
+    NonnullRefPtr<CSS::MediaQueryList> match_media(String);
+    RefPtr<CSS::StyleValue> query_media_feature(FlyString const&) const;
+
+    float scroll_x() const;
+    float scroll_y() const;
+
+    void fire_a_page_transition_event(FlyString const& event_name, bool persisted);
+
+    float device_pixel_ratio() const;
+
+    int screen_x() const;
+    int screen_y() const;
+
+    Selection::Selection* get_selection();
 
 private:
     explicit Window(Document&);
 
-    Document& m_document;
+    // ^HTML::GlobalEventHandlers
+    virtual DOM::EventTarget& global_event_handlers_to_event_target() override { return *this; }
+
+    // https://html.spec.whatwg.org/multipage/window-object.html#concept-document-window
+    WeakPtr<Document> m_associated_document;
+
     WeakPtr<Bindings::WindowObject> m_wrapper;
 
     IDAllocator m_timer_id_allocator;
     HashMap<int, NonnullRefPtr<Timer>> m_timers;
 
     NonnullOwnPtr<HighResolutionTime::Performance> m_performance;
+    NonnullRefPtr<Crypto::Crypto> m_crypto;
     NonnullRefPtr<CSS::Screen> m_screen;
     RefPtr<Event> m_current_event;
+
+    HashMap<i32, NonnullRefPtr<RequestAnimationFrameCallback>> m_request_animation_frame_callbacks;
 };
+
+void run_animation_frame_callbacks(DOM::Document&, double now);
 
 }

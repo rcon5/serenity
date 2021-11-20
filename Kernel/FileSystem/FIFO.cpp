@@ -1,72 +1,40 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/HashTable.h>
-#include <AK/Singleton.h>
+#include <AK/Atomic.h>
 #include <AK/StdLibExtras.h>
-#include <AK/StringView.h>
 #include <Kernel/FileSystem/FIFO.h>
-#include <Kernel/FileSystem/FileDescription.h>
-#include <Kernel/Lock.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
+#include <Kernel/Locking/Mutex.h>
 #include <Kernel/Process.h>
 #include <Kernel/Thread.h>
 
 namespace Kernel {
 
-static AK::Singleton<Lockable<HashTable<FIFO*>>> s_table;
+static Atomic<int> s_next_fifo_id = 1;
 
-static Lockable<HashTable<FIFO*>>& all_fifos()
+KResultOr<NonnullRefPtr<FIFO>> FIFO::try_create(UserID uid)
 {
-    return *s_table;
+    auto buffer = TRY(DoubleBuffer::try_create());
+    return adopt_nonnull_ref_or_enomem(new (nothrow) FIFO(uid, move(buffer)));
 }
 
-static int s_next_fifo_id = 1;
-
-NonnullRefPtr<FIFO> FIFO::create(uid_t uid)
+KResultOr<NonnullRefPtr<OpenFileDescription>> FIFO::open_direction(FIFO::Direction direction)
 {
-    return adopt(*new FIFO(uid));
-}
-
-KResultOr<NonnullRefPtr<FileDescription>> FIFO::open_direction(FIFO::Direction direction)
-{
-    auto description = FileDescription::create(*this);
-    if (!description.is_error()) {
-        attach(direction);
-        description.value()->set_fifo_direction({}, direction);
-    }
+    auto description = TRY(OpenFileDescription::try_create(*this));
+    attach(direction);
+    description->set_fifo_direction({}, direction);
     return description;
 }
 
-KResultOr<NonnullRefPtr<FileDescription>> FIFO::open_direction_blocking(FIFO::Direction direction)
+KResultOr<NonnullRefPtr<OpenFileDescription>> FIFO::open_direction_blocking(FIFO::Direction direction)
 {
-    Locker locker(m_open_lock);
+    MutexLocker locker(m_open_lock);
 
-    auto description = open_direction(direction);
-    if (description.is_error())
-        return description;
+    auto description = TRY(open_direction(direction));
 
     if (direction == Direction::Reader) {
         m_read_open_queue.wake_all();
@@ -91,23 +59,20 @@ KResultOr<NonnullRefPtr<FileDescription>> FIFO::open_direction_blocking(FIFO::Di
     return description;
 }
 
-FIFO::FIFO(uid_t uid)
-    : m_uid(uid)
+FIFO::FIFO(UserID uid, NonnullOwnPtr<DoubleBuffer> buffer)
+    : m_buffer(move(buffer))
+    , m_uid(uid)
 {
-    LOCKER(all_fifos().lock());
-    all_fifos().resource().set(this);
     m_fifo_id = ++s_next_fifo_id;
 
     // Use the same block condition for read and write
-    m_buffer.set_unblock_callback([this]() {
+    m_buffer->set_unblock_callback([this]() {
         evaluate_block_conditions();
     });
 }
 
 FIFO::~FIFO()
 {
-    LOCKER(all_fifos().lock());
-    all_fifos().resource().remove(this);
 }
 
 void FIFO::attach(Direction direction)
@@ -134,36 +99,42 @@ void FIFO::detach(Direction direction)
     evaluate_block_conditions();
 }
 
-bool FIFO::can_read(const FileDescription&, size_t) const
+bool FIFO::can_read(const OpenFileDescription&, size_t) const
 {
-    return !m_buffer.is_empty() || !m_writers;
+    return !m_buffer->is_empty() || !m_writers;
 }
 
-bool FIFO::can_write(const FileDescription&, size_t) const
+bool FIFO::can_write(const OpenFileDescription&, size_t) const
 {
-    return m_buffer.space_for_writing() || !m_readers;
+    return m_buffer->space_for_writing() || !m_readers;
 }
 
-KResultOr<size_t> FIFO::read(FileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
+KResultOr<size_t> FIFO::read(OpenFileDescription& fd, u64, UserOrKernelBuffer& buffer, size_t size)
 {
-    if (!m_writers && m_buffer.is_empty())
-        return 0;
-    return m_buffer.read(buffer, size);
+    if (m_buffer->is_empty()) {
+        if (!m_writers)
+            return 0;
+        if (!fd.is_blocking())
+            return EAGAIN;
+    }
+    return m_buffer->read(buffer, size);
 }
 
-KResultOr<size_t> FIFO::write(FileDescription&, u64, const UserOrKernelBuffer& buffer, size_t size)
+KResultOr<size_t> FIFO::write(OpenFileDescription& fd, u64, const UserOrKernelBuffer& buffer, size_t size)
 {
     if (!m_readers) {
-        Thread::current()->send_signal(SIGPIPE, Process::current());
+        Thread::current()->send_signal(SIGPIPE, &Process::current());
         return EPIPE;
     }
+    if (!fd.is_blocking() && m_buffer->space_for_writing() == 0)
+        return EAGAIN;
 
-    return m_buffer.write(buffer, size);
+    return m_buffer->write(buffer, size);
 }
 
-String FIFO::absolute_path(const FileDescription&) const
+KResultOr<NonnullOwnPtr<KString>> FIFO::pseudo_path(const OpenFileDescription&) const
 {
-    return String::format("fifo:%u", m_fifo_id);
+    return KString::try_create(String::formatted("fifo:{}", m_fifo_id));
 }
 
 KResult FIFO::stat(::stat& st) const

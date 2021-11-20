@@ -1,31 +1,14 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include "UndoGlyph.h"
+#include <LibGUI/ActionGroup.h>
+#include <LibGUI/UndoStack.h>
 #include <LibGUI/Widget.h>
 #include <LibGfx/BitmapFont.h>
 
@@ -38,11 +21,13 @@ public:
     virtual ~FontEditorWidget() override;
 
     bool save_as(const String&);
+    bool request_close();
+    void update_title();
 
     const String& path() { return m_path; }
     const Gfx::BitmapFont& edited_font() { return *m_edited_font; }
     void initialize(const String& path, RefPtr<Gfx::BitmapFont>&&);
-    void initialize_menubar(GUI::Menubar&);
+    void initialize_menubar(GUI::Window&);
 
     bool is_showing_font_metadata() { return m_font_metadata; }
     void set_show_font_metadata(bool b);
@@ -51,6 +36,16 @@ public:
 
 private:
     FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&);
+
+    virtual void drop_event(GUI::DropEvent&) override;
+
+    void open_file(String const&);
+    void undo();
+    void redo();
+    void did_modify_font();
+    void update_statusbar();
+    void update_preview();
+
     RefPtr<Gfx::BitmapFont> m_edited_font;
 
     RefPtr<GlyphMapWidget> m_glyph_map_widget;
@@ -66,14 +61,29 @@ private:
     RefPtr<GUI::Action> m_paste_action;
     RefPtr<GUI::Action> m_delete_action;
 
+    RefPtr<GUI::Action> m_undo_action;
+    RefPtr<GUI::Action> m_redo_action;
+    RefPtr<UndoGlyph> m_undo_glyph;
+    OwnPtr<GUI::UndoStack> m_undo_stack;
+
+    RefPtr<GUI::Action> m_go_to_glyph_action;
+    RefPtr<GUI::Action> m_previous_glyph_action;
+    RefPtr<GUI::Action> m_next_glyph_action;
+
     RefPtr<GUI::Action> m_open_preview_action;
     RefPtr<GUI::Action> m_show_metadata_action;
 
+    GUI::ActionGroup m_glyph_editor_scale_actions;
+    RefPtr<GUI::Action> m_scale_five_action;
+    RefPtr<GUI::Action> m_scale_ten_action;
+    RefPtr<GUI::Action> m_scale_fifteen_action;
+
+    RefPtr<GUI::Statusbar> m_statusbar;
     RefPtr<GUI::Window> m_font_preview_window;
     RefPtr<GUI::Widget> m_left_column_container;
     RefPtr<GUI::Widget> m_glyph_editor_container;
     RefPtr<GUI::ComboBox> m_weight_combobox;
-    RefPtr<GUI::ComboBox> m_type_combobox;
+    RefPtr<GUI::ComboBox> m_slope_combobox;
     RefPtr<GUI::SpinBox> m_spacing_spinbox;
     RefPtr<GUI::SpinBox> m_baseline_spinbox;
     RefPtr<GUI::SpinBox> m_mean_line_spinbox;
@@ -87,6 +97,6 @@ private:
 
     String m_path;
     Vector<String> m_font_weight_list;
-    Vector<String> m_font_type_list;
+    Vector<String> m_font_slope_list;
     bool m_font_metadata { true };
 };

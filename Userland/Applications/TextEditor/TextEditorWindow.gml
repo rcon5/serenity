@@ -19,9 +19,12 @@
             name: "editor"
         }
 
-        @Web::OutOfProcessWebView {
-            name: "webview"
+        @GUI::Widget {
+            name: "web_view_container"
             visible: false
+
+            layout: @GUI::VerticalBoxLayout {
+            }
         }
     }
 
@@ -33,7 +36,7 @@
 
         layout: @GUI::VerticalBoxLayout {
             spacing: 2
-            margins: [5, 5, 5, 5]
+            margins: [3]
         }
 
         @GUI::Widget {
@@ -107,5 +110,6 @@
 
     @GUI::Statusbar {
         name: "statusbar"
+        label_count: 2
     }
 }

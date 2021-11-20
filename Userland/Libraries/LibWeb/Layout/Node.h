@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -85,11 +65,11 @@ public:
     DOM::Document& document() { return m_document; }
     const DOM::Document& document() const { return m_document; }
 
-    const Frame& frame() const;
-    Frame& frame();
+    const BrowsingContext& browsing_context() const;
+    BrowsingContext& browsing_context();
 
-    const InitialContainingBlockBox& root() const;
-    InitialContainingBlockBox& root();
+    const InitialContainingBlock& root() const;
+    InitialContainingBlock& root();
 
     bool is_root_element() const;
 
@@ -112,14 +92,19 @@ public:
     virtual bool handle_mousewheel(Badge<EventHandler>, const Gfx::IntPoint&, unsigned buttons, unsigned modifiers, int wheel_delta);
 
     virtual void before_children_paint(PaintContext&, PaintPhase) {};
-    virtual void paint(PaintContext&, PaintPhase);
+    virtual void paint(PaintContext&, PaintPhase) = 0;
     virtual void paint_fragment(PaintContext&, const LineBoxFragment&, PaintPhase) const { }
     virtual void after_children_paint(PaintContext&, PaintPhase) {};
 
     // These are used to optimize hot is<T> variants for some classes where dynamic_cast is too slow.
     virtual bool is_box() const { return false; }
-    virtual bool is_block_box() const { return false; }
+    virtual bool is_block_container() const { return false; }
+    virtual bool is_break_node() const { return false; }
     virtual bool is_text_node() const { return false; }
+    virtual bool is_initial_containing_block_box() const { return false; }
+    virtual bool is_svg_box() const { return false; }
+    virtual bool is_svg_path_box() const { return false; }
+    virtual bool is_label() const { return false; }
 
     template<typename T>
     bool fast_is() const = delete;
@@ -129,8 +114,13 @@ public:
     bool is_absolutely_positioned() const;
     bool is_fixed_position() const;
 
-    const BlockBox* containing_block() const;
-    BlockBox* containing_block() { return const_cast<BlockBox*>(const_cast<const Node*>(this)->containing_block()); }
+    bool is_flex_item() const { return m_is_flex_item; }
+    void set_flex_item(bool b) { m_is_flex_item = b; }
+
+    const BlockContainer* containing_block() const;
+    BlockContainer* containing_block() { return const_cast<BlockContainer*>(const_cast<const Node*>(this)->containing_block()); }
+
+    bool establishes_stacking_context() const;
 
     bool can_contain_boxes_with_position_absolute() const;
 
@@ -173,13 +163,13 @@ public:
     void for_each_child_in_paint_order(Callback callback) const
     {
         for_each_child([&](auto& child) {
-            if (is<Box>(child) && downcast<Box>(child).stacking_context())
+            if (is<Box>(child) && verify_cast<Box>(child).stacking_context())
                 return;
             if (!child.is_positioned())
                 callback(child);
         });
         for_each_child([&](auto& child) {
-            if (is<Box>(child) && downcast<Box>(child).stacking_context())
+            if (is<Box>(child) && verify_cast<Box>(child).stacking_context())
                 return;
             if (child.is_positioned())
                 callback(child);
@@ -200,6 +190,8 @@ private:
     bool m_visible { true };
     bool m_children_are_inline { false };
     SelectionState m_selection_state { SelectionState::None };
+
+    bool m_is_flex_item { false };
 };
 
 class NodeWithStyle : public Node {
@@ -214,8 +206,12 @@ public:
     float line_height() const { return m_line_height; }
     float font_size() const { return m_font_size; }
     const CSS::ImageStyleValue* background_image() const { return m_background_image; }
+    const CSS::ImageStyleValue* list_style_image() const { return m_list_style_image; }
 
     NonnullRefPtr<NodeWithStyle> create_anonymous_wrapper() const;
+
+    bool has_definite_height() const { return m_has_definite_height; }
+    bool has_definite_width() const { return m_has_definite_width; }
 
 protected:
     NodeWithStyle(DOM::Document&, DOM::Node*, NonnullRefPtr<CSS::StyleProperties>);
@@ -227,8 +223,10 @@ private:
     float m_line_height { 0 };
     float m_font_size { 0 };
     RefPtr<CSS::ImageStyleValue> m_background_image;
+    RefPtr<CSS::ImageStyleValue> m_list_style_image;
 
-    CSS::Position m_position;
+    bool m_has_definite_height { false };
+    bool m_has_definite_width { false };
 };
 
 class NodeWithStyleAndBoxModelMetrics : public NodeWithStyle {

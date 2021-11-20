@@ -1,30 +1,11 @@
 /*
- * Copyright (c) 2020, Matthew Olsson <matthewcolsson@gmail.com>
- * All rights reserved.
+ * Copyright (c) 2020, Matthew Olsson <mattco@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Debug.h>
+#include <AK/ExtraMathConstants.h>
 #include <AK/StringBuilder.h>
 #include <LibGfx/Painter.h>
 #include <LibGfx/Path.h>
@@ -36,7 +17,7 @@
 
 namespace Web::SVG {
 
-static void print_instruction(const PathInstruction& instruction)
+[[maybe_unused]] static void print_instruction(const PathInstruction& instruction)
 {
     VERIFY(PATH_DEBUG);
 
@@ -298,23 +279,23 @@ Vector<Vector<float>> PathDataParser::parse_coordinate_pair_sequence()
 Vector<float> PathDataParser::parse_coordinate_pair_double()
 {
     Vector<float> coordinates;
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     if (match_comma_whitespace())
         parse_comma_whitespace();
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     return coordinates;
 }
 
 Vector<float> PathDataParser::parse_coordinate_pair_triplet()
 {
     Vector<float> coordinates;
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     if (match_comma_whitespace())
         parse_comma_whitespace();
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     if (match_comma_whitespace())
         parse_comma_whitespace();
-    coordinates.append(parse_coordinate_pair());
+    coordinates.extend(parse_coordinate_pair());
     return coordinates;
 }
 
@@ -335,7 +316,7 @@ Vector<float> PathDataParser::parse_elliptical_arg_argument()
     numbers.append(parse_flag());
     if (match_comma_whitespace())
         parse_comma_whitespace();
-    numbers.append(parse_coordinate_pair());
+    numbers.extend(parse_coordinate_pair());
 
     return numbers;
 }
@@ -390,8 +371,34 @@ float PathDataParser::parse_fractional_constant()
 float PathDataParser::parse_number()
 {
     auto number = parse_fractional_constant();
-    if (match('e') || match('E'))
-        TODO();
+
+    if (!match('e') && !match('E'))
+        return number;
+    consume();
+
+    auto exponent_sign = parse_sign();
+
+    StringBuilder exponent_builder;
+    while (!done() && isdigit(ch()))
+        exponent_builder.append(consume());
+    VERIFY(exponent_builder.length() > 0);
+
+    auto exponent = exponent_builder.to_string().to_int().value();
+
+    // Fast path: If the number is 0, there's no point in computing the exponentiation.
+    if (number == 0)
+        return number;
+
+    if (exponent_sign < 0) {
+        for (int i = 0; i < exponent; ++i) {
+            number /= 10;
+        }
+    } else if (exponent_sign > 0) {
+        for (int i = 0; i < exponent; ++i) {
+            number *= 10;
+        }
+    }
+
     return number;
 }
 
@@ -438,10 +445,10 @@ SVGPathElement::SVGPathElement(DOM::Document& document, QualifiedName qualified_
 
 RefPtr<Layout::Node> SVGPathElement::create_layout_node()
 {
-    auto style = document().style_resolver().resolve_style(*this);
-    if (style->display() == CSS::Display::None)
+    auto style = document().style_computer().compute_style(*this);
+    if (style->display().is_none())
         return nullptr;
-    return adopt(*new Layout::SVGPathBox(document(), *this, move(style)));
+    return adopt_ref(*new Layout::SVGPathBox(document(), *this, move(style)));
 }
 
 void SVGPathElement::parse_attribute(const FlyString& name, const String& value)
@@ -460,6 +467,9 @@ Gfx::Path& SVGPathElement::get_path()
     Gfx::Path path;
 
     for (auto& instruction : m_instructions) {
+        // If the first path element uses relative coordinates, we treat them as absolute by making them relative to (0, 0).
+        auto last_point = path.segments().is_empty() ? Gfx::FloatPoint { 0, 0 } : path.segments().last().point();
+
         auto& absolute = instruction.absolute;
         auto& data = instruction.data;
 
@@ -475,8 +485,7 @@ Gfx::Path& SVGPathElement::get_path()
             if (absolute) {
                 path.move_to(point);
             } else {
-                VERIFY(!path.segments().is_empty());
-                path.move_to(point + path.segments().last().point());
+                path.move_to(point + last_point);
             }
             break;
         }
@@ -488,29 +497,22 @@ Gfx::Path& SVGPathElement::get_path()
             if (absolute) {
                 path.line_to(point);
             } else {
-                VERIFY(!path.segments().is_empty());
-                path.line_to(point + path.segments().last().point());
+                path.line_to(point + last_point);
             }
             break;
         }
         case PathInstructionType::HorizontalLine: {
-            VERIFY(!path.segments().is_empty());
-            auto last_point = path.segments().last().point();
-            if (absolute) {
+            if (absolute)
                 path.line_to(Gfx::FloatPoint { data[0], last_point.y() });
-            } else {
+            else
                 path.line_to(Gfx::FloatPoint { data[0] + last_point.x(), last_point.y() });
-            }
             break;
         }
         case PathInstructionType::VerticalLine: {
-            VERIFY(!path.segments().is_empty());
-            auto last_point = path.segments().last().point();
-            if (absolute) {
+            if (absolute)
                 path.line_to(Gfx::FloatPoint { last_point.x(), data[0] });
-            } else {
+            else
                 path.line_to(Gfx::FloatPoint { last_point.x(), data[0] + last_point.y() });
-            }
             break;
         }
         case PathInstructionType::EllipticalArc: {
@@ -519,18 +521,15 @@ Gfx::Path& SVGPathElement::get_path()
             double x_axis_rotation = double { data[2] } * M_DEG2RAD;
             double large_arc_flag = data[3];
             double sweep_flag = data[4];
-            auto& last_point = path.segments().last().point();
 
             Gfx::FloatPoint next_point;
 
-            if (absolute) {
+            if (absolute)
                 next_point = { data[5], data[6] };
-            } else {
+            else
                 next_point = { data[5] + last_point.x(), data[6] + last_point.y() };
-            }
 
             path.elliptical_arc_to(next_point, { rx, ry }, x_axis_rotation, large_arc_flag != 0, sweep_flag != 0);
-
             break;
         }
         case PathInstructionType::QuadraticBezierCurve: {
@@ -543,8 +542,6 @@ Gfx::Path& SVGPathElement::get_path()
                 path.quadratic_bezier_curve_to(through, point);
                 m_previous_control_point = through;
             } else {
-                VERIFY(!path.segments().is_empty());
-                auto last_point = path.segments().last().point();
                 auto control_point = through + last_point;
                 path.quadratic_bezier_curve_to(control_point, point + last_point);
                 m_previous_control_point = control_point;
@@ -553,9 +550,6 @@ Gfx::Path& SVGPathElement::get_path()
         }
         case PathInstructionType::SmoothQuadraticBezierCurve: {
             clear_last_control_point = false;
-
-            VERIFY(!path.segments().is_empty());
-            auto last_point = path.segments().last().point();
 
             if (m_previous_control_point.is_null()) {
                 m_previous_control_point = last_point;
@@ -577,7 +571,19 @@ Gfx::Path& SVGPathElement::get_path()
             break;
         }
 
-        case PathInstructionType::Curve:
+        case PathInstructionType::Curve: {
+            Gfx::FloatPoint c1 = { data[0], data[1] };
+            Gfx::FloatPoint c2 = { data[2], data[3] };
+            Gfx::FloatPoint p2 = { data[4], data[5] };
+            if (!absolute) {
+                p2 += last_point;
+                c1 += last_point;
+                c2 += last_point;
+            }
+            path.cubic_bezier_curve_to(c1, c2, p2);
+            break;
+        }
+
         case PathInstructionType::SmoothCurve:
             // Instead of crashing the browser every time we come across an SVG
             // with these path instructions, let's just skip them

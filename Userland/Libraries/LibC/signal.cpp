@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Format.h>
@@ -30,6 +10,7 @@
 #include <setjmp.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/select.h>
 #include <syscall.h>
 #include <unistd.h>
 
@@ -162,17 +143,6 @@ const char* sys_siglist[NSIG] = {
     "Bad system call",
 };
 
-int sigsetjmp(jmp_buf env, int savesigs)
-{
-    if (savesigs) {
-        int rc = sigprocmask(0, nullptr, &env->saved_signal_mask);
-        assert(rc == 0);
-        env->did_save_signal_mask = true;
-    } else {
-        env->did_save_signal_mask = false;
-    }
-    return setjmp(env);
-}
 void siglongjmp(jmp_buf env, int val)
 {
     if (env->did_save_signal_mask) {
@@ -182,13 +152,12 @@ void siglongjmp(jmp_buf env, int val)
     longjmp(env, val);
 }
 
-int sigsuspend(const sigset_t*)
+int sigsuspend(const sigset_t* set)
 {
-    dbgln("FIXME: Implement sigsuspend()");
-    TODO();
+    return pselect(0, nullptr, nullptr, nullptr, nullptr, set);
 }
 
-static const char* signal_names[] = {
+const char* sys_signame[] = {
     "INVAL",
     "HUP",
     "INT",
@@ -223,14 +192,15 @@ static const char* signal_names[] = {
     "SYS",
 };
 
-static_assert(sizeof(signal_names) == sizeof(const char*) * NSIG);
+static_assert(sizeof(sys_signame) == sizeof(const char*) * NSIG);
 
 int getsignalbyname(const char* name)
 {
     VERIFY(name);
+    StringView name_sv(name);
     for (size_t i = 0; i < NSIG; ++i) {
-        auto* signal_name = signal_names[i];
-        if (!strcmp(signal_name, name))
+        auto signal_name = StringView(sys_signame[i]);
+        if (signal_name == name_sv || (name_sv.starts_with("SIG") && signal_name == name_sv.substring_view(3)))
             return i;
     }
     errno = EINVAL;
@@ -243,6 +213,6 @@ const char* getsignalname(int signal)
         errno = EINVAL;
         return nullptr;
     }
-    return signal_names[signal];
+    return sys_signame[signal];
 }
 }

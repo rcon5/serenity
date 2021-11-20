@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/AllOf.h>
@@ -78,7 +58,8 @@ Result<NonnullOwnPtr<GUIDPartitionTable>, PartitionTable::Error> GUIDPartitionTa
 GUIDPartitionTable::GUIDPartitionTable(const StorageDevice& device)
     : MBRPartitionTable(device)
 {
-    m_cached_header = ByteBuffer::create_zeroed(m_device->block_size());
+    // FIXME: Handle OOM failure here.
+    m_cached_header = ByteBuffer::create_zeroed(m_device->block_size()).release_value();
     VERIFY(partitions_count() == 0);
     if (!initialize())
         m_valid = false;
@@ -107,7 +88,12 @@ bool GUIDPartitionTable::initialize()
         return false;
     }
 
-    auto entries_buffer = ByteBuffer::create_zeroed(m_device->block_size());
+    auto entries_buffer_result = ByteBuffer::create_zeroed(m_device->block_size());
+    if (!entries_buffer_result.has_value()) {
+        dbgln("GUIPartitionTable: not enough memory for entries buffer");
+        return false;
+    }
+    auto entries_buffer = entries_buffer_result.release_value();
     auto raw_entries_buffer = UserOrKernelBuffer::for_kernel_buffer(entries_buffer.data());
     size_t raw_byte_index = header().partition_array_start_lba * m_device->block_size();
     for (size_t entry_index = 0; entry_index < header().entries_count; entry_index++) {
@@ -127,9 +113,8 @@ bool GUIDPartitionTable::initialize()
 
         Array<u8, 16> unique_guid {};
         unique_guid.span().overwrite(0, entry.unique_guid, unique_guid.size());
-        String name = entry.partition_name;
         dbgln("Detected GPT partition (entry={}), offset={}, limit={}", entry_index, entry.first_lba, entry.last_lba);
-        m_partitions.append({ entry.first_lba, entry.last_lba, partition_type, unique_guid, entry.attributes, "" });
+        m_partitions.append({ entry.first_lba, entry.last_lba, partition_type, unique_guid, entry.attributes });
         raw_byte_index += header().partition_entry_size;
     }
 
@@ -138,7 +123,7 @@ bool GUIDPartitionTable::initialize()
 
 bool GUIDPartitionTable::is_unused_entry(Array<u8, 16> partition_type) const
 {
-    return all_of(partition_type.begin(), partition_type.end(), [](const auto octet) { return octet == 0; });
+    return all_of(partition_type, [](const auto octet) { return octet == 0; });
 }
 
 }

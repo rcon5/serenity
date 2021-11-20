@@ -1,31 +1,10 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2020, Linus Groh <mail@linusgroh.de>
- * All rights reserved.
+ * Copyright (c) 2020, Linus Groh <linusg@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ByteBuffer.h>
 #include <AK/CircularQueue.h>
 #include <AK/JsonObject.h>
 #include <LibCore/ArgsParser.h>
@@ -51,6 +30,7 @@ class GraphWidget final : public GUI::Frame {
 public:
     static constexpr size_t history_size = 24;
 
+private:
     GraphWidget(GraphType graph_type, Optional<Gfx::Color> graph_color, Optional<Gfx::Color> graph_error_color)
         : m_graph_type(graph_type)
     {
@@ -60,19 +40,17 @@ public:
         start_timer(1000);
     }
 
-private:
     virtual void timer_event(Core::TimerEvent&) override
     {
         switch (m_graph_type) {
         case GraphType::CPU: {
-            unsigned busy;
-            unsigned idle;
-            if (get_cpu_usage(busy, idle)) {
-                unsigned busy_diff = busy - m_last_cpu_busy;
-                unsigned idle_diff = idle - m_last_cpu_idle;
-                m_last_cpu_busy = busy;
-                m_last_cpu_idle = idle;
-                float cpu = (float)busy_diff / (float)(busy_diff + idle_diff);
+            u64 total, idle;
+            if (get_cpu_usage(total, idle)) {
+                auto total_diff = total - m_last_total;
+                m_last_total = total;
+                auto idle_diff = idle - m_last_idle;
+                m_last_idle = idle;
+                float cpu = total_diff > 0 ? (float)(total_diff - idle_diff) / (float)total_diff : 0;
                 m_history.enqueue(cpu);
                 m_tooltip = String::formatted("CPU usage: {:.1}%", 100 * cpu);
             } else {
@@ -114,7 +92,7 @@ private:
             if (value >= 0) {
                 painter.draw_line(
                     { rect.x() + i, rect.bottom() },
-                    { rect.x() + i, rect.top() + (int)(round(rect.height() - (value * rect.height()))) },
+                    { rect.x() + i, rect.top() + (int)(roundf(rect.height() - (value * rect.height()))) },
                     m_graph_color);
             } else {
                 painter.draw_line(
@@ -128,7 +106,7 @@ private:
 
     virtual void mousedown_event(GUI::MouseEvent& event) override
     {
-        if (event.button() != GUI::MouseButton::Left)
+        if (event.button() != GUI::MouseButton::Primary)
             return;
         pid_t child_pid;
         const char* argv[] = { "SystemMonitor", "-t", "graphs", nullptr };
@@ -140,23 +118,28 @@ private:
         }
     }
 
-    bool get_cpu_usage(unsigned& busy, unsigned& idle)
+    bool get_cpu_usage(u64& total, u64& idle)
     {
-        busy = 0;
+        total = 0;
         idle = 0;
 
-        auto all_processes = Core::ProcessStatisticsReader::get_all(m_proc_all);
-        if (!all_processes.has_value() || all_processes.value().is_empty())
-            return false;
-
-        for (auto& it : all_processes.value()) {
-            for (auto& jt : it.value.threads) {
-                if (it.value.pid == 0)
-                    idle += jt.ticks_user + jt.ticks_kernel;
-                else
-                    busy += jt.ticks_user + jt.ticks_kernel;
-            }
+        if (m_proc_stat) {
+            // Seeking to the beginning causes a data refresh!
+            if (!m_proc_stat->seek(0, Core::SeekMode::SetPosition))
+                return false;
+        } else {
+            auto proc_stat = Core::File::construct("/proc/stat");
+            if (!proc_stat->open(Core::OpenMode::ReadOnly))
+                return false;
+            m_proc_stat = move(proc_stat);
         }
+
+        auto file_contents = m_proc_stat->read_all();
+        auto json = JsonValue::from_string(file_contents);
+        VERIFY(json.has_value());
+        auto& obj = json.value().as_object();
+        total = obj.get("total_time").to_u64();
+        idle = obj.get("idle_time").to_u64();
         return true;
     }
 
@@ -164,11 +147,11 @@ private:
     {
         if (m_proc_mem) {
             // Seeking to the beginning causes a data refresh!
-            if (!m_proc_mem->seek(0, Core::File::SeekMode::SetPosition))
+            if (!m_proc_mem->seek(0, Core::SeekMode::SetPosition))
                 return false;
         } else {
             auto proc_memstat = Core::File::construct("/proc/memstat");
-            if (!proc_memstat->open(Core::IODevice::OpenMode::ReadOnly))
+            if (!proc_memstat->open(Core::OpenMode::ReadOnly))
                 return false;
             m_proc_mem = move(proc_memstat);
         }
@@ -179,14 +162,14 @@ private:
         auto& obj = json.value().as_object();
         unsigned kmalloc_allocated = obj.get("kmalloc_allocated").to_u32();
         unsigned kmalloc_available = obj.get("kmalloc_available").to_u32();
-        unsigned user_physical_allocated = obj.get("user_physical_allocated").to_u32();
-        unsigned user_physical_committed = obj.get("user_physical_committed").to_u32();
-        unsigned user_physical_uncommitted = obj.get("user_physical_uncommitted").to_u32();
+        auto user_physical_allocated = obj.get("user_physical_allocated").to_u64();
+        auto user_physical_committed = obj.get("user_physical_committed").to_u64();
+        auto user_physical_uncommitted = obj.get("user_physical_uncommitted").to_u64();
         unsigned kmalloc_bytes_total = kmalloc_allocated + kmalloc_available;
         unsigned kmalloc_pages_total = (kmalloc_bytes_total + PAGE_SIZE - 1) / PAGE_SIZE;
-        unsigned total_userphysical_and_swappable_pages = kmalloc_pages_total + user_physical_allocated + user_physical_committed + user_physical_uncommitted;
-        allocated = kmalloc_allocated + ((u64)(user_physical_allocated + user_physical_committed) * PAGE_SIZE);
-        available = (u64)(total_userphysical_and_swappable_pages * PAGE_SIZE) - allocated;
+        u64 total_userphysical_and_swappable_pages = kmalloc_pages_total + user_physical_allocated + user_physical_committed + user_physical_uncommitted;
+        allocated = kmalloc_allocated + ((user_physical_allocated + user_physical_committed) * PAGE_SIZE);
+        available = (total_userphysical_and_swappable_pages * PAGE_SIZE) - allocated;
         return true;
     }
 
@@ -194,23 +177,23 @@ private:
     Gfx::Color m_graph_color;
     Gfx::Color m_graph_error_color;
     CircularQueue<float, history_size> m_history;
-    unsigned m_last_cpu_busy { 0 };
-    unsigned m_last_cpu_idle { 0 };
+    u64 m_last_idle { 0 };
+    u64 m_last_total { 0 };
     String m_tooltip;
-    RefPtr<Core::File> m_proc_all;
+    RefPtr<Core::File> m_proc_stat;
     RefPtr<Core::File> m_proc_mem;
 };
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio recvfd sendfd accept proc exec rpath unix cpath fattr", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd proc exec rpath unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
     auto app = GUI::Application::construct(argc, argv);
 
-    if (pledge("stdio recvfd sendfd accept proc exec rpath", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd proc exec rpath", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -267,7 +250,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (unveil("/proc/all", "r") < 0) {
+    if (unveil("/proc/stat", "r") < 0) {
         perror("unveil");
         return 1;
     }

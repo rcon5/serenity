@@ -1,34 +1,16 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Assertions.h>
 #include <AK/HashMap.h>
 #include <AK/NumberFormat.h>
 #include <AK/QuickSort.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
+#include <AK/URL.h>
 #include <AK/Utf8View.h>
 #include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
@@ -40,18 +22,29 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <inttypes.h>
 #include <pwd.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+
+struct FileMetadata {
+    String name;
+    String path;
+    struct stat stat {
+    };
+};
 
 static int do_file_system_object_long(const char* path);
 static int do_file_system_object_short(const char* path);
 
-static bool print_names(const char* path, size_t longest_name, const Vector<String>& names);
+static bool print_names(const char* path, size_t longest_name, const Vector<FileMetadata>& files);
+
+static bool filemetadata_comparator(FileMetadata& a, FileMetadata& b);
 
 static bool flag_classify = false;
 static bool flag_colorize = false;
@@ -67,6 +60,7 @@ static bool flag_human_readable = false;
 static bool flag_sort_by_timestamp = false;
 static bool flag_reverse_sort = false;
 static bool flag_disable_hyperlinks = false;
+static bool flag_recursive = false;
 
 static size_t terminal_rows = 0;
 static size_t terminal_columns = 0;
@@ -104,7 +98,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    Vector<const char*> paths;
+    Vector<String> paths;
 
     Core::ArgsParser args_parser;
     args_parser.set_general_help("List files in a directory.");
@@ -122,6 +116,7 @@ int main(int argc, char** argv)
     args_parser.add_option(flag_hide_group, "In long format, do not show group information", nullptr, 'o');
     args_parser.add_option(flag_human_readable, "Print human-readable sizes", "human-readable", 'h');
     args_parser.add_option(flag_disable_hyperlinks, "Disable hyperlinks", "no-hyperlinks", 'K');
+    args_parser.add_option(flag_recursive, "List subdirectories recursively", "recursive", 'R');
     args_parser.add_positional_argument(paths, "Directory to list", "path", Core::ArgsParser::Required::No);
     args_parser.parse(argc, argv);
 
@@ -145,59 +140,69 @@ int main(int argc, char** argv)
         return do_file_system_object_short(path);
     };
 
+    if (paths.is_empty())
+        paths.append(".");
+
+    Vector<FileMetadata> files;
+    for (auto& path : paths) {
+        FileMetadata metadata;
+        metadata.name = path;
+
+        int rc = lstat(path.characters(), &metadata.stat);
+        if (rc < 0)
+            perror("lstat");
+
+        files.append(metadata);
+    }
+    quick_sort(files, filemetadata_comparator);
+
     int status = 0;
-    if (paths.is_empty()) {
-        status = do_file_system_object(".");
-    } else if (paths.size() == 1) {
-        status = do_file_system_object(paths[0]);
-    } else {
-        Vector<const char*> directories;
-        Vector<String> names;
-        size_t longest_name = 0;
-        for (auto& path : paths) {
-            if (Core::File::exists(path)) {
-                if (Core::File::is_directory(path)) {
-                    directories.append(path);
-                } else {
-                    names.append(path);
-                    if (names.last().length() > longest_name)
-                        longest_name = names.last().length();
+
+    for (size_t i = 0; i < files.size(); i++) {
+        auto path = files[i].name;
+
+        if (flag_recursive && Core::File::is_directory(path)) {
+            size_t subdirs = 0;
+            Core::DirIterator di(path, Core::DirIterator::SkipParentAndBaseDir);
+
+            if (di.has_error()) {
+                status = 1;
+                fprintf(stderr, "%s: %s\n", path.characters(), di.error_string());
+            }
+
+            while (di.has_next()) {
+                String directory = di.next_full_path();
+                if (Core::File::is_directory(directory) && !Core::File::is_link(directory)) {
+                    ++subdirs;
+                    FileMetadata new_file;
+                    new_file.name = move(directory);
+                    files.insert(i + subdirs, move(new_file));
                 }
-            } else {
-                status = do_file_system_object(path);
             }
         }
 
-        quick_sort(names);
-        if (print_names(".", longest_name, names)) {
-            printf("\n");
+        bool show_dir_separator = files.size() > 1 && Core::File::is_directory(path) && !flag_list_directories_only;
+        if (show_dir_separator) {
+            printf("%s:\n", path.characters());
         }
-
-        if (names.size() > 0) {
-            printf("\n");
-        }
-
-        quick_sort(directories, [](String a, String b) { return a < b; });
-        for (size_t i = 0; i < directories.size(); ++i) {
-            auto path = directories.at(i);
-            printf("%s:\n", path);
-            status = do_file_system_object(path);
-
-            if (i < directories.size() - 1) {
-                printf("\n");
-            }
+        auto rc = do_file_system_object(path.characters());
+        if (rc != 0)
+            status = rc;
+        if (show_dir_separator && i != files.size() - 1) {
+            puts("");
         }
     }
+
     return status;
 }
 
-static int print_escaped(const char* name)
+static int print_escaped(StringView name)
 {
     int printed = 0;
 
     Utf8View utf8_name(name);
     if (utf8_name.validate()) {
-        printf("%s", name);
+        out("{}", name);
         return utf8_name.length();
     }
 
@@ -231,7 +236,8 @@ static size_t print_name(const struct stat& st, const String& name, const char* 
     if (!flag_disable_hyperlinks) {
         auto full_path = Core::File::real_path_for(path_for_hyperlink);
         if (!full_path.is_null()) {
-            out("\033]8;;file://{}{}\033\\", hostname(), full_path);
+            auto url = URL::create_with_file_scheme(full_path, {}, hostname());
+            out("\033]8;;{}\033\\", url.serialize());
         }
     }
 
@@ -293,7 +299,7 @@ static size_t print_name(const struct stat& st, const String& name, const char* 
 static bool print_filesystem_object(const String& path, const String& name, const struct stat& st)
 {
     if (flag_show_inode)
-        printf("%08u ", st.st_ino);
+        printf("%s ", String::formatted("{}", st.st_ino).characters());
 
     if (S_ISDIR(st.st_mode))
         printf("d");
@@ -351,7 +357,7 @@ static bool print_filesystem_object(const String& path, const String& name, cons
         if (flag_human_readable) {
             printf(" %10s ", human_readable_size(st.st_size).characters());
         } else {
-            printf(" %10lld ", st.st_size);
+            printf(" %10" PRIu64 " ", (uint64_t)st.st_size);
         }
     }
 
@@ -366,12 +372,11 @@ static bool print_filesystem_object(const String& path, const String& name, cons
 static int do_file_system_object_long(const char* path)
 {
     if (flag_list_directories_only) {
-        struct stat stat;
+        struct stat stat {
+        };
         int rc = lstat(path, &stat);
-        if (rc < 0) {
+        if (rc < 0)
             perror("lstat");
-            memset(&stat, 0, sizeof(stat));
-        }
         if (print_filesystem_object(path, path, stat))
             return 0;
         return 2;
@@ -387,12 +392,11 @@ static int do_file_system_object_long(const char* path)
 
     if (di.has_error()) {
         if (di.error() == ENOTDIR) {
-            struct stat stat;
+            struct stat stat {
+            };
             int rc = lstat(path, &stat);
-            if (rc < 0) {
+            if (rc < 0)
                 perror("lstat");
-                memset(&stat, 0, sizeof(stat));
-            }
             if (print_filesystem_object(path, path, stat))
                 return 0;
             return 2;
@@ -400,12 +404,6 @@ static int do_file_system_object_long(const char* path)
         fprintf(stderr, "%s: %s\n", path, di.error_string());
         return 1;
     }
-
-    struct FileMetadata {
-        String name;
-        String path;
-        struct stat stat;
-    };
 
     Vector<FileMetadata> files;
     while (di.has_next()) {
@@ -423,24 +421,13 @@ static int do_file_system_object_long(const char* path)
         metadata.path = builder.to_string();
         VERIFY(!metadata.path.is_null());
         int rc = lstat(metadata.path.characters(), &metadata.stat);
-        if (rc < 0) {
+        if (rc < 0)
             perror("lstat");
-            memset(&metadata.stat, 0, sizeof(metadata.stat));
-        }
+
         files.append(move(metadata));
     }
 
-    quick_sort(files, [](auto& a, auto& b) {
-        if (flag_sort_by_timestamp) {
-            if (flag_reverse_sort)
-                return a.stat.st_mtime > b.stat.st_mtime;
-            return a.stat.st_mtime < b.stat.st_mtime;
-        }
-        // Fine, sort by name then!
-        if (flag_reverse_sort)
-            return a.name > b.name;
-        return a.name < b.name;
-    });
+    quick_sort(files, filemetadata_comparator);
 
     for (auto& file : files) {
         if (!print_filesystem_object(file.path, file.name, file.stat))
@@ -459,18 +446,18 @@ static bool print_filesystem_object_short(const char* path, const char* name, si
     }
 
     if (flag_show_inode)
-        printf("%08u ", st.st_ino);
+        printf("%s ", String::formatted("{}", st.st_ino).characters());
 
     *nprinted = print_name(st, name, nullptr, path);
     return true;
 }
 
-static bool print_names(const char* path, size_t longest_name, const Vector<String>& names)
+static bool print_names(const char* path, size_t longest_name, const Vector<FileMetadata>& files)
 {
     size_t printed_on_row = 0;
     size_t nprinted = 0;
-    for (size_t i = 0; i < names.size(); ++i) {
-        auto& name = names[i];
+    for (size_t i = 0; i < files.size(); ++i) {
+        auto& name = files[i].name;
         StringBuilder builder;
         builder.append(path);
         builder.append('/');
@@ -488,7 +475,7 @@ static bool print_names(const char* path, size_t longest_name, const Vector<Stri
         printed_on_row += column_width;
 
         if (is_a_tty) {
-            for (size_t j = nprinted; i != (names.size() - 1) && j < column_width; ++j)
+            for (size_t j = nprinted; i != (files.size() - 1) && j < column_width; ++j)
                 printf(" ");
         }
         if ((printed_on_row + column_width) >= terminal_columns) {
@@ -530,21 +517,39 @@ int do_file_system_object_short(const char* path)
         return 1;
     }
 
-    Vector<String> names;
+    Vector<FileMetadata> files;
     size_t longest_name = 0;
     while (di.has_next()) {
-        String name = di.next_path();
+        FileMetadata metadata;
+        metadata.name = di.next_path();
 
-        if (name.ends_with('~') && flag_ignore_backups && name != path)
+        if (metadata.name.ends_with('~') && flag_ignore_backups && metadata.name != path)
             continue;
 
-        names.append(name);
-        if (names.last().length() > longest_name)
-            longest_name = name.length();
-    }
-    quick_sort(names);
+        StringBuilder builder;
+        builder.append(path);
+        builder.append('/');
+        builder.append(metadata.name);
+        metadata.path = builder.to_string();
+        VERIFY(!metadata.path.is_null());
+        int rc = lstat(metadata.path.characters(), &metadata.stat);
+        if (rc < 0)
+            perror("lstat");
 
-    if (print_names(path, longest_name, names))
+        files.append(metadata);
+        if (metadata.name.length() > longest_name)
+            longest_name = metadata.name.length();
+    }
+    quick_sort(files, filemetadata_comparator);
+
+    if (print_names(path, longest_name, files))
         printf("\n");
     return 0;
+}
+
+bool filemetadata_comparator(FileMetadata& a, FileMetadata& b)
+{
+    if (flag_sort_by_timestamp && (a.stat.st_mtime != b.stat.st_mtime))
+        return (a.stat.st_mtime > b.stat.st_mtime) ^ flag_reverse_sort;
+    return (a.name < b.name) ^ flag_reverse_sort;
 }

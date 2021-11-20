@@ -1,32 +1,13 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Badge.h>
+#include <AK/JsonObjectSerializer.h>
 #include <AK/RefPtr.h>
 #include <AK/String.h>
 #include <AK/TypeCasts.h>
@@ -54,6 +35,10 @@ enum class NodeType : u16 {
     NOTATION_NODE = 12
 };
 
+struct GetRootNodeOptions {
+    bool composed { false };
+};
+
 class Node
     : public TreeNode<Node>
     , public EventTarget
@@ -70,7 +55,6 @@ public:
     // ^EventTarget
     virtual void ref_event_target() final { ref(); }
     virtual void unref_event_target() final { unref(); }
-    virtual bool dispatch_event(NonnullRefPtr<Event>) final;
     virtual JS::Object* create_wrapper(JS::GlobalObject&) override;
 
     virtual ~Node();
@@ -88,10 +72,18 @@ public:
     bool is_parent_node() const { return is_element() || is_document() || is_document_fragment(); }
     bool is_slottable() const { return is_element() || is_text(); }
 
+    virtual bool requires_svg_container() const { return false; }
+    virtual bool is_svg_container() const { return false; }
+
+    bool in_a_document_tree() const;
+
     // NOTE: This is intended for the JS bindings.
     u16 node_type() const { return (u16)m_type; }
 
     virtual bool is_editable() const;
+
+    virtual bool is_html_html_element() const { return false; }
+    virtual bool is_html_template_element() const { return false; }
 
     ExceptionOr<NonnullRefPtr<Node>> pre_insert(NonnullRefPtr<Node>, RefPtr<Node>);
     ExceptionOr<NonnullRefPtr<Node>> pre_remove(NonnullRefPtr<Node>);
@@ -102,22 +94,28 @@ public:
     void remove_all_children(bool suppress_observers = false);
     u16 compare_document_position(RefPtr<Node> other);
 
-    NonnullRefPtr<Node> clone_node(Document* document = nullptr, bool clone_children = false) const;
-    ExceptionOr<NonnullRefPtr<Node>> clone_node_binding(bool deep) const;
+    ExceptionOr<NonnullRefPtr<Node>> replace_child(NonnullRefPtr<Node> node, NonnullRefPtr<Node> child);
+
+    NonnullRefPtr<Node> clone_node(Document* document = nullptr, bool clone_children = false);
+    ExceptionOr<NonnullRefPtr<Node>> clone_node_binding(bool deep);
 
     // NOTE: This is intended for the JS bindings.
     bool has_child_nodes() const { return has_children(); }
-    NonnullRefPtrVector<Node> child_nodes() const;
+    NonnullRefPtr<NodeList> child_nodes();
+    NonnullRefPtrVector<Node> children_as_vector() const;
 
     virtual RefPtr<Layout::Node> create_layout_node();
 
     virtual FlyString node_name() const = 0;
 
-    virtual String text_content() const;
-    void set_text_content(const String&);
+    String descendant_text_content() const;
+    String text_content() const;
+    void set_text_content(String const&);
 
     Document& document() { return *m_document; }
     const Document& document() const { return *m_document; }
+
+    RefPtr<Document> owner_document() const;
 
     const HTML::HTMLAnchorElement* enclosing_link_element() const;
     const HTML::HTMLElement* enclosing_html_element() const;
@@ -125,14 +123,14 @@ public:
 
     String child_text_content() const;
 
-    Node* root();
-    const Node* root() const
+    Node& root();
+    const Node& root() const
     {
         return const_cast<Node*>(this)->root();
     }
 
-    Node* shadow_including_root();
-    const Node* shadow_including_root() const
+    Node& shadow_including_root();
+    const Node& shadow_including_root() const
     {
         return const_cast<Node*>(this)->shadow_including_root();
     }
@@ -148,7 +146,8 @@ public:
     virtual void inserted();
     virtual void removed_from(Node*) { }
     virtual void children_changed() { }
-    virtual void adopted_from(const Document&) { }
+    virtual void adopted_from(Document&) { }
+    virtual void cloned(Node&, bool) {};
 
     const Layout::Node* layout_node() const { return m_layout_node; }
     Layout::Node* layout_node() { return m_layout_node; }
@@ -178,6 +177,33 @@ public:
 
     bool is_host_including_inclusive_ancestor_of(const Node&) const;
 
+    bool is_scripting_disabled() const;
+
+    bool contains(RefPtr<Node>) const;
+
+    // Used for dumping the DOM Tree
+    void serialize_tree_as_json(JsonObjectSerializer<StringBuilder>&) const;
+
+    bool is_shadow_including_descendant_of(Node const&) const;
+    bool is_shadow_including_inclusive_descendant_of(Node const&) const;
+    bool is_shadow_including_ancestor_of(Node const&) const;
+    bool is_shadow_including_inclusive_ancestor_of(Node const&) const;
+
+    i32 id() const { return m_id; }
+    static Node* from_id(i32 node_id);
+
+    String serialize_fragment() const;
+
+    void replace_all(RefPtr<Node>);
+    void string_replace_all(String const&);
+
+    bool is_same_node(Node const*) const;
+    bool is_equal_node(Node const*) const;
+
+    NonnullRefPtr<Node> get_root_node(GetRootNodeOptions const& options = {});
+
+    bool is_uninteresting_whitespace_node() const;
+
 protected:
     Node(Document&, NodeType);
 
@@ -186,6 +212,8 @@ protected:
     NodeType m_type { NodeType::INVALID };
     bool m_needs_style_update { false };
     bool m_child_needs_style_update { false };
+
+    i32 m_id;
 };
 
 }

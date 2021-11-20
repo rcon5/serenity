@@ -1,41 +1,26 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/OwnPtr.h>
 #include <LibGfx/Rect.h>
-#include <LibWeb/Layout/LineBox.h>
 #include <LibWeb/Layout/Node.h>
+#include <LibWeb/Painting/BorderPainting.h>
 #include <LibWeb/Painting/StackingContext.h>
 
 namespace Web::Layout {
 
 class Box : public NodeWithStyleAndBoxModelMetrics {
 public:
+    struct OverflowData {
+        Gfx::FloatRect scrollable_overflow_rect;
+        Gfx::FloatPoint scroll_offset;
+    };
+
     const Gfx::FloatRect absolute_rect() const;
 
     Gfx::FloatPoint effective_offset() const;
@@ -54,10 +39,11 @@ public:
 
     Gfx::FloatRect padded_rect() const
     {
+        auto absolute_rect = this->absolute_rect();
         Gfx::FloatRect rect;
-        rect.set_x(absolute_x() - box_model().padding.left);
+        rect.set_x(absolute_rect.x() - box_model().padding.left);
         rect.set_width(width() + box_model().padding.left + box_model().padding.right);
-        rect.set_y(absolute_y() - box_model().padding.top);
+        rect.set_y(absolute_rect.y() - box_model().padding.top);
         rect.set_height(height() + box_model().padding.top + box_model().padding.bottom);
         return rect;
     }
@@ -102,6 +88,17 @@ public:
         return { m_offset, m_size };
     }
 
+    Gfx::FloatRect border_box_as_relative_rect() const
+    {
+        auto rect = content_box_as_relative_rect();
+        auto border_box = box_model().border_box();
+        rect.set_x(rect.x() - border_box.left);
+        rect.set_width(rect.width() + border_box.left + border_box.right);
+        rect.set_y(rect.y() - border_box.top);
+        rect.set_height(rect.height() + border_box.top + border_box.bottom);
+        return rect;
+    }
+
     Gfx::FloatRect margin_box_as_relative_rect() const
     {
         auto rect = content_box_as_relative_rect();
@@ -117,6 +114,8 @@ public:
     float absolute_y() const { return absolute_rect().y(); }
     Gfx::FloatPoint absolute_position() const { return absolute_rect().location(); }
 
+    bool is_out_of_flow(FormattingContext const&) const;
+
     virtual HitTestResult hit_test(const Gfx::IntPoint&, HitTestType) const override;
     virtual void set_needs_display() override;
 
@@ -124,21 +123,46 @@ public:
 
     void set_containing_line_box_fragment(LineBoxFragment&);
 
-    bool establishes_stacking_context() const;
     StackingContext* stacking_context() { return m_stacking_context; }
     const StackingContext* stacking_context() const { return m_stacking_context; }
     void set_stacking_context(NonnullOwnPtr<StackingContext> context) { m_stacking_context = move(context); }
     StackingContext* enclosing_stacking_context();
 
     virtual void paint(PaintContext&, PaintPhase) override;
+    virtual void paint_border(PaintContext& context);
+    virtual void paint_box_shadow(PaintContext& context);
+    virtual void paint_background(PaintContext& context);
 
-    Vector<LineBox>& line_boxes() { return m_line_boxes; }
-    const Vector<LineBox>& line_boxes() const { return m_line_boxes; }
+    Painting::BorderRadiusData normalized_border_radius_data();
 
-    LineBox& ensure_last_line_box();
-    LineBox& add_line_box();
+    virtual Optional<float> intrinsic_width() const { return {}; }
+    virtual Optional<float> intrinsic_height() const { return {}; }
+    virtual Optional<float> intrinsic_aspect_ratio() const { return {}; }
 
-    virtual float width_of_logical_containing_block() const;
+    bool has_intrinsic_width() const { return intrinsic_width().has_value(); }
+    bool has_intrinsic_height() const { return intrinsic_height().has_value(); }
+    bool has_intrinsic_aspect_ratio() const { return intrinsic_aspect_ratio().has_value(); }
+
+    bool has_overflow() const { return m_overflow_data; }
+
+    Optional<Gfx::FloatRect> scrollable_overflow_rect() const
+    {
+        if (!m_overflow_data)
+            return {};
+        return m_overflow_data->scrollable_overflow_rect;
+    }
+
+    OverflowData& ensure_overflow_data()
+    {
+        if (!m_overflow_data)
+            m_overflow_data = make<OverflowData>();
+        return *m_overflow_data;
+    }
+
+    void clear_overflow_data() { m_overflow_data = nullptr; }
+
+    virtual void before_children_paint(PaintContext&, PaintPhase);
+    virtual void after_children_paint(PaintContext&, PaintPhase);
 
 protected:
     Box(DOM::Document& document, DOM::Node* node, NonnullRefPtr<CSS::StyleProperties> style)
@@ -153,10 +177,6 @@ protected:
 
     virtual void did_set_rect() { }
 
-    void paint_background_image(PaintContext&, const Gfx::Bitmap&, CSS::Repeat, CSS::Repeat, Gfx::IntRect);
-
-    Vector<LineBox> m_line_boxes;
-
 private:
     virtual bool is_box() const final { return true; }
 
@@ -167,6 +187,8 @@ private:
     WeakPtr<LineBoxFragment> m_containing_line_box_fragment;
 
     OwnPtr<StackingContext> m_stacking_context;
+
+    OwnPtr<OverflowData> m_overflow_data;
 };
 
 template<>

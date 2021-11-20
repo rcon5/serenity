@@ -28,6 +28,7 @@
 #pragma once
 
 #include <AK/Assertions.h>
+#include <AK/Concepts.h>
 #include <AK/NumericLimits.h>
 #include <AK/StdLibExtras.h>
 
@@ -57,7 +58,7 @@ template<typename Destination, typename Source>
 struct TypeBoundsChecker<Destination, Source, false, false, true> {
     static constexpr bool is_within_range(Source value)
     {
-        return static_cast<MakeUnsigned<Source>>(value) <= NumericLimits<Destination>::max();
+        return value >= 0 && value <= NumericLimits<Destination>::max();
     }
 };
 
@@ -109,17 +110,17 @@ template<typename Destination, typename Source>
     return TypeBoundsChecker<Destination, Source>::is_within_range(value);
 }
 
-template<typename T>
+template<Integral T>
 class Checked {
 public:
     constexpr Checked() = default;
 
-    constexpr Checked(T value)
+    explicit constexpr Checked(T value)
         : m_value(value)
     {
     }
 
-    template<typename U>
+    template<Integral U>
     constexpr Checked(U value)
     {
         m_overflow = !is_within_range<T>(value);
@@ -183,6 +184,17 @@ public:
 
     constexpr void div(T other)
     {
+        if constexpr (IsSigned<T>) {
+            // Ensure that the resulting value won't be out of range, this can only happen when dividing by -1.
+            if (other == -1 && m_value == NumericLimits<T>::min()) {
+                m_overflow = true;
+                return;
+            }
+        }
+        if (other == 0) {
+            m_overflow = true;
+            return;
+        }
         m_value /= other;
     }
 

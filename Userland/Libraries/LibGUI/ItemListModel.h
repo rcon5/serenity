@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2019-2020, Jesse Buhgaiar <jooster669@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -45,23 +25,23 @@ public:
     // Substitute 'void' for a dummy u8.
     using ColumnNamesT = Conditional<IsVoid<ColumnNameListType>, u8, ColumnNameListType>;
 
-    static NonnullRefPtr<ItemListModel> create(const Container& data, const ColumnNamesT& column_names, const Optional<size_t>& row_count = {}) requires(IsTwoDimensional)
+    static NonnullRefPtr<ItemListModel> create(Container const& data, ColumnNamesT const& column_names, Optional<size_t> const& row_count = {}) requires(IsTwoDimensional)
     {
-        return adopt(*new ItemListModel<T, Container, ColumnNameListType>(data, column_names, row_count));
+        return adopt_ref(*new ItemListModel<T, Container, ColumnNameListType>(data, column_names, row_count));
     }
-    static NonnullRefPtr<ItemListModel> create(const Container& data, const Optional<size_t>& row_count = {}) requires(!IsTwoDimensional)
+    static NonnullRefPtr<ItemListModel> create(Container const& data, Optional<size_t> const& row_count = {}) requires(!IsTwoDimensional)
     {
-        return adopt(*new ItemListModel<T, Container>(data, row_count));
+        return adopt_ref(*new ItemListModel<T, Container>(data, row_count));
     }
 
     virtual ~ItemListModel() override { }
 
-    virtual int row_count(const ModelIndex&) const override
+    virtual int row_count(ModelIndex const&) const override
     {
         return m_provided_row_count.has_value() ? *m_provided_row_count : m_data.size();
     }
 
-    virtual int column_count(const ModelIndex& index) const override
+    virtual int column_count(ModelIndex const& index) const override
     {
         // if it's 2D (e.g. Vector<Vector<T>>)
         if constexpr (IsTwoDimensional) {
@@ -83,7 +63,7 @@ public:
         return "Data";
     }
 
-    virtual Variant data(const ModelIndex& index, ModelRole role) const override
+    virtual Variant data(ModelIndex const& index, ModelRole role) const override
     {
         if (role == ModelRole::TextAlignment)
             return Gfx::TextAlignment::CenterLeft;
@@ -97,26 +77,52 @@ public:
         return {};
     }
 
-    virtual void update() override
+    virtual bool is_searchable() const override { return true; }
+    virtual Vector<GUI::ModelIndex> matches(StringView const& searching, unsigned flags, GUI::ModelIndex const&) override
     {
-        did_update();
+        Vector<GUI::ModelIndex> found_indices;
+        if constexpr (IsTwoDimensional) {
+            for (auto it = m_data.begin(); it != m_data.end(); ++it) {
+                for (auto it2d = (*it).begin(); it2d != (*it).end(); ++it2d) {
+                    GUI::ModelIndex index = this->index(it.index(), it2d.index());
+                    if (!string_matches(data(index, ModelRole::Display).to_string(), searching, flags))
+                        continue;
+
+                    found_indices.append(index);
+                    if (flags & FirstMatchOnly)
+                        return found_indices;
+                }
+            }
+        } else {
+            for (auto it = m_data.begin(); it != m_data.end(); ++it) {
+                GUI::ModelIndex index = this->index(it.index());
+                if (!string_matches(data(index, ModelRole::Display).to_string(), searching, flags))
+                    continue;
+
+                found_indices.append(index);
+                if (flags & FirstMatchOnly)
+                    return found_indices;
+            }
+        }
+
+        return found_indices;
     }
 
 protected:
-    explicit ItemListModel(const Container& data, Optional<size_t> row_count = {}) requires(!IsTwoDimensional)
+    explicit ItemListModel(Container const& data, Optional<size_t> row_count = {}) requires(!IsTwoDimensional)
         : m_data(data)
         , m_provided_row_count(move(row_count))
     {
     }
 
-    explicit ItemListModel(const Container& data, const ColumnNamesT& column_names, Optional<size_t> row_count = {}) requires(IsTwoDimensional)
+    explicit ItemListModel(Container const& data, ColumnNamesT const& column_names, Optional<size_t> row_count = {}) requires(IsTwoDimensional)
         : m_data(data)
         , m_column_names(column_names)
         , m_provided_row_count(move(row_count))
     {
     }
 
-    const Container& m_data;
+    Container const& m_data;
     ColumnNamesT m_column_names;
     Optional<size_t> m_provided_row_count;
 };

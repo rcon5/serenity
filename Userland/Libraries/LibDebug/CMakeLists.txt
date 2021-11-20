@@ -2,6 +2,8 @@ set(SOURCES
     DebugInfo.cpp
     DebugSession.cpp
     Dwarf/AbbreviationsMap.cpp
+    Dwarf/AddressRanges.cpp
+    Dwarf/AttributeValue.cpp
     Dwarf/CompilationUnit.cpp
     Dwarf/DIE.cpp
     Dwarf/DwarfInfo.cpp

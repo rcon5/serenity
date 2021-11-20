@@ -1,32 +1,14 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include "ClientConnection.h"
+#include "FadingProperty.h"
 #include <AK/Atomic.h>
 #include <AK/Badge.h>
 #include <AK/ByteBuffer.h>
@@ -36,17 +18,24 @@
 #include <AK/WeakPtr.h>
 #include <LibAudio/Buffer.h>
 #include <LibCore/File.h>
-#include <LibThread/Lock.h>
-#include <LibThread/Thread.h>
+#include <LibCore/Timer.h>
+#include <LibThreading/ConditionVariable.h>
+#include <LibThreading/Mutex.h>
+#include <LibThreading/Thread.h>
+#include <sys/types.h>
 
 namespace AudioServer {
 
+// Headroom, i.e. fixed attenuation for all audio streams.
+// This is to prevent clipping when two streams with low headroom (e.g. normalized & compressed) are playing.
+constexpr double SAMPLE_HEADROOM = 0.7;
+
 class ClientConnection;
 
-class BufferQueue : public RefCounted<BufferQueue> {
+class ClientAudioStream : public RefCounted<ClientAudioStream> {
 public:
-    explicit BufferQueue(ClientConnection&);
-    ~BufferQueue() { }
+    explicit ClientAudioStream(ClientConnection&);
+    ~ClientAudioStream() { }
 
     bool is_full() const { return m_queue.size() >= 3; }
     void enqueue(NonnullRefPtr<Audio::Buffer>&&);
@@ -100,6 +89,10 @@ public:
         return -1;
     }
 
+    FadingProperty<double>& volume() { return m_volume; }
+    double volume() const { return m_volume; }
+    void set_volume(double const volume) { m_volume = volume; }
+
 private:
     RefPtr<Audio::Buffer> m_current;
     Queue<NonnullRefPtr<Audio::Buffer>> m_queue;
@@ -107,38 +100,53 @@ private:
     int m_remaining_samples { 0 };
     int m_played_samples { 0 };
     bool m_paused { false };
+
     WeakPtr<ClientConnection> m_client;
+    FadingProperty<double> m_volume { 1 };
 };
 
 class Mixer : public Core::Object {
     C_OBJECT(Mixer)
 public:
-    Mixer();
     virtual ~Mixer() override;
 
-    NonnullRefPtr<BufferQueue> create_queue(ClientConnection&);
+    NonnullRefPtr<ClientAudioStream> create_queue(ClientConnection&);
 
-    int main_volume() const { return m_main_volume; }
-    void set_main_volume(int volume);
+    // To the outside world, we pretend that the target volume is already reached, even though it may be still fading.
+    double main_volume() const { return m_main_volume.target(); }
+    void set_main_volume(double volume);
 
     bool is_muted() const { return m_muted; }
     void set_muted(bool);
 
+    int audiodevice_set_sample_rate(u16 sample_rate);
+    u16 audiodevice_get_sample_rate() const;
+
 private:
-    Vector<NonnullRefPtr<BufferQueue>> m_pending_mixing;
-    Atomic<bool> m_added_queue { false };
-    pthread_mutex_t m_pending_mutex;
-    pthread_cond_t m_pending_cond;
+    Mixer(NonnullRefPtr<Core::ConfigFile> config);
+
+    void request_setting_sync();
+
+    Vector<NonnullRefPtr<ClientAudioStream>> m_pending_mixing;
+    Threading::Mutex m_pending_mutex;
+    Threading::ConditionVariable m_mixing_necessary { m_pending_mutex };
 
     RefPtr<Core::File> m_device;
 
-    NonnullRefPtr<LibThread::Thread> m_sound_thread;
+    NonnullRefPtr<Threading::Thread> m_sound_thread;
 
     bool m_muted { false };
-    int m_main_volume { 100 };
+    FadingProperty<double> m_main_volume { 1 };
 
-    u8* m_zero_filled_buffer { nullptr };
+    NonnullRefPtr<Core::ConfigFile> m_config;
+    RefPtr<Core::Timer> m_config_write_timer;
+
+    static u8 m_zero_filled_buffer[4096];
 
     void mix();
 };
+
+// Interval in ms when the server tries to save its configuration to disk.
+constexpr unsigned AUDIO_CONFIG_WRITE_INTERVAL = 2000;
+
 }

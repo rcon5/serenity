@@ -1,87 +1,70 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <Kernel/Process.h>
 
 namespace Kernel {
 
-KResultOr<uid_t> Process::sys$getuid()
+KResultOr<FlatPtr> Process::sys$getuid()
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
-    return uid();
+    return uid().value();
 }
 
-KResultOr<gid_t> Process::sys$getgid()
+KResultOr<FlatPtr> Process::sys$getgid()
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
-    return gid();
+    return gid().value();
 }
 
-KResultOr<uid_t> Process::sys$geteuid()
+KResultOr<FlatPtr> Process::sys$geteuid()
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
-    return euid();
+    return euid().value();
 }
 
-KResultOr<gid_t> Process::sys$getegid()
+KResultOr<FlatPtr> Process::sys$getegid()
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
-    return egid();
+    return egid().value();
 }
 
-KResultOr<int> Process::sys$getresuid(Userspace<uid_t*> ruid, Userspace<uid_t*> euid, Userspace<uid_t*> suid)
+KResultOr<FlatPtr> Process::sys$getresuid(Userspace<UserID*> ruid, Userspace<UserID*> euid, Userspace<UserID*> suid)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
-    if (!copy_to_user(ruid, &m_uid) || !copy_to_user(euid, &m_euid) || !copy_to_user(suid, &m_suid))
-        return EFAULT;
-    return 0;
+    TRY(copy_to_user(ruid, &m_protected_values.uid));
+    TRY(copy_to_user(euid, &m_protected_values.euid));
+    TRY(copy_to_user(suid, &m_protected_values.suid));
+    return KSuccess;
 }
 
-KResultOr<int> Process::sys$getresgid(Userspace<gid_t*> rgid, Userspace<gid_t*> egid, Userspace<gid_t*> sgid)
+KResultOr<FlatPtr> Process::sys$getresgid(Userspace<GroupID*> rgid, Userspace<GroupID*> egid, Userspace<GroupID*> sgid)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
-    if (!copy_to_user(rgid, &m_gid) || !copy_to_user(egid, &m_egid) || !copy_to_user(sgid, &m_sgid))
-        return EFAULT;
-    return 0;
+    TRY(copy_to_user(rgid, &m_protected_values.gid));
+    TRY(copy_to_user(egid, &m_protected_values.egid));
+    TRY(copy_to_user(sgid, &m_protected_values.sgid));
+    return KSuccess;
 }
 
-KResultOr<int> Process::sys$getgroups(ssize_t count, Userspace<gid_t*> user_gids)
+KResultOr<FlatPtr> Process::sys$getgroups(size_t count, Userspace<gid_t*> user_gids)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
-    if (count < 0)
-        return EINVAL;
     if (!count)
         return extra_gids().size();
-    if (count != (int)extra_gids().size())
+    if (count != extra_gids().size())
         return EINVAL;
-
-    if (!copy_to_user(user_gids, extra_gids().data(), sizeof(gid_t) * count))
-        return EFAULT;
-
-    return 0;
+    return copy_to_user(user_gids, extra_gids().data(), sizeof(gid_t) * count);
 }
 
 }

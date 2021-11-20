@@ -1,28 +1,8 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, Tobias Christiansen <tobi@tobyase.de>
- * All rights reserved.
+ * Copyright (c) 2021, Tobias Christiansen <tobyase@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "MallocTracer.h"
@@ -56,14 +36,34 @@ inline void MallocTracer::for_each_mallocation(Callback callback) const
     });
 }
 
+void MallocTracer::update_metadata(MmapRegion& mmap_region, size_t chunk_size)
+{
+    mmap_region.set_malloc_metadata({},
+        adopt_own(*new MallocRegionMetadata {
+            .region = mmap_region,
+            .address = mmap_region.base(),
+            .chunk_size = chunk_size,
+            .mallocations = {},
+        }));
+    auto& malloc_data = *mmap_region.malloc_metadata();
+
+    bool is_chunked_block = malloc_data.chunk_size <= size_classes[num_size_classes - 1];
+    if (is_chunked_block)
+        malloc_data.mallocations.resize((ChunkedBlock::block_size - sizeof(ChunkedBlock)) / malloc_data.chunk_size);
+    else
+        malloc_data.mallocations.resize(1);
+
+    // Mark the containing mmap region as a malloc block!
+    mmap_region.set_malloc(true);
+}
+
 void MallocTracer::target_did_malloc(Badge<Emulator>, FlatPtr address, size_t size)
 {
     if (m_emulator.is_in_loader_code())
         return;
     auto* region = m_emulator.mmu().find_region({ 0x23, address });
     VERIFY(region);
-    VERIFY(is<MmapRegion>(*region));
-    auto& mmap_region = static_cast<MmapRegion&>(*region);
+    auto& mmap_region = verify_cast<MmapRegion>(*region);
 
     auto* shadow_bits = mmap_region.shadow_data() + address - mmap_region.base();
     memset(shadow_bits, 0, size);
@@ -79,27 +79,21 @@ void MallocTracer::target_did_malloc(Badge<Emulator>, FlatPtr address, size_t si
 
     if (!mmap_region.is_malloc_block()) {
         auto chunk_size = mmap_region.read32(offsetof(CommonHeader, m_size)).value();
-        mmap_region.set_malloc_metadata({},
-            adopt_own(*new MallocRegionMetadata {
-                .region = mmap_region,
-                .address = mmap_region.base(),
-                .chunk_size = chunk_size,
-                .mallocations = {},
-            }));
-        auto& malloc_data = *mmap_region.malloc_metadata();
-
-        bool is_chunked_block = malloc_data.chunk_size <= size_classes[num_size_classes - 1];
-        if (is_chunked_block)
-            malloc_data.mallocations.resize((ChunkedBlock::block_size - sizeof(ChunkedBlock)) / malloc_data.chunk_size);
-        else
-            malloc_data.mallocations.resize(1);
-
-        // Mark the containing mmap region as a malloc block!
-        mmap_region.set_malloc(true);
+        update_metadata(mmap_region, chunk_size);
     }
     auto* mallocation = mmap_region.malloc_metadata()->mallocation_for_address(address);
     VERIFY(mallocation);
     *mallocation = { address, size, true, false, m_emulator.raw_backtrace(), Vector<FlatPtr>() };
+}
+
+void MallocTracer::target_did_change_chunk_size(Badge<Emulator>, FlatPtr block, size_t chunk_size)
+{
+    if (m_emulator.is_in_loader_code())
+        return;
+    auto* region = m_emulator.mmu().find_region({ 0x23, block });
+    VERIFY(region);
+    auto& mmap_region = verify_cast<MmapRegion>(*region);
+    update_metadata(mmap_region, chunk_size);
 }
 
 ALWAYS_INLINE Mallocation* MallocRegionMetadata::mallocation_for_address(FlatPtr address) const
@@ -157,8 +151,7 @@ void MallocTracer::target_did_realloc(Badge<Emulator>, FlatPtr address, size_t s
         return;
     auto* region = m_emulator.mmu().find_region({ 0x23, address });
     VERIFY(region);
-    VERIFY(is<MmapRegion>(*region));
-    auto& mmap_region = static_cast<MmapRegion&>(*region);
+    auto& mmap_region = verify_cast<MmapRegion>(*region);
 
     VERIFY(mmap_region.is_malloc_block());
 
@@ -220,7 +213,11 @@ void MallocTracer::audit_read(const Region& region, FlatPtr address, size_t size
     if (!m_auditing_enabled)
         return;
 
-    if (m_emulator.is_in_malloc_or_free() || m_emulator.is_in_libsystem()) {
+    if (m_emulator.is_memory_auditing_suppressed()) {
+        return;
+    }
+
+    if (m_emulator.is_in_libsystem()) {
         return;
     }
 
@@ -267,8 +264,9 @@ void MallocTracer::audit_write(const Region& region, FlatPtr address, size_t siz
     if (!m_auditing_enabled)
         return;
 
-    if (m_emulator.is_in_malloc_or_free())
+    if (m_emulator.is_memory_auditing_suppressed()) {
         return;
+    }
 
     if (m_emulator.is_in_loader_code()) {
         return;
@@ -330,9 +328,8 @@ void MallocTracer::populate_memory_graph()
             auto value = m_emulator.mmu().read32({ 0x23, mallocation.address + i * sizeof(u32) });
             auto other_address = value.value();
             if (!value.is_uninitialized() && m_memory_graph.contains(value.value())) {
-#if REACHABLE_DEBUG
-                reportln("region/mallocation {:p} is reachable from other mallocation {:p}", other_address, mallocation.address);
-#endif
+                if constexpr (REACHABLE_DEBUG)
+                    reportln("region/mallocation {:p} is reachable from other mallocation {:p}", other_address, mallocation.address);
                 edges_from_mallocation.edges_from_node.append(other_address);
             }
         }
@@ -359,9 +356,8 @@ void MallocTracer::populate_memory_graph()
             auto value = region.read32(i * sizeof(u32));
             auto other_address = value.value();
             if (!value.is_uninitialized() && m_memory_graph.contains(value.value())) {
-#if REACHABLE_DEBUG
-                reportln("region/mallocation {:p} is reachable from region {:p}-{:p}", other_address, region.base(), region.end() - 1);
-#endif
+                if constexpr (REACHABLE_DEBUG)
+                    reportln("region/mallocation {:p} is reachable from region {:p}-{:p}", other_address, region.base(), region.end() - 1);
                 m_memory_graph.find(other_address)->value.is_reachable = true;
                 reachable_mallocations.append(other_address);
             }
@@ -408,9 +404,8 @@ void MallocTracer::dump_leak_report()
 
     populate_memory_graph();
 
-#if REACHABLE_DEBUG
-    dump_memory_graph();
-#endif
+    if constexpr (REACHABLE_DEBUG)
+        dump_memory_graph();
 
     for_each_mallocation([&](auto& mallocation) {
         if (mallocation.freed)

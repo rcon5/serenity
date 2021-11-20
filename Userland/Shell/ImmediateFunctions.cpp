@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2021, The SerenityOS developers.
- * All rights reserved.
+ * Copyright (c) 2021, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Formatter.h"
@@ -87,7 +67,7 @@ RefPtr<AST::Node> Shell::immediate_length_impl(AST::ImmediateExpression& invokin
     }
 
     auto value_with_number = [&](auto number) -> NonnullRefPtr<AST::Node> {
-        return AST::create<AST::BarewordLiteral>(invoking_node.position(), String::number(number));
+        return AST::make_ref_counted<AST::BarewordLiteral>(invoking_node.position(), String::number(number));
     };
 
     auto do_across = [&](StringView mode_name, auto& values) {
@@ -98,17 +78,17 @@ RefPtr<AST::Node> Shell::immediate_length_impl(AST::ImmediateExpression& invokin
         resulting_nodes.ensure_capacity(values.size());
         for (auto& entry : values) {
             // ImmediateExpression(length <mode_name> <entry>)
-            resulting_nodes.unchecked_append(AST::create<AST::ImmediateExpression>(
+            resulting_nodes.unchecked_append(AST::make_ref_counted<AST::ImmediateExpression>(
                 expr_node->position(),
                 AST::NameWithPosition { "length", invoking_node.function_position() },
                 NonnullRefPtrVector<AST::Node> { Vector<NonnullRefPtr<AST::Node>> {
-                    static_cast<NonnullRefPtr<AST::Node>>(AST::create<AST::BarewordLiteral>(expr_node->position(), mode_name)),
-                    AST::create<AST::SyntheticNode>(expr_node->position(), NonnullRefPtr<AST::Value>(entry)),
+                    static_cast<NonnullRefPtr<AST::Node>>(AST::make_ref_counted<AST::BarewordLiteral>(expr_node->position(), mode_name)),
+                    AST::make_ref_counted<AST::SyntheticNode>(expr_node->position(), NonnullRefPtr<AST::Value>(entry)),
                 } },
                 expr_node->position()));
         }
 
-        return AST::create<AST::ListConcatenate>(invoking_node.position(), move(resulting_nodes));
+        return AST::make_ref_counted<AST::ListConcatenate>(invoking_node.position(), move(resulting_nodes));
     };
 
     switch (mode) {
@@ -134,7 +114,7 @@ RefPtr<AST::Node> Shell::immediate_length_impl(AST::ImmediateExpression& invokin
             return value_with_number(list.size());
 
         dbgln("List has {} entries", list.size());
-        auto values = AST::create<AST::ListValue>(move(list));
+        auto values = AST::make_ref_counted<AST::ListValue>(move(list));
         return do_across("list", values->values());
     }
     case String: {
@@ -203,7 +183,7 @@ RefPtr<AST::Node> Shell::immediate_length_impl(AST::ImmediateExpression& invokin
             return nullptr;
         }
 
-        auto values = AST::create<AST::ListValue>(move(list));
+        auto values = AST::make_ref_counted<AST::ListValue>(move(list));
         return do_across("string", values->values());
     }
     }
@@ -248,7 +228,7 @@ RefPtr<AST::Node> Shell::immediate_regex_replace(AST::ImmediateExpression& invok
     Regex<PosixExtendedParser> re { pattern->resolve_as_list(this).first() };
     auto result = re.replace(value->resolve_as_list(this)[0], replacement->resolve_as_list(this)[0], PosixFlags::Global | PosixFlags::Multiline | PosixFlags::Unicode);
 
-    return AST::create<AST::StringLiteral>(invoking_node.position(), move(result));
+    return AST::make_ref_counted<AST::StringLiteral>(invoking_node.position(), move(result));
 }
 
 RefPtr<AST::Node> Shell::immediate_remove_suffix(AST::ImmediateExpression& invoking_node, const NonnullRefPtrVector<AST::Node>& arguments)
@@ -276,10 +256,10 @@ RefPtr<AST::Node> Shell::immediate_remove_suffix(AST::ImmediateExpression& invok
 
         if (value_str.ends_with(suffix_str))
             removed = removed.substring_view(0, value_str.length() - suffix_str.length());
-        nodes.append(AST::create<AST::StringLiteral>(invoking_node.position(), removed));
+        nodes.append(AST::make_ref_counted<AST::StringLiteral>(invoking_node.position(), removed));
     }
 
-    return AST::create<AST::ListConcatenate>(invoking_node.position(), move(nodes));
+    return AST::make_ref_counted<AST::ListConcatenate>(invoking_node.position(), move(nodes));
 }
 
 RefPtr<AST::Node> Shell::immediate_remove_prefix(AST::ImmediateExpression& invoking_node, const NonnullRefPtrVector<AST::Node>& arguments)
@@ -307,10 +287,10 @@ RefPtr<AST::Node> Shell::immediate_remove_prefix(AST::ImmediateExpression& invok
 
         if (value_str.starts_with(prefix_str))
             removed = removed.substring_view(prefix_str.length());
-        nodes.append(AST::create<AST::StringLiteral>(invoking_node.position(), removed));
+        nodes.append(AST::make_ref_counted<AST::StringLiteral>(invoking_node.position(), removed));
     }
 
-    return AST::create<AST::ListConcatenate>(invoking_node.position(), move(nodes));
+    return AST::make_ref_counted<AST::ListConcatenate>(invoking_node.position(), move(nodes));
 }
 
 RefPtr<AST::Node> Shell::immediate_split(AST::ImmediateExpression& invoking_node, const NonnullRefPtrVector<AST::Node>& arguments)
@@ -336,17 +316,17 @@ RefPtr<AST::Node> Shell::immediate_split(AST::ImmediateExpression& invoking_node
         resulting_nodes.ensure_capacity(values.size());
         for (auto& entry : values) {
             // ImmediateExpression(split <delimiter> <entry>)
-            resulting_nodes.unchecked_append(AST::create<AST::ImmediateExpression>(
+            resulting_nodes.unchecked_append(AST::make_ref_counted<AST::ImmediateExpression>(
                 arguments[1].position(),
                 invoking_node.function(),
                 NonnullRefPtrVector<AST::Node> { Vector<NonnullRefPtr<AST::Node>> {
                     arguments[0],
-                    AST::create<AST::SyntheticNode>(arguments[1].position(), NonnullRefPtr<AST::Value>(entry)),
+                    AST::make_ref_counted<AST::SyntheticNode>(arguments[1].position(), NonnullRefPtr<AST::Value>(entry)),
                 } },
                 arguments[1].position()));
         }
 
-        return AST::create<AST::ListConcatenate>(invoking_node.position(), move(resulting_nodes));
+        return AST::make_ref_counted<AST::ListConcatenate>(invoking_node.position(), move(resulting_nodes));
     };
 
     if (auto list = dynamic_cast<AST::ListValue*>(value.ptr())) {
@@ -357,7 +337,7 @@ RefPtr<AST::Node> Shell::immediate_split(AST::ImmediateExpression& invoking_node
     auto list = value->resolve_as_list(this);
     if (!value->is_list()) {
         if (list.is_empty())
-            return AST::create<AST::ListConcatenate>(invoking_node.position(), NonnullRefPtrVector<AST::Node> {});
+            return AST::make_ref_counted<AST::ListConcatenate>(invoking_node.position(), NonnullRefPtrVector<AST::Node> {});
 
         auto& value = list.first();
         Vector<String> split_strings;
@@ -374,10 +354,10 @@ RefPtr<AST::Node> Shell::immediate_split(AST::ImmediateExpression& invoking_node
             for (auto& entry : split)
                 split_strings.append(entry);
         }
-        return AST::create<AST::SyntheticNode>(invoking_node.position(), AST::create<AST::ListValue>(move(split_strings)));
+        return AST::make_ref_counted<AST::SyntheticNode>(invoking_node.position(), AST::make_ref_counted<AST::ListValue>(move(split_strings)));
     }
 
-    return transform(AST::create<AST::ListValue>(list)->values());
+    return transform(AST::make_ref_counted<AST::ListValue>(list)->values());
 }
 
 RefPtr<AST::Node> Shell::immediate_concat_lists(AST::ImmediateExpression& invoking_node, const NonnullRefPtrVector<AST::Node>& arguments)
@@ -386,21 +366,21 @@ RefPtr<AST::Node> Shell::immediate_concat_lists(AST::ImmediateExpression& invoki
 
     for (auto& argument : arguments) {
         if (auto* list = dynamic_cast<const AST::ListConcatenate*>(&argument)) {
-            result.append(list->list());
+            result.extend(list->list());
         } else {
             auto list_of_values = const_cast<AST::Node&>(argument).run(this)->resolve_without_cast(this);
             if (auto* list = dynamic_cast<AST::ListValue*>(list_of_values.ptr())) {
                 for (auto& entry : static_cast<Vector<NonnullRefPtr<AST::Value>>&>(list->values()))
-                    result.append(AST::create<AST::SyntheticNode>(argument.position(), entry));
+                    result.append(AST::make_ref_counted<AST::SyntheticNode>(argument.position(), entry));
             } else {
                 auto values = list_of_values->resolve_as_list(this);
                 for (auto& entry : values)
-                    result.append(AST::create<AST::StringLiteral>(argument.position(), entry));
+                    result.append(AST::make_ref_counted<AST::StringLiteral>(argument.position(), entry));
             }
         }
     }
 
-    return AST::create<AST::ListConcatenate>(invoking_node.position(), move(result));
+    return AST::make_ref_counted<AST::ListConcatenate>(invoking_node.position(), move(result));
 }
 
 RefPtr<AST::Node> Shell::run_immediate_function(StringView str, AST::ImmediateExpression& invoking_node, const NonnullRefPtrVector<AST::Node>& arguments)

@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -35,17 +15,55 @@ __BEGIN_DECLS
 #    define WEOF (0xffffffffu)
 #endif
 
+typedef __WINT_TYPE__ wint_t;
+typedef unsigned long int wctype_t;
+
+// A zero-initialized mbstate_t struct must be a valid initial state.
+typedef struct {
+    unsigned char bytes[4];
+    unsigned int stored_bytes;
+} mbstate_t;
+
+struct tm;
+
 size_t wcslen(const wchar_t*);
 wchar_t* wcscpy(wchar_t*, const wchar_t*);
 wchar_t* wcsncpy(wchar_t*, const wchar_t*, size_t);
+__attribute__((warn_unused_result)) size_t wcslcpy(wchar_t*, const wchar_t*, size_t);
 int wcscmp(const wchar_t*, const wchar_t*);
 int wcsncmp(const wchar_t*, const wchar_t*, size_t);
 wchar_t* wcschr(const wchar_t*, int);
-const wchar_t* wcsrchr(const wchar_t*, wchar_t);
+wchar_t* wcsrchr(const wchar_t*, wchar_t);
 wchar_t* wcscat(wchar_t*, const wchar_t*);
 wchar_t* wcsncat(wchar_t*, const wchar_t*, size_t);
 wchar_t* wcstok(wchar_t*, const wchar_t*, wchar_t**);
 long wcstol(const wchar_t*, wchar_t**, int);
 long long wcstoll(const wchar_t*, wchar_t**, int);
+wint_t btowc(int c);
+size_t mbrtowc(wchar_t*, const char*, size_t, mbstate_t*);
+size_t mbrlen(const char*, size_t, mbstate_t*);
+size_t wcrtomb(char*, wchar_t, mbstate_t*);
+int wcscoll(const wchar_t*, const wchar_t*);
+size_t wcsxfrm(wchar_t*, const wchar_t*, size_t);
+int wctob(wint_t);
+int mbsinit(const mbstate_t*);
+wchar_t* wcspbrk(const wchar_t*, const wchar_t*);
+wchar_t* wcsstr(const wchar_t*, const wchar_t*);
+wchar_t* wmemchr(const wchar_t*, wchar_t, size_t);
+wchar_t* wmemcpy(wchar_t*, const wchar_t*, size_t);
+wchar_t* wmemset(wchar_t*, wchar_t, size_t);
+wchar_t* wmemmove(wchar_t*, const wchar_t*, size_t);
+unsigned long wcstoul(const wchar_t*, wchar_t**, int);
+unsigned long long wcstoull(const wchar_t*, wchar_t**, int);
+float wcstof(const wchar_t*, wchar_t**);
+double wcstod(const wchar_t*, wchar_t**);
+long double wcstold(const wchar_t*, wchar_t**);
+int swprintf(wchar_t*, size_t, const wchar_t*, ...);
+int wcwidth(wchar_t);
+size_t wcsrtombs(char*, const wchar_t**, size_t, mbstate_t*);
+size_t mbsrtowcs(wchar_t*, const char**, size_t, mbstate_t*);
+int wmemcmp(const wchar_t*, const wchar_t*, size_t);
+size_t wcsnrtombs(char*, const wchar_t**, size_t, size_t, mbstate_t*);
+size_t mbsnrtowcs(wchar_t*, const char**, size_t, size_t, mbstate_t*);
 
 __END_DECLS

@@ -1,33 +1,12 @@
 /*
  * Copyright (c) 2021, Itamar S. <itamar8910@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "ClassViewWidget.h"
 #include "HackStudio.h"
 #include "ProjectDeclarations.h"
-#include <AK/BinarySearch.h>
 #include <AK/StdLibExtras.h>
 #include <LibGUI/BoxLayout.h>
 #include <string.h>
@@ -39,7 +18,8 @@ ClassViewWidget::ClassViewWidget()
     set_layout<GUI::VerticalBoxLayout>();
     m_class_tree = add<GUI::TreeView>();
 
-    m_class_tree->on_selection = [this](auto& index) {
+    m_class_tree->on_selection_change = [this] {
+        const auto& index = m_class_tree->selection().first();
         if (!index.is_valid())
             return;
 
@@ -53,7 +33,7 @@ ClassViewWidget::ClassViewWidget()
 
 RefPtr<ClassViewModel> ClassViewModel::create()
 {
-    return adopt(*new ClassViewModel());
+    return adopt_ref(*new ClassViewModel());
 }
 
 int ClassViewModel::row_count(const GUI::ModelIndex& index) const
@@ -137,6 +117,7 @@ static ClassViewNode& add_child_node(NonnullOwnPtrVector<ClassViewNode>& childre
 
     size_t inserted_index = 0;
     ClassViewNode& node = *node_ptr;
+    // Insert into parent's children list, sorted lexicographically by name.
     children.insert_before_matching(
         move(node_ptr), [&node](auto& other_node) {
             return strncmp(node.name.characters_without_null_termination(), other_node->name.characters_without_null_termination(), min(node.name.length(), other_node->name.length())) < 0;
@@ -167,8 +148,7 @@ void ClassViewModel::add_declaration(const GUI::AutocompleteProvider::Declaratio
             auto& scope = scope_parts[i];
             ClassViewNode* next { nullptr };
             for (auto& child : parent->children) {
-                VERIFY(child.declaration);
-                if (child.declaration->name == scope) {
+                if (child.name == scope) {
                     next = &child;
                     break;
                 }

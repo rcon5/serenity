@@ -26,7 +26,7 @@ configuration/compilation options, and some other things (see
   script in this directory. This is sometimes required when LibC changes, for
   example. Pass `clean` as first argument to remove old build files beforehand.
 
-Installed ports are being tracked in `Build/packages.db` (a simple text file).
+Installed ports are being tracked in `Build/i686/Root/usr/Ports/packages.db` (a simple text file).
 You can delete this file at any time, in fact it must be edited or removed
 when clearing the build directory as port dependencies may not be installed
 again otherwise.
@@ -61,6 +61,10 @@ By default, run `make` with the port's [`makeopts`](#makeopts).
 #### `install`
 
 By default, run `make install` with the port's [`installopts`](#installopts).
+
+#### `shell`
+
+Open a shell in the `$workdir` with the build environment set.
 
 #### `installdepends`
 
@@ -186,11 +190,16 @@ compressed file, it will be extracted.
 If a file is an `.asc` file (PGP signature) it will be imported into `gpg`'s
 keyring and can later be used for verification using [`auth_opts`](#auth_opts).
 
+#### `icon_file`
+
+The file to use for the port launcher icon. The icon file is assumed to have a
+16x16 as well as a 32x32 layer.
+
 #### `installopts`
 
 Options passed to `make install` in the default `install` function.
 
-`DESTDIR="${SERENITY_BUILD_DIR}/Root"` (`"${SERENITY_SOURCE_DIR}/Build/${SERENITY_ARCH}/Root"`)
+`DESTDIR="${SERENITY_INSTALL_ROOT}"` (`"${SERENITY_SOURCE_DIR}/Build/${SERENITY_ARCH}/Root"`)
 is always passed, override the `install` function if that's undesirable.
 
 #### `makeopts`
@@ -252,6 +261,7 @@ build() {
 The following can be overridden, the names should be self-explanatory as they
 mostly match the [available options](#options):
 
+- `pre_fetch`
 - `post_fetch`
 - `pre_configure`
 - `configure`.

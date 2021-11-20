@@ -1,47 +1,19 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Debug.h>
 #include <Kernel/API/MousePacket.h>
-#include <LibCore/LocalSocket.h>
-#include <LibCore/Object.h>
 #include <WindowServer/ClientConnection.h>
 #include <WindowServer/Cursor.h>
-#include <WindowServer/Event.h>
 #include <WindowServer/EventLoop.h>
 #include <WindowServer/Screen.h>
 #include <WindowServer/WMClientConnection.h>
 #include <WindowServer/WindowManager.h>
-#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <time.h>
 #include <unistd.h>
 
 namespace WindowServer {
@@ -50,8 +22,8 @@ EventLoop::EventLoop()
     : m_window_server(Core::LocalServer::construct())
     , m_wm_server(Core::LocalServer::construct())
 {
-    m_keyboard_fd = open("/dev/keyboard", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-    m_mouse_fd = open("/dev/mouse", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    m_keyboard_fd = open("/dev/keyboard0", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    m_mouse_fd = open("/dev/mouse0", O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 
     bool ok = m_window_server->take_over_from_system_server("/tmp/portal/window");
     VERIFY(ok);
@@ -84,14 +56,14 @@ EventLoop::EventLoop()
         m_keyboard_notifier = Core::Notifier::construct(m_keyboard_fd, Core::Notifier::Read);
         m_keyboard_notifier->on_ready_to_read = [this] { drain_keyboard(); };
     } else {
-        dbgln("Couldn't open /dev/keyboard");
+        dbgln("Couldn't open /dev/keyboard0");
     }
 
     if (m_mouse_fd >= 0) {
         m_mouse_notifier = Core::Notifier::construct(m_mouse_fd, Core::Notifier::Read);
         m_mouse_notifier->on_ready_to_read = [this] { drain_mouse(); };
     } else {
-        dbgln("Couldn't open /dev/mouse");
+        dbgln("Couldn't open /dev/mouse0");
     }
 }
 
@@ -101,10 +73,9 @@ EventLoop::~EventLoop()
 
 void EventLoop::drain_mouse()
 {
-    auto& screen = Screen::the();
+    auto& screen_input = ScreenInput::the();
     MousePacket state;
-    state.buttons = screen.mouse_button_state();
-    unsigned buttons = state.buttons;
+    state.buttons = screen_input.mouse_button_state();
     MousePacket packets[32];
 
     ssize_t nread = read(m_mouse_fd, &packets, sizeof(packets));
@@ -115,30 +86,42 @@ void EventLoop::drain_mouse()
     size_t npackets = nread / sizeof(MousePacket);
     if (!npackets)
         return;
+
+    bool state_is_sent = false;
     for (size_t i = 0; i < npackets; ++i) {
         auto& packet = packets[i];
-#if WSMESSAGELOOP_DEBUG
-        dbgln("EventLoop: Mouse X {}, Y {}, Z {}, relative={}", packet.x, packet.y, packet.z, packet.is_relative);
-#endif
-        buttons = packet.buttons;
+        dbgln_if(WSMESSAGELOOP_DEBUG, "EventLoop: Mouse X {}, Y {}, Z {}, relative={}", packet.x, packet.y, packet.z, packet.is_relative);
 
         state.is_relative = packet.is_relative;
         if (packet.is_relative) {
             state.x += packet.x;
             state.y -= packet.y;
-            state.z += packet.z;
         } else {
             state.x = packet.x;
             state.y = packet.y;
-            state.z += packet.z;
         }
+        state.z += packet.z;
+        state_is_sent = false;
 
-        if (buttons != state.buttons) {
-            state.buttons = buttons;
-#if WSMESSAGELOOP_DEBUG
-            dbgln("EventLoop: Mouse Button Event");
-#endif
-            screen.on_receive_mouse_data(state);
+        if (packet.buttons != state.buttons) {
+            state.buttons = packet.buttons;
+            dbgln_if(WSMESSAGELOOP_DEBUG, "EventLoop: Mouse Button Event");
+
+            // Swap primary (1) and secondary (2) buttons if checked in Settings.
+            // Doing the swap here avoids all emulator and hardware issues.
+            if (WindowManager::the().get_buttons_switched()) {
+                bool has_primary = state.buttons & MousePacket::Button::LeftButton;
+                bool has_secondary = state.buttons & MousePacket::Button::RightButton;
+                state.buttons = state.buttons & ~(MousePacket::Button::LeftButton | MousePacket::Button::RightButton);
+                // Invert the buttons:
+                if (has_primary)
+                    state.buttons |= MousePacket::Button::RightButton;
+                if (has_secondary)
+                    state.buttons |= MousePacket::Button::LeftButton;
+            }
+
+            screen_input.on_receive_mouse_data(state);
+            state_is_sent = true;
             if (state.is_relative) {
                 state.x = 0;
                 state.y = 0;
@@ -146,22 +129,24 @@ void EventLoop::drain_mouse()
             }
         }
     }
+    if (state_is_sent)
+        return;
     if (state.is_relative && (state.x || state.y || state.z))
-        screen.on_receive_mouse_data(state);
+        screen_input.on_receive_mouse_data(state);
     if (!state.is_relative)
-        screen.on_receive_mouse_data(state);
+        screen_input.on_receive_mouse_data(state);
 }
 
 void EventLoop::drain_keyboard()
 {
-    auto& screen = Screen::the();
+    auto& screen_input = ScreenInput::the();
     for (;;) {
         ::KeyEvent event;
         ssize_t nread = read(m_keyboard_fd, (u8*)&event, sizeof(::KeyEvent));
         if (nread == 0)
             break;
         VERIFY(nread == sizeof(::KeyEvent));
-        screen.on_receive_keyboard_data(event);
+        screen_input.on_receive_keyboard_data(event);
     }
 }
 

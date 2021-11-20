@@ -1,33 +1,12 @@
 /*
- * Copyright (c) 2020, The SerenityOS developers.
- * All rights reserved.
+ * Copyright (c) 2020, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Assertions.h>
-#include <AK/ByteBuffer.h>
 #include <AK/Endian.h>
 #include <AK/HashMap.h>
 #include <AK/IPv4Address.h>
@@ -134,7 +113,7 @@ struct AK::Traits<DHCPOption> : public GenericTraits<DHCPOption> {
 
 struct ParsedDHCPv4Options {
     template<typename T>
-    Optional<const T> get(DHCPOption option_name) const
+    Optional<const T> get(DHCPOption option_name) const requires(IsTriviallyCopyable<T>)
     {
         auto option = options.get(option_name);
         if (!option.has_value()) {
@@ -143,7 +122,9 @@ struct ParsedDHCPv4Options {
         auto& value = option.value();
         if (value.length != sizeof(T))
             return {};
-        return *(const T*)value.value;
+        T t;
+        __builtin_memcpy(&t, value.value, value.length);
+        return t;
     }
 
     template<typename T>
@@ -173,12 +154,12 @@ struct ParsedDHCPv4Options {
     {
         StringBuilder builder;
         builder.append("DHCP Options (");
-        builder.appendf("%zu", options.size());
+        builder.appendff("{}", options.size());
         builder.append(" entries)\n");
         for (auto& opt : options) {
-            builder.appendf("\toption %d (%d bytes):", (u8)opt.key, (u8)opt.value.length);
+            builder.appendff("\toption {} ({} bytes):", (u8)opt.key, (u8)opt.value.length);
             for (auto i = 0; i < opt.value.length; ++i)
-                builder.appendf(" %u ", ((const u8*)opt.value.value)[i]);
+                builder.appendff(" {} ", ((const u8*)opt.value.value)[i]);
             builder.append('\n');
         }
         return builder.build();
@@ -257,9 +238,8 @@ private:
 class DHCPv4PacketBuilder {
 public:
     DHCPv4PacketBuilder()
-        : m_buffer(ByteBuffer::create_zeroed(sizeof(DHCPv4Packet)))
     {
-        auto* options = peek().options();
+        auto* options = m_packet.options();
         // set the magic DHCP cookie value
         options[0] = 99;
         options[1] = 130;
@@ -273,7 +253,7 @@ public:
         // we need enough space to fit the option value, its length, and its data
         VERIFY(next_option_offset + length + 2 < DHCPV4_OPTION_FIELD_MAX_LENGTH);
 
-        auto* options = peek().options();
+        auto* options = m_packet.options();
         options[next_option_offset++] = (u8)option;
         memcpy(options + next_option_offset, &length, 1);
         next_option_offset++;
@@ -284,17 +264,16 @@ public:
 
     void set_message_type(DHCPMessageType type) { add_option(DHCPOption::DHCPMessageType, 1, &type); }
 
-    DHCPv4Packet& peek() { return *(DHCPv4Packet*)m_buffer.data(); }
+    DHCPv4Packet& peek() { return m_packet; }
     DHCPv4Packet& build()
     {
         add_option(DHCPOption::End, 0, nullptr);
         m_can_add = false;
-        return *(DHCPv4Packet*)m_buffer.data();
+        return m_packet;
     }
-    size_t size() const { return m_buffer.size(); }
 
 private:
-    ByteBuffer m_buffer;
+    DHCPv4Packet m_packet;
     size_t next_option_offset { 4 };
     bool m_can_add { true };
 };

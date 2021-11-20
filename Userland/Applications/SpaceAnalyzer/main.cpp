@@ -1,58 +1,42 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
+
 #include "TreeMapWidget.h"
 #include <AK/LexicalPath.h>
 #include <AK/Queue.h>
 #include <AK/QuickSort.h>
-#include <AK/RefCounted.h>
 #include <AK/URL.h>
 #include <Applications/SpaceAnalyzer/SpaceAnalyzerGML.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
 #include <LibDesktop/Launcher.h>
-#include <LibGUI/AboutDialog.h>
 #include <LibGUI/Application.h>
+#include <LibGUI/BoxLayout.h>
 #include <LibGUI/Breadcrumbbar.h>
 #include <LibGUI/Clipboard.h>
+#include <LibGUI/FileIconProvider.h>
 #include <LibGUI/Icon.h>
+#include <LibGUI/Label.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Menubar.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/Statusbar.h>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 static const char* APP_NAME = "Space Analyzer";
+static constexpr size_t FILES_ENCOUNTERED_UPDATE_STEP_SIZE = 25;
 
 struct TreeNode : public SpaceAnalyzer::TreeMapNode {
     TreeNode(String name)
         : m_name(move(name)) {};
 
     virtual String name() const { return m_name; }
-    virtual int64_t area() const { return m_area; }
+    virtual i64 area() const { return m_area; }
     virtual size_t num_children() const
     {
         if (m_children) {
@@ -70,7 +54,7 @@ struct TreeNode : public SpaceAnalyzer::TreeMapNode {
     }
 
     String m_name;
-    int64_t m_area { 0 };
+    i64 m_area { 0 };
     OwnPtr<Vector<TreeNode>> m_children;
 };
 
@@ -93,18 +77,18 @@ struct MountInfo {
 static void fill_mounts(Vector<MountInfo>& output)
 {
     // Output info about currently mounted filesystems.
-    auto df = Core::File::construct("/proc/df");
-    if (!df->open(Core::IODevice::ReadOnly)) {
-        fprintf(stderr, "Failed to open /proc/df: %s\n", df->error_string());
+    auto file = Core::File::construct("/proc/df");
+    if (!file->open(Core::OpenMode::ReadOnly)) {
+        warnln("Failed to open {}: {}", file->name(), file->error_string());
         return;
     }
 
-    auto content = df->read_all();
+    auto content = file->read_all();
     auto json = JsonValue::from_string(content);
     VERIFY(json.has_value());
 
     json.value().as_array().for_each([&output](auto& value) {
-        auto filesystem_object = value.as_object();
+        auto& filesystem_object = value.as_object();
         MountInfo mount_info;
         mount_info.mount_point = filesystem_object.get("mount_point").to_string();
         mount_info.source = filesystem_object.get("source").as_string_or("none");
@@ -142,6 +126,38 @@ static long long int update_totals(TreeNode& node)
     return result;
 }
 
+static NonnullRefPtr<GUI::Window> create_progress_window()
+{
+    auto window = GUI::Window::construct();
+
+    window->set_title(APP_NAME);
+    window->set_resizable(false);
+    window->set_closeable(false);
+    window->resize(240, 50);
+    window->center_on_screen();
+
+    auto& main_widget = window->set_main_widget<GUI::Widget>();
+    main_widget.set_fill_with_background_color(true);
+    main_widget.set_layout<GUI::VerticalBoxLayout>();
+
+    auto& label = main_widget.add<GUI::Label>("Analyzing storage space...");
+    label.set_fixed_height(22);
+
+    auto& progresslabel = main_widget.add<GUI::Label>();
+    progresslabel.set_name("progresslabel");
+    progresslabel.set_fixed_height(22);
+
+    return window;
+}
+
+static void update_progress_label(GUI::Label& progresslabel, size_t files_encountered_count)
+{
+    auto text = String::formatted("{} files...", files_encountered_count);
+    progresslabel.set_text(text);
+
+    Core::EventLoop::current().pump(Core::EventLoop::WaitMode::PollForEvents);
+}
+
 struct QueueEntry {
     QueueEntry(String path, TreeNode* node)
         : path(move(path))
@@ -150,12 +166,13 @@ struct QueueEntry {
     TreeNode* node { nullptr };
 };
 
-static void populate_filesize_tree(TreeNode& root, Vector<MountInfo>& mounts, HashMap<int, int>& error_accumulator)
+static void populate_filesize_tree(TreeNode& root, Vector<MountInfo>& mounts, HashMap<int, int>& error_accumulator, GUI::Label& progresslabel)
 {
     VERIFY(!root.m_name.ends_with("/"));
 
     Queue<QueueEntry> queue;
     queue.enqueue(QueueEntry(root.m_name, &root));
+    size_t files_encountered_count = 0;
 
     StringBuilder builder = StringBuilder();
     builder.append(root.m_name);
@@ -186,11 +203,15 @@ static void populate_filesize_tree(TreeNode& root, Vector<MountInfo>& mounts, Ha
                 queue_entry.node->m_children->append(TreeNode(dir_iterator.next_path()));
             }
             for (auto& child : *queue_entry.node->m_children) {
+                files_encountered_count += 1;
+                if (!(files_encountered_count % FILES_ENCOUNTERED_UPDATE_STEP_SIZE))
+                    update_progress_label(progresslabel, files_encountered_count);
+
                 String& name = child.m_name;
                 int name_len = name.length();
                 builder.append(name);
                 struct stat st;
-                int stat_result = lstat(builder.to_string().characters(), &st);
+                int stat_result = fstatat(dir_iterator.fd(), name.characters(), &st, AT_SYMLINK_NOFOLLOW);
                 if (stat_result < 0) {
                     int error_sum = error_accumulator.get(errno).value_or(0);
                     error_accumulator.set(errno, error_sum + 1);
@@ -211,13 +232,22 @@ static void populate_filesize_tree(TreeNode& root, Vector<MountInfo>& mounts, Ha
 
 static void analyze(RefPtr<Tree> tree, SpaceAnalyzer::TreeMapWidget& treemapwidget, GUI::Statusbar& statusbar)
 {
+    statusbar.set_text("");
+    auto progress_window = create_progress_window();
+    progress_window->show();
+
+    auto& progresslabel = *progress_window->main_widget()->find_descendant_of_type_named<GUI::Label>("progresslabel");
+    update_progress_label(progresslabel, 0);
+
     // Build an in-memory tree mirroring the filesystem and for each node
     // calculate the sum of the file size for all its descendants.
     TreeNode* root = &tree->m_root;
     Vector<MountInfo> mounts;
     fill_mounts(mounts);
     HashMap<int, int> error_accumulator;
-    populate_filesize_tree(*root, mounts, error_accumulator);
+    populate_filesize_tree(*root, mounts, error_accumulator, progresslabel);
+
+    progress_window->close();
 
     // Display an error summary in the statusbar.
     if (!error_accumulator.is_empty()) {
@@ -250,7 +280,7 @@ static void analyze(RefPtr<Tree> tree, SpaceAnalyzer::TreeMapWidget& treemapwidg
 static bool is_removable(const String& absolute_path)
 {
     VERIFY(!absolute_path.is_empty());
-    int access_result = access(absolute_path.characters(), W_OK);
+    int access_result = access(LexicalPath::dirname(absolute_path).characters(), W_OK);
     if (access_result != 0 && errno != EACCES)
         perror("access");
     return access_result == 0;
@@ -273,7 +303,7 @@ int main(int argc, char* argv[])
 {
     auto app = GUI::Application::construct(argc, argv);
 
-    RefPtr<Tree> tree = adopt(*new Tree(""));
+    RefPtr<Tree> tree = adopt_ref(*new Tree(""));
 
     // Configure application window.
     auto app_icon = GUI::Icon::default_icon("app-space-analyzer");
@@ -289,28 +319,27 @@ int main(int argc, char* argv[])
     auto& treemapwidget = *mainwidget.find_descendant_of_type_named<SpaceAnalyzer::TreeMapWidget>("tree_map");
     auto& statusbar = *mainwidget.find_descendant_of_type_named<GUI::Statusbar>("statusbar");
 
-    // Configure the menubar.
-    auto menubar = GUI::Menubar::construct();
-    auto& app_menu = menubar->add_menu("File");
-    app_menu.add_action(GUI::Action::create("Analyze", [&](auto&) {
+    auto& file_menu = window->add_menu("&File");
+    file_menu.add_action(GUI::Action::create("&Analyze", [&](auto&) {
         analyze(tree, treemapwidget, statusbar);
     }));
-    app_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) {
+    file_menu.add_separator();
+    file_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) {
         app->quit();
     }));
-    auto& help_menu = menubar->add_menu("Help");
+
+    auto& help_menu = window->add_menu("&Help");
     help_menu.add_action(GUI::CommonActions::make_about_action(APP_NAME, app_icon, window));
-    window->set_menubar(move(menubar));
 
     // Configure the nodes context menu.
-    auto open_folder_action = GUI::Action::create("Open Folder", { Mod_Ctrl, Key_O }, Gfx::Bitmap::load_from_file("/res/icons/16x16/open.png"), [&](auto&) {
+    auto open_folder_action = GUI::Action::create("Open Folder", { Mod_Ctrl, Key_O }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png"), [&](auto&) {
         Desktop::Launcher::open(URL::create_with_file_protocol(get_absolute_path_to_selected_node(treemapwidget)));
     });
-    auto open_containing_folder_action = GUI::Action::create("Open Containing Folder", { Mod_Ctrl, Key_O }, Gfx::Bitmap::load_from_file("/res/icons/16x16/open.png"), [&](auto&) {
+    auto open_containing_folder_action = GUI::Action::create("Open Containing Folder", { Mod_Ctrl, Key_O }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png"), [&](auto&) {
         LexicalPath path { get_absolute_path_to_selected_node(treemapwidget) };
         Desktop::Launcher::open(URL::create_with_file_protocol(path.dirname(), path.basename()));
     });
-    auto copy_path_action = GUI::Action::create("Copy Path to Clipboard", { Mod_Ctrl, Key_C }, Gfx::Bitmap::load_from_file("/res/icons/16x16/edit-copy.png"), [&](auto&) {
+    auto copy_path_action = GUI::Action::create("Copy Path to Clipboard", { Mod_Ctrl, Key_C }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-copy.png"), [&](auto&) {
         GUI::Clipboard::the().set_plain_text(get_absolute_path_to_selected_node(treemapwidget));
     });
     auto delete_action = GUI::CommonActions::make_delete_action([&](auto&) {
@@ -360,14 +389,21 @@ int main(int argc, char* argv[])
         treemapwidget.set_viewpoint(index);
     };
     treemapwidget.on_path_change = [&]() {
+        StringBuilder builder;
+
         breadcrumbbar.clear_segments();
         for (size_t k = 0; k < treemapwidget.path_size(); k++) {
             if (k == 0) {
-                breadcrumbbar.append_segment("/");
-            } else {
-                const SpaceAnalyzer::TreeMapNode* node = treemapwidget.path_node(k);
-                breadcrumbbar.append_segment(node->name());
+                breadcrumbbar.append_segment("/", GUI::FileIconProvider::icon_for_path("/").bitmap_for_size(16), "/", "/");
+                continue;
             }
+
+            const SpaceAnalyzer::TreeMapNode* node = treemapwidget.path_node(k);
+
+            builder.append("/");
+            builder.append(node->name());
+
+            breadcrumbbar.append_segment(node->name(), GUI::FileIconProvider::icon_for_path(builder.string_view()).bitmap_for_size(16), builder.string_view(), builder.string_view());
         }
         breadcrumbbar.set_selected_segment(treemapwidget.viewpoint());
     };

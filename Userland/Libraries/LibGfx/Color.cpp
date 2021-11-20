@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Assertions.h>
@@ -40,17 +20,17 @@ namespace Gfx {
 
 String Color::to_string() const
 {
-    return String::format("#%02x%02x%02x%02x", red(), green(), blue(), alpha());
+    return String::formatted("#{:02x}{:02x}{:02x}{:02x}", red(), green(), blue(), alpha());
 }
 
 String Color::to_string_without_alpha() const
 {
-    return String::format("#%02x%02x%02x", red(), green(), blue());
+    return String::formatted("#{:02x}{:02x}{:02x}", red(), green(), blue());
 }
 
-static Optional<Color> parse_rgb_color(const StringView& string)
+static Optional<Color> parse_rgb_color(StringView const& string)
 {
-    VERIFY(string.starts_with("rgb("));
+    VERIFY(string.starts_with("rgb(", CaseSensitivity::CaseInsensitive));
     VERIFY(string.ends_with(")"));
 
     auto substring = string.substring_view(4, string.length() - 5);
@@ -69,9 +49,9 @@ static Optional<Color> parse_rgb_color(const StringView& string)
     return Color(r, g, b);
 }
 
-static Optional<Color> parse_rgba_color(const StringView& string)
+static Optional<Color> parse_rgba_color(StringView const& string)
 {
-    VERIFY(string.starts_with("rgba("));
+    VERIFY(string.starts_with("rgba(", CaseSensitivity::CaseInsensitive));
     VERIFY(string.ends_with(")"));
 
     auto substring = string.substring_view(5, string.length() - 6);
@@ -93,13 +73,13 @@ static Optional<Color> parse_rgba_color(const StringView& string)
     return Color(r, g, b, a);
 }
 
-Optional<Color> Color::from_string(const StringView& string)
+Optional<Color> Color::from_string(StringView const& string)
 {
     if (string.is_empty())
         return {};
 
     struct ColorAndWebName {
-        constexpr ColorAndWebName(RGBA32 c, const char* n)
+        constexpr ColorAndWebName(RGBA32 c, char const* n)
             : color(c)
             , name(n)
         {
@@ -265,15 +245,18 @@ Optional<Color> Color::from_string(const StringView& string)
         { 0x000000, nullptr }
     };
 
+    if (string.equals_ignoring_case("transparent"))
+        return Color::from_rgba(0x00000000);
+
     for (size_t i = 0; !web_colors[i].name.is_null(); ++i) {
-        if (string == web_colors[i].name)
+        if (string.equals_ignoring_case(web_colors[i].name))
             return Color::from_rgb(web_colors[i].color);
     }
 
-    if (string.starts_with("rgb(") && string.ends_with(")"))
+    if (string.starts_with("rgb(", CaseSensitivity::CaseInsensitive) && string.ends_with(")"))
         return parse_rgb_color(string);
 
-    if (string.starts_with("rgba(") && string.ends_with(")"))
+    if (string.starts_with("rgba(", CaseSensitivity::CaseInsensitive) && string.ends_with(")"))
         return parse_rgba_color(string);
 
     if (string[0] != '#')
@@ -330,7 +313,7 @@ Optional<Color> Color::from_string(const StringView& string)
 
 }
 
-bool IPC::encode(IPC::Encoder& encoder, const Color& color)
+bool IPC::encode(IPC::Encoder& encoder, Color const& color)
 {
     encoder << color.value();
     return true;
@@ -345,7 +328,7 @@ bool IPC::decode(IPC::Decoder& decoder, Color& color)
     return true;
 }
 
-void AK::Formatter<Gfx::Color>::format(FormatBuilder& builder, const Gfx::Color& value)
+void AK::Formatter<Gfx::Color>::format(FormatBuilder& builder, Gfx::Color const& value)
 {
     Formatter<StringView>::format(builder, value.to_string());
 }

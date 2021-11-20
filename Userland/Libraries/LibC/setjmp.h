@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -34,19 +14,69 @@
 
 __BEGIN_DECLS
 
+//
+// /!\ This structure is accessed inside setjmp.S, keep both files in sync!
+//
+
 struct __jmp_buf {
-    uint32_t regs[6];
-    bool did_save_signal_mask;
+#ifdef __i386__
+    uint32_t ebx;
+    uint32_t esi;
+    uint32_t edi;
+    uint32_t ebp;
+    uint32_t esp;
+    uint32_t eip;
+#elif __x86_64__
+    uint64_t rbx;
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
+    uint64_t rbp;
+    uint64_t rsp;
+    uint64_t rip;
+#elif __aarch64__
+    // FIXME: This is likely incorrect.
+    uint64_t regs[22];
+#else
+#    error
+#endif
+    int did_save_signal_mask;
     sigset_t saved_signal_mask;
 };
 
 typedef struct __jmp_buf jmp_buf[1];
 typedef struct __jmp_buf sigjmp_buf[1];
 
+/**
+ * Since setjmp.h may be included by ports written in C, we need to guard this.
+ */
+#ifdef __cplusplus
+#    ifdef __i386__
+static_assert(sizeof(struct __jmp_buf) == 32, "struct __jmp_buf unsynchronized with i386/setjmp.S");
+#    elif __x86_64__
+static_assert(sizeof(struct __jmp_buf) == 72, "struct __jmp_buf unsynchronized with x86_64/setjmp.S");
+#    elif __aarch64__
+static_assert(sizeof(struct __jmp_buf) == 184, "struct __jmp_buf unsynchronized with aarch64/setjmp.S");
+#    else
+#        error
+#    endif
+#endif
+
+/**
+ * Calling conventions mandates that sigsetjmp() cannot call setjmp(),
+ * otherwise the restored calling environment will not be the original caller's
+ * but sigsetjmp()'s and we'll return to the wrong call site on siglongjmp().
+ *
+ * The setjmp(), sigsetjmp() and longjmp() functions have to be implemented in
+ * assembly because they touch the call stack and registers in non-portable
+ * ways. However, we *can* implement siglongjmp() as a standard C function.
+ */
+
 int setjmp(jmp_buf);
-void longjmp(jmp_buf, int val);
+__attribute__((noreturn)) void longjmp(jmp_buf, int val);
 
 int sigsetjmp(sigjmp_buf, int savesigs);
-void siglongjmp(sigjmp_buf, int val);
+__attribute__((noreturn)) void siglongjmp(sigjmp_buf, int val);
 
 __END_DECLS

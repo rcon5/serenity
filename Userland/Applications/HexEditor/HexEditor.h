@@ -1,42 +1,25 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Mustafa Quraish <mustafa@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include "SearchResultsModel.h"
 #include <AK/ByteBuffer.h>
 #include <AK/Function.h>
 #include <AK/HashMap.h>
 #include <AK/NonnullOwnPtrVector.h>
 #include <AK/NonnullRefPtrVector.h>
 #include <AK/StdLibExtras.h>
-#include <LibGUI/ScrollableWidget.h>
+#include <LibCore/Timer.h>
+#include <LibGUI/AbstractScrollableWidget.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/TextAlignment.h>
 
-class HexEditor : public GUI::ScrollableWidget {
+class HexEditor : public GUI::AbstractScrollableWidget {
     C_OBJECT(HexEditor)
 public:
     enum EditMode {
@@ -49,21 +32,30 @@ public:
     bool is_readonly() const { return m_readonly; }
     void set_readonly(bool);
 
+    size_t buffer_size() const { return m_buffer.size(); }
     void set_buffer(const ByteBuffer&);
     void fill_selection(u8 fill_byte);
     bool write_to_file(const String& path);
+    bool write_to_file(int fd);
 
-    bool has_selection() const { return !(m_selection_start == -1 || m_selection_end == -1 || (m_selection_end - m_selection_start) < 0 || m_buffer.is_empty()); }
+    void select_all();
+    bool has_selection() const { return !((m_selection_end < m_selection_start) || m_buffer.is_empty()); }
+    size_t selection_size();
+    size_t selection_start_offset() const { return m_selection_start; }
     bool copy_selected_text_to_clipboard();
     bool copy_selected_hex_to_clipboard();
     bool copy_selected_hex_to_clipboard_as_c_code();
 
-    int bytes_per_row() const { return m_bytes_per_row; }
-    void set_bytes_per_row(int);
+    size_t bytes_per_row() const { return m_bytes_per_row; }
+    void set_bytes_per_row(size_t);
 
-    void set_position(int position);
-    int find_and_highlight(ByteBuffer& needle, int start = 0);
-    Function<void(int, EditMode, int, int)> on_status_change; // position, edit mode, selection start, selection end
+    void set_position(size_t position);
+    void highlight(size_t start, size_t end);
+    Optional<size_t> find(ByteBuffer& needle, size_t start = 0);
+    Optional<size_t> find_and_highlight(ByteBuffer& needle, size_t start = 0);
+    Vector<Match> find_all(ByteBuffer& needle, size_t start = 0);
+    Vector<Match> find_all_strings(size_t min_length = 4);
+    Function<void(size_t, EditMode, size_t, size_t)> on_status_change; // position, edit mode, selection start, selection end
     Function<void()> on_change;
 
 protected:
@@ -77,29 +69,37 @@ protected:
 
 private:
     bool m_readonly { false };
-    int m_line_spacing { 4 };
-    int m_content_length { 0 };
-    int m_bytes_per_row { 16 };
+    size_t m_line_spacing { 4 };
+    size_t m_content_length { 0 };
+    size_t m_bytes_per_row { 16 };
     ByteBuffer m_buffer;
     bool m_in_drag_select { false };
-    int m_selection_start { 0 };
-    int m_selection_end { 0 };
-    HashMap<int, u8> m_tracked_changes;
-    int m_position { 0 };
-    int m_byte_position { 0 }; // 0 or 1
+    size_t m_selection_start { 0 };
+    size_t m_selection_end { 0 };
+    HashMap<size_t, u8> m_tracked_changes;
+    size_t m_position { 0 };
+    bool m_cursor_at_low_nibble { false };
     EditMode m_edit_mode { Hex };
+    NonnullRefPtr<Core::Timer> m_blink_timer;
+    bool m_cursor_blink_active { false };
 
-    void scroll_position_into_view(int position);
+    static constexpr int m_address_bar_width = 90;
+    static constexpr int m_padding = 5;
 
-    int total_rows() const { return ceil_div(m_content_length, m_bytes_per_row); }
-    int line_height() const { return font().glyph_height() + m_line_spacing; }
-    int character_width() const { return font().glyph_width('W'); }
-    int offset_margin_width() const { return 80; }
+    void scroll_position_into_view(size_t position);
+
+    size_t total_rows() const { return ceil_div(m_content_length, m_bytes_per_row); }
+    size_t line_height() const { return font().glyph_height() + m_line_spacing; }
+    size_t character_width() const { return font().glyph_width('W'); }
+    size_t cell_width() const { return character_width() * 3; }
+    size_t offset_margin_width() const { return 80; }
 
     void hex_mode_keydown_event(GUI::KeyEvent&);
     void text_mode_keydown_event(GUI::KeyEvent&);
 
-    void set_content_length(int); // I might make this public if I add fetching data on demand.
+    void set_content_length(size_t); // I might make this public if I add fetching data on demand.
     void update_status();
     void did_change();
+
+    void reset_cursor_blink_state();
 };

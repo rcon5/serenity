@@ -1,37 +1,15 @@
 /*
- * Copyright (c) 2021, The SerenityOS developers.
- * All rights reserved.
+ * Copyright (c) 2021, Dex♪ <dexes.ttp@gmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Base64.h>
-#include <AK/Debug.h>
 #include <AK/Random.h>
 #include <LibCrypto/Hash/HashManager.h>
 #include <LibWebSocket/Impl/TCPWebSocketConnectionImpl.h>
 #include <LibWebSocket/Impl/TLSv12WebSocketConnectionImpl.h>
 #include <LibWebSocket/WebSocket.h>
-#include <stdio.h>
 #include <unistd.h>
 
 namespace WebSocket {
@@ -41,11 +19,11 @@ namespace WebSocket {
 
 NonnullRefPtr<WebSocket> WebSocket::create(ConnectionInfo connection)
 {
-    return adopt(*new WebSocket(connection));
+    return adopt_ref(*new WebSocket(move(connection)));
 }
 
 WebSocket::WebSocket(ConnectionInfo connection)
-    : m_connection(connection)
+    : m_connection(move(connection))
 {
 }
 
@@ -101,7 +79,7 @@ ReadyState WebSocket::ready_state()
     }
 }
 
-void WebSocket::send(Message message)
+void WebSocket::send(Message const& message)
 {
     // Calling send on a socket that is not opened is not allowed
     VERIFY(m_state == WebSocket::InternalState::Open);
@@ -112,13 +90,13 @@ void WebSocket::send(Message message)
         send_frame(WebSocket::OpCode::Binary, message.data(), true);
 }
 
-void WebSocket::close(u16 code, String message)
+void WebSocket::close(u16 code, String const& message)
 {
     // Calling close on a socket that is not opened is not allowed
     VERIFY(m_state == WebSocket::InternalState::Open);
     VERIFY(m_impl);
     auto message_bytes = message.bytes();
-    auto close_payload = ByteBuffer::create_uninitialized(message_bytes.size() + 2);
+    auto close_payload = ByteBuffer::create_uninitialized(message_bytes.size() + 2).release_value(); // FIXME: Handle possible OOM situation.
     close_payload.overwrite(0, (u8*)&code, 2);
     close_payload.overwrite(2, message_bytes.data(), message_bytes.size());
     send_frame(WebSocket::OpCode::ConnectionClose, close_payload, true);
@@ -134,19 +112,27 @@ void WebSocket::drain_read()
         return;
     }
 
-    while (m_impl->can_read()) {
-        if (m_state == WebSocket::InternalState::WaitingForServerHandshake) {
-            read_server_handshake();
-            return;
-        }
-        if (m_state == WebSocket::InternalState::Open) {
-            read_frame();
-            return;
-        }
-        if (m_state == WebSocket::InternalState::Closing) {
-            read_frame();
-            return;
-        }
+    switch (m_state) {
+    case InternalState::NotStarted:
+    case InternalState::EstablishingProtocolConnection:
+    case InternalState::SendingClientHandshake: {
+        auto initializing_bytes = m_impl->read(1024);
+        dbgln("drain_read() was called on a websocket that isn't opened yet. Read {} bytes from the socket.", initializing_bytes.size());
+    } break;
+    case InternalState::WaitingForServerHandshake: {
+        read_server_handshake();
+    } break;
+    case InternalState::Open:
+    case InternalState::Closing: {
+        read_frame();
+    } break;
+    case InternalState::Closed:
+    case InternalState::Errored: {
+        auto closed_bytes = m_impl->read(1024);
+        dbgln("drain_read() was called on a closed websocket. Read {} bytes from the socket.", closed_bytes.size());
+    } break;
+    default:
+        VERIFY_NOT_REACHED();
     }
 }
 
@@ -163,10 +149,10 @@ void WebSocket::send_client_handshake()
     // 4. Host
     auto url = m_connection.url();
     builder.appendff("Host: {}", url.host());
-    if (!m_connection.is_secure() && url.port() != 80)
-        builder.appendff(":{}", url.port());
-    else if (m_connection.is_secure() && url.port() != 443)
-        builder.appendff(":{}", url.port());
+    if (!m_connection.is_secure() && url.port_or_default() != 80)
+        builder.appendff(":{}", url.port_or_default());
+    else if (m_connection.is_secure() && url.port_or_default() != 443)
+        builder.appendff(":{}", url.port_or_default());
     builder.append("\r\n");
 
     // 5. and 6. Connection Upgrade
@@ -239,7 +225,7 @@ void WebSocket::read_server_handshake()
         }
         if (parts[1] != "101") {
             // 1. If the status code is not 101, handle as per HTTP procedures.
-            // FIXME : This could be a redirect or a 401 authentification request, which we do not handle.
+            // FIXME : This could be a redirect or a 401 authentication request, which we do not handle.
             dbgln("WebSocket: Server HTTP Handshake return status {} which isn't supported", parts[1]);
             fatal_error(WebSocket::Error::ConnectionUpgradeFailed);
             return;
@@ -332,10 +318,10 @@ void WebSocket::read_server_handshake()
         if (header_name.equals_ignoring_case("Sec-WebSocket-Extensions")) {
             // 5. |Sec-WebSocket-Extensions| should not contain an extension that doesn't appear in m_connection->extensions()
             auto server_extensions = parts[1].split(',');
-            for (auto extension : server_extensions) {
+            for (auto const& extension : server_extensions) {
                 auto trimmed_extension = extension.trim_whitespace();
                 bool found_extension = false;
-                for (auto supported_extension : m_connection.extensions()) {
+                for (auto const& supported_extension : m_connection.extensions()) {
                     if (trimmed_extension.equals_ignoring_case(supported_extension)) {
                         found_extension = true;
                     }
@@ -352,10 +338,10 @@ void WebSocket::read_server_handshake()
         if (header_name.equals_ignoring_case("Sec-WebSocket-Protocol")) {
             // 6. |Sec-WebSocket-Protocol| should not contain an extension that doesn't appear in m_connection->protocols()
             auto server_protocols = parts[1].split(',');
-            for (auto protocol : server_protocols) {
+            for (auto const& protocol : server_protocols) {
                 auto trimmed_protocol = protocol.trim_whitespace();
                 bool found_protocol = false;
-                for (auto supported_protocol : m_connection.protocols()) {
+                for (auto const& supported_protocol : m_connection.protocols()) {
                     if (trimmed_protocol.equals_ignoring_case(supported_protocol)) {
                         found_protocol = true;
                     }
@@ -440,7 +426,7 @@ void WebSocket::read_frame()
         masking_key[3] = masking_key_data[3];
     }
 
-    auto payload = ByteBuffer::create_uninitialized(payload_length);
+    auto payload = ByteBuffer::create_uninitialized(payload_length).release_value(); // FIXME: Handle possible OOM situation.
     u64 read_length = 0;
     while (read_length < payload_length) {
         auto payload_part = m_impl->read(payload_length - read_length);
@@ -482,7 +468,6 @@ void WebSocket::read_frame()
     if (op_code == WebSocket::OpCode::Continuation) {
         // FIXME: Support fragmented frames
         TODO();
-        return;
     }
     if (op_code == WebSocket::OpCode::Text) {
         notify_message(Message(payload, true));
@@ -508,7 +493,7 @@ void WebSocket::send_frame(WebSocket::OpCode op_code, ReadonlyBytes payload, boo
         TODO();
     } else if (payload.size() > NumericLimits<u16>::max()) {
         // Send (the 'mask' flag + 127) + the 8-byte payload length
-        if constexpr (sizeof(size_t) >= 64) {
+        if constexpr (sizeof(size_t) >= 8) {
             u8 payload_length[9] = {
                 (u8)((has_mask ? 0x80 : 0x00) | 127),
                 (u8)((payload.size() >> 56) & 0xff),
@@ -558,11 +543,14 @@ void WebSocket::send_frame(WebSocket::OpCode op_code, ReadonlyBytes payload, boo
         fill_with_random(masking_key, 4);
         m_impl->send(ReadonlyBytes(masking_key, 4));
         // Mask the payload
-        auto masked_payload = ByteBuffer::create_uninitialized(payload.size());
-        for (size_t i = 0; i < payload.size(); ++i) {
-            masked_payload[i] = payload[i] ^ (masking_key[i % 4]);
+        auto buffer_result = ByteBuffer::create_uninitialized(payload.size());
+        if (buffer_result.has_value()) {
+            auto& masked_payload = buffer_result.value();
+            for (size_t i = 0; i < payload.size(); ++i) {
+                masked_payload[i] = payload[i] ^ (masking_key[i % 4]);
+            }
+            m_impl->send(masked_payload);
         }
-        m_impl->send(masked_payload);
     } else {
         m_impl->send(payload);
     }
@@ -577,9 +565,14 @@ void WebSocket::fatal_error(WebSocket::Error error)
 
 void WebSocket::discard_connection()
 {
-    VERIFY(m_impl);
-    m_impl->discard_connection();
-    m_impl = nullptr;
+    deferred_invoke([this] {
+        VERIFY(m_impl);
+        m_impl->discard_connection();
+        m_impl->on_connection_error = nullptr;
+        m_impl->on_connected = nullptr;
+        m_impl->on_ready_to_read = nullptr;
+        m_impl = nullptr;
+    });
 }
 
 void WebSocket::notify_open()
@@ -593,7 +586,7 @@ void WebSocket::notify_close(u16 code, String reason, bool was_clean)
 {
     if (!on_close)
         return;
-    on_close(code, reason, was_clean);
+    on_close(code, move(reason), was_clean);
 }
 
 void WebSocket::notify_error(WebSocket::Error error)
@@ -607,7 +600,7 @@ void WebSocket::notify_message(Message message)
 {
     if (!on_message)
         return;
-    on_message(message);
+    on_message(move(message));
 }
 
 }

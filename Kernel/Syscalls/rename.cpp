@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/StringView.h>
@@ -30,19 +10,14 @@
 
 namespace Kernel {
 
-KResultOr<int> Process::sys$rename(Userspace<const Syscall::SC_rename_params*> user_params)
+KResultOr<FlatPtr> Process::sys$rename(Userspace<const Syscall::SC_rename_params*> user_params)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(cpath);
-    Syscall::SC_rename_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
-    auto old_path = get_syscall_path_argument(params.old_path);
-    if (old_path.is_error())
-        return old_path.error();
-    auto new_path = get_syscall_path_argument(params.new_path);
-    if (new_path.is_error())
-        return new_path.error();
-    return VFS::the().rename(old_path.value(), new_path.value(), current_directory());
+    auto params = TRY(copy_typed_from_user(user_params));
+    auto old_path = TRY(get_syscall_path_argument(params.old_path));
+    auto new_path = TRY(get_syscall_path_argument(params.new_path));
+    return VirtualFileSystem::the().rename(old_path->view(), new_path->view(), current_directory());
 }
 
 }

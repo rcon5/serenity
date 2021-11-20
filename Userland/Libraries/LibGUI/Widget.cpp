@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Assertions.h>
@@ -41,42 +21,12 @@
 #include <LibGfx/Font.h>
 #include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
+#include <LibGfx/SystemTheme.h>
 #include <unistd.h>
 
-REGISTER_WIDGET(GUI, Widget)
+REGISTER_CORE_OBJECT(GUI, Widget)
 
 namespace GUI {
-
-static HashMap<String, WidgetClassRegistration*>& widget_classes()
-{
-    static HashMap<String, WidgetClassRegistration*>* map;
-    if (!map)
-        map = new HashMap<String, WidgetClassRegistration*>;
-    return *map;
-}
-
-WidgetClassRegistration::WidgetClassRegistration(const String& class_name, Function<NonnullRefPtr<Widget>()> factory)
-    : m_class_name(class_name)
-    , m_factory(move(factory))
-{
-    widget_classes().set(class_name, this);
-}
-
-WidgetClassRegistration::~WidgetClassRegistration()
-{
-}
-
-void WidgetClassRegistration::for_each(Function<void(const WidgetClassRegistration&)> callback)
-{
-    for (auto& it : widget_classes()) {
-        callback(*it.value);
-    }
-}
-
-const WidgetClassRegistration* WidgetClassRegistration::find(const String& class_name)
-{
-    return widget_classes().get(class_name).value_or(nullptr);
-}
 
 Widget::Widget()
     : Core::Object(nullptr)
@@ -187,6 +137,50 @@ Widget::Widget()
             }
             return false;
         });
+
+    register_property(
+        "foreground_role", [this]() -> JsonValue { return Gfx::to_string(foreground_role()); },
+        [this](auto& value) {
+            if (!value.is_string())
+                return false;
+            auto str = value.as_string();
+            if (str == "NoRole") {
+                set_foreground_role(Gfx::ColorRole::NoRole);
+                return true;
+            }
+#undef __ENUMERATE_COLOR_ROLE
+#define __ENUMERATE_COLOR_ROLE(role)               \
+    else if (str == #role)                         \
+    {                                              \
+        set_foreground_role(Gfx::ColorRole::role); \
+        return true;                               \
+    }
+            ENUMERATE_COLOR_ROLES(__ENUMERATE_COLOR_ROLE)
+#undef __ENUMERATE_COLOR_ROLE
+            return false;
+        });
+
+    register_property(
+        "background_role", [this]() -> JsonValue { return Gfx::to_string(background_role()); },
+        [this](auto& value) {
+            if (!value.is_string())
+                return false;
+            auto str = value.as_string();
+            if (str == "NoRole") {
+                set_background_role(Gfx::ColorRole::NoRole);
+                return true;
+            }
+#undef __ENUMERATE_COLOR_ROLE
+#define __ENUMERATE_COLOR_ROLE(role)               \
+    else if (str == #role)                         \
+    {                                              \
+        set_background_role(Gfx::ColorRole::role); \
+        return true;                               \
+    }
+            ENUMERATE_COLOR_ROLES(__ENUMERATE_COLOR_ROLE)
+#undef __ENUMERATE_COLOR_ROLE
+            return false;
+        });
 }
 
 Widget::~Widget()
@@ -198,22 +192,22 @@ void Widget::child_event(Core::ChildEvent& event)
     if (event.type() == Event::ChildAdded) {
         if (event.child() && is<Widget>(*event.child()) && layout()) {
             if (event.insertion_before_child() && is<Widget>(event.insertion_before_child()))
-                layout()->insert_widget_before(downcast<Widget>(*event.child()), downcast<Widget>(*event.insertion_before_child()));
+                layout()->insert_widget_before(verify_cast<Widget>(*event.child()), verify_cast<Widget>(*event.insertion_before_child()));
             else
-                layout()->add_widget(downcast<Widget>(*event.child()));
+                layout()->add_widget(verify_cast<Widget>(*event.child()));
         }
         if (window() && event.child() && is<Widget>(*event.child()))
-            window()->did_add_widget({}, downcast<Widget>(*event.child()));
+            window()->did_add_widget({}, verify_cast<Widget>(*event.child()));
     }
     if (event.type() == Event::ChildRemoved) {
         if (layout()) {
             if (event.child() && is<Widget>(*event.child()))
-                layout()->remove_widget(downcast<Widget>(*event.child()));
+                layout()->remove_widget(verify_cast<Widget>(*event.child()));
             else
                 invalidate_layout();
         }
         if (window() && event.child() && is<Widget>(*event.child()))
-            window()->did_remove_widget({}, downcast<Widget>(*event.child()));
+            window()->did_remove_widget({}, verify_cast<Widget>(*event.child()));
         update();
     }
     return Core::Object::child_event(event);
@@ -301,12 +295,18 @@ void Widget::event(Core::Event& event)
         return drop_event(static_cast<DropEvent&>(event));
     case Event::ThemeChange:
         return theme_change_event(static_cast<ThemeChangeEvent&>(event));
+    case Event::FontsChange:
+        return fonts_change_event(static_cast<FontsChangeEvent&>(event));
     case Event::Enter:
         return handle_enter_event(event);
     case Event::Leave:
         return handle_leave_event(event);
     case Event::EnabledChange:
         return change_event(static_cast<Event&>(event));
+    case Event::ContextMenu:
+        return context_menu_event(static_cast<ContextMenuEvent&>(event));
+    case Event::AppletAreaRectChange:
+        return applet_area_rect_change_event(static_cast<AppletAreaRectChangeEvent&>(event));
     default:
         return Core::Object::event(event);
     }
@@ -317,13 +317,20 @@ void Widget::handle_keydown_event(KeyEvent& event)
     keydown_event(event);
     if (event.key() == KeyCode::Key_Menu) {
         ContextMenuEvent c_event(window_relative_rect().bottom_right(), screen_relative_rect().bottom_right());
-        context_menu_event(c_event);
+        dispatch_event(c_event);
     }
 }
 
 void Widget::handle_paint_event(PaintEvent& event)
 {
     VERIFY(is_visible());
+
+    if (!rect().intersects(event.rect())) {
+        // This widget is not inside the paint event rect.
+        // Since widgets fully contain their children, we don't need to recurse further.
+        return;
+    }
+
     if (fill_with_background_color()) {
         Painter painter(*this);
         painter.fill_rect(event.rect(), palette().color(background_role()));
@@ -351,6 +358,11 @@ void Widget::handle_paint_event(PaintEvent& event)
     if (app && app->focus_debugging_enabled() && is_focused()) {
         Painter painter(*this);
         painter.draw_rect(rect(), Color::Cyan);
+    }
+
+    if (app && app->hover_debugging_enabled() && this == window()->hovered_widget()) {
+        Painter painter(*this);
+        painter.draw_rect(rect(), Color::Red);
     }
 
     if (is_being_inspected()) {
@@ -410,9 +422,9 @@ void Widget::handle_mousedown_event(MouseEvent& event)
     if (has_flag(focus_policy(), FocusPolicy::ClickFocus))
         set_focus(true, FocusSource::Mouse);
     mousedown_event(event);
-    if (event.button() == MouseButton::Right) {
+    if (event.button() == MouseButton::Secondary) {
         ContextMenuEvent c_event(event.position(), screen_relative_rect().location().translated(event.position()));
-        context_menu_event(c_event);
+        dispatch_event(c_event);
     }
 }
 
@@ -503,12 +515,14 @@ void Widget::mousemove_event(MouseEvent&)
 {
 }
 
-void Widget::mousewheel_event(MouseEvent&)
+void Widget::mousewheel_event(MouseEvent& event)
 {
+    event.ignore();
 }
 
-void Widget::context_menu_event(ContextMenuEvent&)
+void Widget::context_menu_event(ContextMenuEvent& event)
 {
+    event.ignore();
 }
 
 void Widget::focusin_event(FocusEvent&)
@@ -550,13 +564,24 @@ void Widget::drag_leave_event(Event&)
 void Widget::drop_event(DropEvent& event)
 {
     dbgln("{} {:p} DROP @ {}, '{}'", class_name(), this, event.position(), event.text());
+    event.ignore();
 }
 
 void Widget::theme_change_event(ThemeChangeEvent&)
 {
 }
 
-void Widget::screen_rect_change_event(ScreenRectChangeEvent&)
+void Widget::fonts_change_event(FontsChangeEvent&)
+{
+    if (m_default_font)
+        set_font(nullptr);
+}
+
+void Widget::screen_rects_change_event(ScreenRectsChangeEvent&)
+{
+}
+
+void Widget::applet_area_rect_change_event(AppletAreaRectChangeEvent&)
 {
 }
 
@@ -591,11 +616,27 @@ void Widget::update(const Gfx::IntRect& rect)
         window->update(bound_by_widget.translated(window_relative_rect().location()));
 }
 
+void Widget::repaint()
+{
+    if (rect().is_empty())
+        return;
+    repaint(rect());
+}
+
+void Widget::repaint(Gfx::IntRect const& rect)
+{
+    auto* window = this->window();
+    if (!window)
+        return;
+    update(rect);
+    window->flush_pending_paints_immediately();
+}
+
 Gfx::IntRect Widget::window_relative_rect() const
 {
     auto rect = relative_rect();
     for (auto* parent = parent_widget(); parent; parent = parent->parent_widget()) {
-        rect.move_by(parent->relative_position());
+        rect.translate_by(parent->relative_position());
     }
     return rect;
 }
@@ -613,10 +654,10 @@ Widget* Widget::child_at(const Gfx::IntPoint& point) const
     for (int i = children().size() - 1; i >= 0; --i) {
         if (!is<Widget>(children()[i]))
             continue;
-        auto& child = downcast<Widget>(children()[i]);
+        auto& child = verify_cast<Widget>(children()[i]);
         if (!child.is_visible())
             continue;
-        if (child.content_rect().contains(point))
+        if (child.relative_non_grabbable_rect().contains(point))
             return const_cast<Widget*>(&child);
     }
     return nullptr;
@@ -697,10 +738,13 @@ void Widget::set_font(const Gfx::Font* font)
     if (m_font.ptr() == font)
         return;
 
-    if (!font)
+    if (!font) {
         m_font = Gfx::FontDatabase::default_font();
-    else
+        m_default_font = true;
+    } else {
         m_font = *font;
+        m_default_font = false;
+    }
 
     did_change_font();
     update();
@@ -727,22 +771,6 @@ void Widget::set_font_fixed_width(bool fixed_width)
         set_font(Gfx::FontDatabase::the().get(Gfx::FontDatabase::the().default_fixed_width_font().family(), m_font->presentation_size(), m_font->weight()));
     else
         set_font(Gfx::FontDatabase::the().get(Gfx::FontDatabase::the().default_font().family(), m_font->presentation_size(), m_font->weight()));
-}
-
-void Widget::set_global_cursor_tracking(bool enabled)
-{
-    auto* win = window();
-    if (!win)
-        return;
-    win->set_global_cursor_tracking_widget(enabled ? this : nullptr);
-}
-
-bool Widget::global_cursor_tracking() const
-{
-    auto* win = window();
-    if (!win)
-        return false;
-    return win->global_cursor_tracking_widget() == this;
 }
 
 void Widget::set_min_size(const Gfx::IntSize& size)
@@ -776,6 +804,8 @@ void Widget::set_visible(bool visible)
         parent->invalidate_layout();
     if (m_visible)
         update();
+    if (!m_visible && is_focused())
+        set_focus(false);
 
     if (m_visible) {
         ShowEvent e;
@@ -877,7 +907,7 @@ Action* Widget::action_for_key_event(const KeyEvent& event)
 
     Action* found_action = nullptr;
     for_each_child_of_type<Action>([&](auto& action) {
-        if (action.shortcut() == shortcut) {
+        if (action.shortcut() == shortcut || action.alternate_shortcut() == shortcut) {
             found_action = &action;
             return IterationDecision::Break;
         }
@@ -899,14 +929,14 @@ void Widget::focus_previous_widget(FocusSource source, bool siblings_only)
 {
     auto focusable_widgets = window()->focusable_widgets(source);
     if (siblings_only)
-        focusable_widgets.remove_all_matching([this](auto& entry) { return entry->parent() != parent(); });
+        focusable_widgets.remove_all_matching([this](auto& entry) { return entry.parent() != parent(); });
     for (int i = focusable_widgets.size() - 1; i >= 0; --i) {
-        if (focusable_widgets[i] != this)
+        if (&focusable_widgets[i] != this)
             continue;
         if (i > 0)
-            focusable_widgets[i - 1]->set_focus(true, source);
+            focusable_widgets[i - 1].set_focus(true, source);
         else
-            focusable_widgets.last()->set_focus(true, source);
+            focusable_widgets.last().set_focus(true, source);
     }
 }
 
@@ -914,24 +944,24 @@ void Widget::focus_next_widget(FocusSource source, bool siblings_only)
 {
     auto focusable_widgets = window()->focusable_widgets(source);
     if (siblings_only)
-        focusable_widgets.remove_all_matching([this](auto& entry) { return entry->parent() != parent(); });
+        focusable_widgets.remove_all_matching([this](auto& entry) { return entry.parent() != parent(); });
     for (size_t i = 0; i < focusable_widgets.size(); ++i) {
-        if (focusable_widgets[i] != this)
+        if (&focusable_widgets[i] != this)
             continue;
         if (i < focusable_widgets.size() - 1)
-            focusable_widgets[i + 1]->set_focus(true, source);
+            focusable_widgets[i + 1].set_focus(true, source);
         else
-            focusable_widgets.first()->set_focus(true, source);
+            focusable_widgets.first().set_focus(true, source);
     }
 }
 
-Vector<Widget*> Widget::child_widgets() const
+Vector<Widget&> Widget::child_widgets() const
 {
-    Vector<Widget*> widgets;
+    Vector<Widget&> widgets;
     widgets.ensure_capacity(children().size());
     for (auto& child : const_cast<Widget*>(this)->children()) {
         if (is<Widget>(child))
-            widgets.append(static_cast<Widget*>(&child));
+            widgets.append(static_cast<Widget&>(child));
     }
     return widgets;
 }
@@ -939,16 +969,19 @@ Vector<Widget*> Widget::child_widgets() const
 void Widget::set_palette(const Palette& palette)
 {
     m_palette = palette.impl();
+    update();
 }
 
 void Widget::set_background_role(ColorRole role)
 {
     m_background_role = role;
+    update();
 }
 
 void Widget::set_foreground_role(ColorRole role)
 {
     m_foreground_role = role;
+    update();
 }
 
 Gfx::Palette Widget::palette() const
@@ -966,20 +999,20 @@ void Widget::did_end_inspection()
     update();
 }
 
-void Widget::set_content_margins(const Margins& margins)
+void Widget::set_grabbable_margins(const Margins& margins)
 {
-    if (m_content_margins == margins)
+    if (m_grabbable_margins == margins)
         return;
-    m_content_margins = margins;
+    m_grabbable_margins = margins;
     invalidate_layout();
 }
 
-Gfx::IntRect Widget::content_rect() const
+Gfx::IntRect Widget::relative_non_grabbable_rect() const
 {
     auto rect = relative_rect();
-    rect.move_by(m_content_margins.left(), m_content_margins.top());
-    rect.set_width(rect.width() - (m_content_margins.left() + m_content_margins.right()));
-    rect.set_height(rect.height() - (m_content_margins.top() + m_content_margins.bottom()));
+    rect.translate_by(m_grabbable_margins.left(), m_grabbable_margins.top());
+    rect.set_width(rect.width() - (m_grabbable_margins.left() + m_grabbable_margins.right()));
+    rect.set_height(rect.height() - (m_grabbable_margins.top() + m_grabbable_margins.bottom()));
     return rect;
 }
 
@@ -1003,25 +1036,34 @@ Gfx::IntRect Widget::children_clip_rect() const
     return rect();
 }
 
-void Widget::set_override_cursor(Gfx::StandardCursor cursor)
+void Widget::set_override_cursor(AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> cursor)
 {
-    if (m_override_cursor == cursor)
+    auto const& are_cursors_the_same = [](AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> const& a, AK::Variant<Gfx::StandardCursor, NonnullRefPtr<Gfx::Bitmap>> const& b) {
+        if (a.has<Gfx::StandardCursor>() != b.has<Gfx::StandardCursor>())
+            return false;
+        if (a.has<Gfx::StandardCursor>())
+            return a.get<Gfx::StandardCursor>() == b.get<Gfx::StandardCursor>();
+        return a.get<NonnullRefPtr<Gfx::Bitmap>>().ptr() == b.get<NonnullRefPtr<Gfx::Bitmap>>().ptr();
+    };
+
+    if (are_cursors_the_same(m_override_cursor, cursor))
         return;
 
-    m_override_cursor = cursor;
-    if (auto* window = this->window())
+    m_override_cursor = move(cursor);
+    if (auto* window = this->window()) {
         window->update_cursor({});
+    }
 }
 
 bool Widget::load_from_gml(const StringView& gml_string)
 {
-    return load_from_gml(gml_string, [](const String& class_name) -> RefPtr<Widget> {
+    return load_from_gml(gml_string, [](const String& class_name) -> RefPtr<Core::Object> {
         dbgln("Class '{}' not registered", class_name);
         return nullptr;
     });
 }
 
-bool Widget::load_from_gml(const StringView& gml_string, RefPtr<Widget> (*unregistered_child_handler)(const String&))
+bool Widget::load_from_gml(const StringView& gml_string, RefPtr<Core::Object> (*unregistered_child_handler)(const String&))
 {
     auto value = parse_gml(gml_string);
     if (!value.is_object())
@@ -1029,7 +1071,7 @@ bool Widget::load_from_gml(const StringView& gml_string, RefPtr<Widget> (*unregi
     return load_from_json(value.as_object(), unregistered_child_handler);
 }
 
-bool Widget::load_from_json(const JsonObject& json, RefPtr<Widget> (*unregistered_child_handler)(const String&))
+bool Widget::load_from_json(const JsonObject& json, RefPtr<Core::Object> (*unregistered_child_handler)(const String&))
 {
     json.for_each_member([&](auto& key, auto& value) {
         set_property(key, value);
@@ -1048,10 +1090,14 @@ bool Widget::load_from_json(const JsonObject& json, RefPtr<Widget> (*unregistere
             return false;
         }
 
-        if (class_name.to_string() == "GUI::VerticalBoxLayout") {
-            set_layout<GUI::VerticalBoxLayout>();
-        } else if (class_name.to_string() == "GUI::HorizontalBoxLayout") {
-            set_layout<GUI::HorizontalBoxLayout>();
+        auto& layout_class = *Core::ObjectClassRegistration::find("GUI::Layout");
+        if (auto* registration = Core::ObjectClassRegistration::find(class_name.as_string())) {
+            auto layout = registration->construct();
+            if (!layout || !registration->is_derived_from(layout_class)) {
+                dbgln("Invalid layout class: '{}'", class_name.to_string());
+                return false;
+            }
+            set_layout(static_ptr_cast<Layout>(layout).release_nonnull());
         } else {
             dbgln("Unknown layout class: '{}'", class_name.to_string());
             return false;
@@ -1062,6 +1108,7 @@ bool Widget::load_from_json(const JsonObject& json, RefPtr<Widget> (*unregistere
         });
     }
 
+    auto& widget_class = *Core::ObjectClassRegistration::find("GUI::Widget");
     auto children = json.get("children");
     if (children.is_array()) {
         for (auto& child_json_value : children.as_array().values()) {
@@ -1074,16 +1121,20 @@ bool Widget::load_from_json(const JsonObject& json, RefPtr<Widget> (*unregistere
                 return false;
             }
 
-            RefPtr<Widget> child_widget;
-            if (auto* registration = WidgetClassRegistration::find(class_name.as_string())) {
-                child_widget = registration->construct();
-            } else {
-                child_widget = unregistered_child_handler(class_name.as_string());
-                if (!child_widget)
+            RefPtr<Core::Object> child;
+            if (auto* registration = Core::ObjectClassRegistration::find(class_name.as_string())) {
+                child = registration->construct();
+                if (!child || !registration->is_derived_from(widget_class)) {
+                    dbgln("Invalid widget class: '{}'", class_name.to_string());
                     return false;
+                }
+            } else {
+                child = unregistered_child_handler(class_name.as_string());
             }
-            add_child(*child_widget);
-            child_widget->load_from_json(child_json, unregistered_child_handler);
+            if (!child)
+                return false;
+            add_child(*child);
+            child->load_from_json(child_json, unregistered_child_handler);
         }
     }
 
@@ -1112,6 +1163,11 @@ void Widget::set_shrink_to_fit(bool b)
 bool Widget::has_pending_drop() const
 {
     return Application::the()->pending_drop_widget() == this;
+}
+
+bool Widget::is_visible_for_timer_purposes() const
+{
+    return is_visible() && Object::is_visible_for_timer_purposes();
 }
 
 }

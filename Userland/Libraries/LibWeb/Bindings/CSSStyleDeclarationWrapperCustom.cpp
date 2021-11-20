@@ -1,85 +1,56 @@
 /*
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ScopeGuard.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibWeb/Bindings/CSSStyleDeclarationWrapper.h>
-#include <LibWeb/CSS/Parser/DeprecatedCSSParser.h>
 #include <LibWeb/DOM/Element.h>
 
 namespace Web::Bindings {
 
-JS::Value CSSStyleDeclarationWrapper::get(const JS::PropertyName& name, JS::Value receiver, bool without_side_effects) const
+static CSS::PropertyID property_id_from_name(StringView name)
 {
-    // FIXME: These should actually use camelCase versions of the property names!
-    auto property_id = CSS::property_id_from_string(name.to_string());
-    if (property_id == CSS::PropertyID::Invalid)
-        return Base::get(name, receiver, without_side_effects);
-    for (auto& property : impl().properties()) {
-        if (property.property_id == property_id)
-            return js_string(vm(), property.value->to_string());
-    }
-    return js_string(vm(), String::empty());
+    if (auto property_id = CSS::property_id_from_camel_case_string(name); property_id != CSS::PropertyID::Invalid)
+        return property_id;
+
+    if (auto property_id = CSS::property_id_from_string(name); property_id != CSS::PropertyID::Invalid)
+        return property_id;
+
+    return CSS::PropertyID::Invalid;
 }
 
-bool CSSStyleDeclarationWrapper::put(const JS::PropertyName& name, JS::Value value, JS::Value receiver)
+JS::ThrowCompletionOr<bool> CSSStyleDeclarationWrapper::internal_has_property(JS::PropertyKey const& name) const
 {
-    // FIXME: These should actually use camelCase versions of the property names!
-    auto property_id = CSS::property_id_from_string(name.to_string());
+    if (!name.is_string())
+        return Base::internal_has_property(name);
+    return property_id_from_name(name.to_string()) != CSS::PropertyID::Invalid;
+}
+
+JS::ThrowCompletionOr<JS::Value> CSSStyleDeclarationWrapper::internal_get(JS::PropertyKey const& name, JS::Value receiver) const
+{
+    if (!name.is_string())
+        return Base::internal_get(name, receiver);
+    auto property_id = property_id_from_name(name.to_string());
     if (property_id == CSS::PropertyID::Invalid)
-        return Base::put(name, value, receiver);
+        return Base::internal_get(name, receiver);
+    if (auto maybe_property = impl().property(property_id); maybe_property.has_value())
+        return { js_string(vm(), maybe_property->value->to_string()) };
+    return { js_string(vm(), String::empty()) };
+}
 
-    auto css_text = value.to_string(global_object());
-    if (vm().exception())
-        return false;
+JS::ThrowCompletionOr<bool> CSSStyleDeclarationWrapper::internal_set(JS::PropertyKey const& name, JS::Value value, JS::Value receiver)
+{
+    if (!name.is_string())
+        return Base::internal_set(name, value, receiver);
+    auto property_id = property_id_from_name(name.to_string());
+    if (property_id == CSS::PropertyID::Invalid)
+        return Base::internal_set(name, value, receiver);
 
-    auto new_value = parse_css_value(CSS::ParsingContext {}, css_text, property_id);
-    // FIXME: What are we supposed to do if we can't parse it?
-    if (!new_value)
-        return false;
+    auto css_text = TRY(value.to_string(global_object()));
 
-    ScopeGuard style_invalidation_guard = [&] {
-        auto& declaration = downcast<CSS::ElementInlineCSSStyleDeclaration>(impl());
-        if (auto* element = declaration.element())
-            element->invalidate_style();
-    };
-
-    // FIXME: I don't think '!important' is being handled correctly here..
-
-    for (auto& property : impl().m_properties) {
-        if (property.property_id == property_id) {
-            property.value = new_value.release_nonnull();
-            return true;
-        }
-    }
-
-    impl().m_properties.append(CSS::StyleProperty {
-        .property_id = property_id,
-        .value = new_value.release_nonnull(),
-        .important = false,
-    });
+    impl().set_property(property_id, css_text);
     return true;
 }
 

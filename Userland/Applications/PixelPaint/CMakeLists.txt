@@ -1,28 +1,48 @@
+serenity_component(
+    PixelPaint
+    RECOMMENDED
+    TARGETS PixelPaint
+    DEPENDS ImageDecoder FileSystemAccessServer
+)
+
+compile_gml(PixelPaintWindow.gml PixelPaintWindowGML.h pixel_paint_window_gml)
+compile_gml(EditGuideDialog.gml EditGuideDialogGML.h edit_guide_dialog_gml)
+
 set(SOURCES
-    BrushTool.cpp
-    BucketTool.cpp
     CreateNewImageDialog.cpp
     CreateNewLayerDialog.cpp
-    EllipseTool.cpp
-    EraseTool.cpp
+    EditGuideDialog.cpp
+    EditGuideDialogGML.h
     Image.cpp
     ImageEditor.cpp
     Layer.cpp
     LayerListWidget.cpp
     LayerPropertiesWidget.cpp
-    LineTool.cpp
-    main.cpp
-    MoveTool.cpp
+    MainWidget.cpp
+    Mask.cpp
     PaletteWidget.cpp
-    PenTool.cpp
-    PickerTool.cpp
-    RectangleTool.cpp
-    SprayTool.cpp
-    ToolboxWidget.cpp
+    PixelPaintWindowGML.h
+    ProjectLoader.cpp
+    Selection.cpp
     ToolPropertiesWidget.cpp
-    Tool.cpp
-    ZoomTool.cpp
-)
+    ToolboxWidget.cpp
+    Tools/BrushTool.cpp
+    Tools/BucketTool.cpp
+    Tools/CloneTool.cpp
+    Tools/EllipseTool.cpp
+    Tools/EraseTool.cpp
+    Tools/GuideTool.cpp
+    Tools/LineTool.cpp
+    Tools/MoveTool.cpp
+    Tools/PenTool.cpp
+    Tools/PickerTool.cpp
+    Tools/RectangleSelectTool.cpp
+    Tools/RectangleTool.cpp
+    Tools/SprayTool.cpp
+    Tools/Tool.cpp
+    Tools/ZoomTool.cpp
+    main.cpp
+    )
 
 serenity_app(PixelPaint ICON app-pixel-paint)
-target_link_libraries(PixelPaint LibGUI LibGfx)
+target_link_libraries(PixelPaint LibImageDecoderClient LibGUI LibGfx LibFileSystemAccessClient LibConfig)

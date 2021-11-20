@@ -1,35 +1,17 @@
 /*
- * Copyright (c) 2019-2020, Andrew Kaster <andrewdkaster@gmail.com>
- * All rights reserved.
+ * Copyright (c) 2019-2021, Andrew Kaster <akaster@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Checked.h>
 #include <AK/Debug.h>
 #include <AK/Format.h>
 #include <LibC/bits/pthread_integration.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/internals.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -43,7 +25,8 @@ struct AtExitEntry {
     bool has_been_called { false };
 };
 
-static constexpr size_t max_atexit_entry_count = PAGE_SIZE / sizeof(AtExitEntry);
+// We'll re-allocate the region if it ends up being too small at runtime
+static size_t atexit_entry_region_size = 2 * PAGE_SIZE;
 
 static AtExitEntry* atexit_entries;
 static size_t atexit_entry_count = 0;
@@ -51,7 +34,7 @@ static pthread_mutex_t atexit_mutex = __PTHREAD_MUTEX_INITIALIZER;
 
 static void lock_atexit_handlers()
 {
-    if (mprotect(atexit_entries, PAGE_SIZE, PROT_READ) < 0) {
+    if (mprotect(atexit_entries, atexit_entry_region_size, PROT_READ) < 0) {
         perror("lock_atexit_handlers");
         _exit(1);
     }
@@ -59,7 +42,7 @@ static void lock_atexit_handlers()
 
 static void unlock_atexit_handlers()
 {
-    if (mprotect(atexit_entries, PAGE_SIZE, PROT_READ | PROT_WRITE) < 0) {
+    if (mprotect(atexit_entries, atexit_entry_region_size, PROT_READ | PROT_WRITE) < 0) {
         perror("unlock_atexit_handlers");
         _exit(1);
     }
@@ -69,18 +52,38 @@ int __cxa_atexit(AtExitFunction exit_function, void* parameter, void* dso_handle
 {
     __pthread_mutex_lock(&atexit_mutex);
 
-    if (atexit_entry_count >= max_atexit_entry_count) {
-        __pthread_mutex_unlock(&atexit_mutex);
-        return -1;
-    }
-
+    // allocate initial atexit region
     if (!atexit_entries) {
-        atexit_entries = (AtExitEntry*)mmap(nullptr, PAGE_SIZE, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
+        atexit_entries = (AtExitEntry*)mmap(nullptr, atexit_entry_region_size, PROT_READ, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
         if (atexit_entries == MAP_FAILED) {
             __pthread_mutex_unlock(&atexit_mutex);
             perror("__cxa_atexit mmap");
             _exit(1);
         }
+    }
+
+    // reallocate atexit region, increasing size by PAGE_SIZE
+    if ((atexit_entry_count) >= (atexit_entry_region_size / sizeof(AtExitEntry))) {
+        if (Checked<size_t>::addition_would_overflow(atexit_entry_region_size, PAGE_SIZE)) {
+            __pthread_mutex_unlock(&atexit_mutex);
+            return -1;
+        }
+        dbgln_if(GLOBAL_DTORS_DEBUG, "__cxa_atexit: Growing exit handler region from {} to {}", atexit_entry_region_size, atexit_entry_region_size + PAGE_SIZE);
+        size_t new_atexit_region_size = atexit_entry_region_size + PAGE_SIZE;
+
+        auto* new_atexit_entries = (AtExitEntry*)mmap(nullptr, new_atexit_region_size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 0, 0);
+        if (new_atexit_entries == MAP_FAILED) {
+            __pthread_mutex_unlock(&atexit_mutex);
+            perror("__cxa_atexit mmap (new size)");
+            return -1;
+        }
+        memcpy(new_atexit_entries, atexit_entries, atexit_entry_region_size);
+        if (munmap(atexit_entries, atexit_entry_region_size) < 0) {
+            perror("__cxa_atexit munmap old region");
+            // leak the old region on failure
+        }
+        atexit_entries = new_atexit_entries;
+        atexit_entry_region_size = new_atexit_region_size;
     }
 
     unlock_atexit_handlers();
@@ -124,7 +127,7 @@ void __cxa_finalize(void* dso_handle)
     __pthread_mutex_unlock(&atexit_mutex);
 }
 
-[[noreturn]] void __cxa_pure_virtual()
+__attribute__((noreturn)) void __cxa_pure_virtual()
 {
     VERIFY_NOT_REACHED();
 }

@@ -1,41 +1,21 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Assertions.h>
 #include <AK/ByteBuffer.h>
 #include <AK/Singleton.h>
-#include <AK/StringView.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/IO.h>
 #include <Kernel/Debug.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/HID/HIDManagement.h>
 #include <Kernel/Devices/HID/PS2KeyboardDevice.h>
-#include <Kernel/IO.h>
-#include <Kernel/TTY/VirtualConsole.h>
+#include <Kernel/Sections.h>
+#include <Kernel/TTY/ConsoleManagement.h>
+#include <Kernel/WorkQueue.h>
 
 namespace Kernel {
 
@@ -53,9 +33,10 @@ void PS2KeyboardDevice::irq_handle_byte_read(u8 byte)
         return;
     }
 
-    if (m_modifiers == (Mod_Alt | Mod_Shift) && byte == 0x58) {
+    if ((m_modifiers == (Mod_Alt | Mod_Shift) || m_modifiers == (Mod_Ctrl | Mod_Alt | Mod_Shift)) && byte == 0x58) {
         // Alt+Shift+F12 pressed, dump some kernel state to the debug console.
-        Scheduler::dump_scheduler_state();
+        ConsoleManagement::the().switch_to_debug();
+        Scheduler::dump_scheduler_state(m_modifiers == (Mod_Ctrl | Mod_Alt | Mod_Shift));
     }
 
     dbgln_if(KEYBOARD_DEBUG, "Keyboard::irq_handle_byte_read: {:#02x} {}", ch, (pressed ? "down" : "up"));
@@ -73,41 +54,41 @@ void PS2KeyboardDevice::irq_handle_byte_read(u8 byte)
         update_modifier(Mod_Super, pressed);
         break;
     case 0x2a:
+        m_left_shift_pressed = pressed;
+        update_modifier(Mod_Shift, m_left_shift_pressed || m_right_shift_pressed);
+        break;
     case 0x36:
-        update_modifier(Mod_Shift, pressed);
+        m_right_shift_pressed = pressed;
+        update_modifier(Mod_Shift, m_left_shift_pressed || m_right_shift_pressed);
         break;
     }
     switch (ch) {
-    case I8042_ACK:
+    case I8042Response::Acknowledge:
         break;
     default:
-        if (m_modifiers & Mod_Alt) {
-            switch (ch) {
-            case 0x02 ... 0x07: // 1 to 6
-                VirtualConsole::switch_to(ch - 0x02);
-                break;
-            default:
-                key_state_changed(ch, pressed);
-                break;
-            }
-        } else {
-            key_state_changed(ch, pressed);
+        if ((m_modifiers & Mod_Alt) != 0 && ch >= 2 && ch <= ConsoleManagement::s_max_virtual_consoles + 1) {
+            g_io_work->queue([ch]() {
+                ConsoleManagement::the().switch_to(ch - 0x02);
+            });
         }
+        key_state_changed(ch, pressed);
     }
 }
 
-void PS2KeyboardDevice::handle_irq(const RegisterState&)
+bool PS2KeyboardDevice::handle_irq(const RegisterState&)
 {
     // The controller will read the data and call irq_handle_byte_read
     // for the appropriate device
-    m_i8042_controller->irq_process_input_buffer(HIDDevice::Type::Keyboard);
+    return m_i8042_controller->irq_process_input_buffer(HIDDevice::Type::Keyboard);
 }
 
 UNMAP_AFTER_INIT RefPtr<PS2KeyboardDevice> PS2KeyboardDevice::try_to_initialize(const I8042Controller& ps2_controller)
 {
-    auto device = adopt(*new PS2KeyboardDevice(ps2_controller));
-    if (device->initialize())
-        return device;
+    auto keyboard_device_or_error = DeviceManagement::try_create_device<PS2KeyboardDevice>(ps2_controller);
+    // FIXME: Find a way to propagate errors
+    VERIFY(!keyboard_device_or_error.is_error());
+    if (keyboard_device_or_error.value()->initialize())
+        return keyboard_device_or_error.release_value();
     return nullptr;
 }
 

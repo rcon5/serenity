@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -31,8 +11,8 @@
 #include <AK/String.h>
 #include <AK/Types.h>
 #include <AK/Weakable.h>
+#include <Kernel/API/KResult.h>
 #include <Kernel/Forward.h>
-#include <Kernel/KResult.h>
 #include <Kernel/UnixTypes.h>
 #include <Kernel/UserOrKernelBuffer.h>
 #include <Kernel/VirtualAddress.h>
@@ -41,29 +21,29 @@ namespace Kernel {
 
 class File;
 
-class FileBlockCondition : public Thread::BlockCondition {
+class FileBlockerSet final : public Thread::BlockerSet {
 public:
-    FileBlockCondition() { }
+    FileBlockerSet() { }
 
     virtual bool should_add_blocker(Thread::Blocker& b, void* data) override
     {
         VERIFY(b.blocker_type() == Thread::Blocker::Type::File);
         auto& blocker = static_cast<Thread::FileBlocker&>(b);
-        return !blocker.unblock(true, data);
+        return !blocker.unblock_if_conditions_are_met(true, data);
     }
 
-    void unblock()
+    void unblock_all_blockers_whose_conditions_are_met()
     {
-        ScopedSpinLock lock(m_lock);
-        do_unblock([&](auto& b, void* data, bool&) {
+        SpinlockLocker lock(m_lock);
+        BlockerSet::unblock_all_blockers_whose_conditions_are_met_locked([&](auto& b, void* data, bool&) {
             VERIFY(b.blocker_type() == Thread::Blocker::Type::File);
             auto& blocker = static_cast<Thread::FileBlocker&>(b);
-            return blocker.unblock(false, data);
+            return blocker.unblock_if_conditions_are_met(false, data);
         });
     }
 };
 
-// File is the base class for anything that can be referenced by a FileDescription.
+// File is the base class for anything that can be referenced by a OpenFileDescription.
 //
 // The most important functions in File are:
 //
@@ -91,33 +71,37 @@ public:
 //   - Should create a Region in the Process and return it if successful.
 
 class File
-    : public RefCounted<File>
+    : public RefCountedBase
     , public Weakable<File> {
 public:
+    virtual bool unref() const;
+    virtual void before_removing() { }
     virtual ~File();
 
-    virtual KResultOr<NonnullRefPtr<FileDescription>> open(int options);
+    virtual KResultOr<NonnullRefPtr<OpenFileDescription>> open(int options);
     virtual KResult close();
 
-    virtual bool can_read(const FileDescription&, size_t) const = 0;
-    virtual bool can_write(const FileDescription&, size_t) const = 0;
+    virtual bool can_read(const OpenFileDescription&, size_t) const = 0;
+    virtual bool can_write(const OpenFileDescription&, size_t) const = 0;
 
-    virtual KResult attach(FileDescription&) { return KSuccess; }
-    virtual void detach(FileDescription&) { }
-    virtual void did_seek(FileDescription&, off_t) { }
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) = 0;
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) = 0;
-    virtual int ioctl(FileDescription&, unsigned request, FlatPtr arg);
-    virtual KResultOr<Region*> mmap(Process&, FileDescription&, const Range&, u64 offset, int prot, bool shared);
+    virtual KResult attach(OpenFileDescription&);
+    virtual void detach(OpenFileDescription&);
+    virtual void did_seek(OpenFileDescription&, off_t) { }
+    virtual KResultOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) = 0;
+    virtual KResultOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) = 0;
+    virtual KResult ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg);
+    virtual KResultOr<Memory::Region*> mmap(Process&, OpenFileDescription&, Memory::VirtualRange const&, u64 offset, int prot, bool shared);
     virtual KResult stat(::stat&) const { return EBADF; }
 
-    virtual String absolute_path(const FileDescription&) const = 0;
+    // Although this might be better described "name" or "description", these terms already have other meanings.
+    virtual KResultOr<NonnullOwnPtr<KString>> pseudo_path(const OpenFileDescription&) const = 0;
 
     virtual KResult truncate(u64) { return EINVAL; }
-    virtual KResult chown(FileDescription&, uid_t, gid_t) { return EBADF; }
-    virtual KResult chmod(FileDescription&, mode_t) { return EBADF; }
+    virtual KResult sync() { return EINVAL; }
+    virtual KResult chown(OpenFileDescription&, UserID, GroupID) { return EBADF; }
+    virtual KResult chmod(OpenFileDescription&, mode_t) { return EBADF; }
 
-    virtual const char* class_name() const = 0;
+    virtual StringView class_name() const = 0;
 
     virtual bool is_seekable() const { return false; }
 
@@ -129,15 +113,18 @@ public:
     virtual bool is_block_device() const { return false; }
     virtual bool is_character_device() const { return false; }
     virtual bool is_socket() const { return false; }
+    virtual bool is_inode_watcher() const { return false; }
 
-    virtual FileBlockCondition& block_condition() { return m_block_condition; }
+    virtual FileBlockerSet& blocker_set() { return m_blocker_set; }
+
+    size_t attach_count() const { return m_attach_count; }
 
 protected:
     File();
 
     void evaluate_block_conditions()
     {
-        if (Processor::current().in_irq()) {
+        if (Processor::current_in_irq()) {
             // If called from an IRQ handler we need to delay evaluation
             // and unblocking of waiting threads. Note that this File
             // instance may be deleted until the deferred call is executed!
@@ -153,11 +140,12 @@ protected:
 private:
     ALWAYS_INLINE void do_evaluate_block_conditions()
     {
-        VERIFY(!Processor::current().in_irq());
-        block_condition().unblock();
+        VERIFY(!Processor::current_in_irq());
+        blocker_set().unblock_all_blockers_whose_conditions_are_met();
     }
 
-    FileBlockCondition m_block_condition;
+    FileBlockerSet m_blocker_set;
+    size_t m_attach_count { 0 };
 };
 
 }

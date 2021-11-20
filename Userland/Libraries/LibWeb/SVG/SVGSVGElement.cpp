@@ -1,37 +1,16 @@
 /*
  * Copyright (c) 2020, Matthew Olsson <matthewcolsson@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGfx/Painter.h>
-#include <LibWeb/CSS/StyleResolver.h>
+#include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/Layout/SVGSVGBox.h>
-#include <LibWeb/SVG/SVGPathElement.h>
+#include <LibWeb/SVG/AttributeNames.h>
 #include <LibWeb/SVG/SVGSVGElement.h>
-#include <ctype.h>
 
 namespace Web::SVG {
 
@@ -42,10 +21,10 @@ SVGSVGElement::SVGSVGElement(DOM::Document& document, QualifiedName qualified_na
 
 RefPtr<Layout::Node> SVGSVGElement::create_layout_node()
 {
-    auto style = document().style_resolver().resolve_style(*this);
-    if (style->display() == CSS::Display::None)
+    auto style = document().style_computer().compute_style(*this);
+    if (style->display().is_none())
         return nullptr;
-    return adopt(*new Layout::SVGSVGBox(document(), *this, move(style)));
+    return adopt_ref(*new Layout::SVGSVGBox(document(), *this, move(style)));
 }
 
 unsigned SVGSVGElement::width() const
@@ -56,6 +35,14 @@ unsigned SVGSVGElement::width() const
 unsigned SVGSVGElement::height() const
 {
     return attribute(HTML::AttributeNames::height).to_uint().value_or(150);
+}
+
+void SVGSVGElement::parse_attribute(FlyString const& name, String const& value)
+{
+    SVGGraphicsElement::parse_attribute(name, value);
+
+    if (name.equals_ignoring_case(SVG::AttributeNames::viewBox))
+        m_view_box = try_parse_view_box(value);
 }
 
 }

@@ -1,31 +1,12 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2021, Linus Groh <mail@linusgroh.de>
- * All rights reserved.
+ * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <LibJS/Runtime/Function.h>
+#include <AK/QuickSort.h>
+#include <LibJS/Runtime/FunctionObject.h>
 #include <LibWeb/Bindings/EventWrapper.h>
 #include <LibWeb/Bindings/XMLHttpRequestWrapper.h>
 #include <LibWeb/DOM/DOMException.h>
@@ -35,9 +16,11 @@
 #include <LibWeb/DOM/EventListener.h>
 #include <LibWeb/DOM/ExceptionOr.h>
 #include <LibWeb/DOM/Window.h>
+#include <LibWeb/HTML/EventHandler.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/Loader/ResourceLoader.h>
 #include <LibWeb/Origin.h>
+#include <LibWeb/Page/Page.h>
 #include <LibWeb/XHR/EventNames.h>
 #include <LibWeb/XHR/ProgressEvent.h>
 #include <LibWeb/XHR/XMLHttpRequest.h>
@@ -45,7 +28,7 @@
 namespace Web::XHR {
 
 XMLHttpRequest::XMLHttpRequest(DOM::Window& window)
-    : XMLHttpRequestEventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.document()))
+    : XMLHttpRequestEventTarget(static_cast<Bindings::ScriptExecutionContext&>(window.associated_document()))
     , m_window(window)
 {
 }
@@ -62,12 +45,16 @@ void XMLHttpRequest::set_ready_state(ReadyState ready_state)
 
 void XMLHttpRequest::fire_progress_event(const String& event_name, u64 transmitted, u64 length)
 {
-    dispatch_event(ProgressEvent::create(event_name, transmitted, length));
+    ProgressEventInit event_init {};
+    event_init.length_computable = true;
+    event_init.loaded = transmitted;
+    event_init.total = length;
+    dispatch_event(ProgressEvent::create(event_name, event_init));
 }
 
 String XMLHttpRequest::response_text() const
 {
-    if (m_response_object.is_null())
+    if (m_response_object.is_empty())
         return {};
     return String::copy(m_response_object);
 }
@@ -139,7 +126,7 @@ DOM::ExceptionOr<void> XMLHttpRequest::open(const String& method, const String& 
 
     auto normalized_method = normalize_method(method);
 
-    auto parsed_url = m_window->document().complete_url(url);
+    auto parsed_url = m_window->associated_document().parse_url(url);
     if (!parsed_url.is_valid())
         return DOM::SyntaxError::create("Invalid URL");
 
@@ -174,7 +161,7 @@ DOM::ExceptionOr<void> XMLHttpRequest::open(const String& method, const String& 
 }
 
 // https://xhr.spec.whatwg.org/#dom-xmlhttprequest-send
-DOM::ExceptionOr<void> XMLHttpRequest::send()
+DOM::ExceptionOr<void> XMLHttpRequest::send(String body)
 {
     if (m_ready_state != ReadyState::Opened)
         return DOM::InvalidStateError::create("XHR readyState is not OPENED");
@@ -182,28 +169,31 @@ DOM::ExceptionOr<void> XMLHttpRequest::send()
     if (m_send)
         return DOM::InvalidStateError::create("XHR send() flag is already set");
 
-    // FIXME: If this’s request method is `GET` or `HEAD`, then set body to null.
+    // If this’s request method is `GET` or `HEAD`, then set body to null.
+    if (m_method.is_one_of("GET"sv, "HEAD"sv))
+        body = {};
 
-    // FIXME: If body is not null, then:
-
-    URL request_url = m_window->document().complete_url(m_url.to_string());
-    dbgln("XHR send from {} to {}", m_window->document().url(), request_url);
+    AK::URL request_url = m_window->associated_document().parse_url(m_url.to_string());
+    dbgln("XHR send from {} to {}", m_window->associated_document().url(), request_url);
 
     // TODO: Add support for preflight requests to support CORS requests
-    Origin request_url_origin = Origin(request_url.protocol(), request_url.host(), request_url.port());
+    Origin request_url_origin = Origin(request_url.protocol(), request_url.host(), request_url.port_or_default());
 
-    if (!m_window->document().origin().is_same(request_url_origin)) {
-        dbgln("XHR failed to load: Same-Origin Policy violation: {} may not load {}", m_window->document().url(), request_url);
-        auto weak_this = make_weak_ptr();
-        if (!weak_this)
-            return {};
-        const_cast<XMLHttpRequest&>(*weak_this).set_ready_state(ReadyState::Done);
-        const_cast<XMLHttpRequest&>(*weak_this).dispatch_event(DOM::Event::create(HTML::EventNames::error));
+    bool should_enforce_same_origin_policy = true;
+    if (auto* page = m_window->page())
+        should_enforce_same_origin_policy = page->is_same_origin_policy_enabled();
+
+    if (should_enforce_same_origin_policy && !m_window->associated_document().origin().is_same(request_url_origin)) {
+        dbgln("XHR failed to load: Same-Origin Policy violation: {} may not load {}", m_window->associated_document().url(), request_url);
+        set_ready_state(ReadyState::Done);
+        dispatch_event(DOM::Event::create(HTML::EventNames::error));
         return {};
     }
 
-    auto request = LoadRequest::create_for_url_on_page(request_url, m_window->document().page());
+    auto request = LoadRequest::create_for_url_on_page(request_url, m_window->page());
     request.set_method(m_method);
+    if (!body.is_null())
+        request.set_body(body.to_byte_buffer());
     for (auto& it : m_request_headers)
         request.set_header(it.key, it.value);
 
@@ -229,10 +219,12 @@ DOM::ExceptionOr<void> XMLHttpRequest::send()
         ResourceLoader::the().load(
             request,
             [weak_this = make_weak_ptr()](auto data, auto& response_headers, auto status_code) {
-                if (!weak_this)
+                auto strong_this = weak_this.strong_ref();
+                if (!strong_this)
                     return;
                 auto& xhr = const_cast<XMLHttpRequest&>(*weak_this);
-                auto response_data = ByteBuffer::copy(data);
+                // FIXME: Handle OOM failure.
+                auto response_data = ByteBuffer::copy(data).release_value();
                 // FIXME: There's currently no difference between transmitted and length.
                 u64 transmitted = response_data.size();
                 u64 length = response_data.size();
@@ -251,12 +243,14 @@ DOM::ExceptionOr<void> XMLHttpRequest::send()
                 xhr.fire_progress_event(EventNames::loadend, transmitted, length);
             },
             [weak_this = make_weak_ptr()](auto& error, auto status_code) {
-                if (!weak_this)
-                    return;
                 dbgln("XHR failed to load: {}", error);
-                const_cast<XMLHttpRequest&>(*weak_this).set_ready_state(ReadyState::Done);
-                const_cast<XMLHttpRequest&>(*weak_this).set_status(status_code.value_or(0));
-                const_cast<XMLHttpRequest&>(*weak_this).dispatch_event(DOM::Event::create(HTML::EventNames::error));
+                auto strong_this = weak_this.strong_ref();
+                if (!strong_this)
+                    return;
+                auto& xhr = const_cast<XMLHttpRequest&>(*strong_this);
+                xhr.set_ready_state(ReadyState::Done);
+                xhr.set_status(status_code.value_or(0));
+                xhr.dispatch_event(DOM::Event::create(HTML::EventNames::error));
             });
     } else {
         TODO();
@@ -264,14 +258,37 @@ DOM::ExceptionOr<void> XMLHttpRequest::send()
     return {};
 }
 
-bool XMLHttpRequest::dispatch_event(NonnullRefPtr<DOM::Event> event)
-{
-    return DOM::EventDispatcher::dispatch(*this, move(event));
-}
-
 JS::Object* XMLHttpRequest::create_wrapper(JS::GlobalObject& global_object)
 {
     return wrap(global_object, *this);
+}
+
+HTML::EventHandler XMLHttpRequest::onreadystatechange()
+{
+    return event_handler_attribute(Web::XHR::EventNames::readystatechange);
+}
+
+void XMLHttpRequest::set_onreadystatechange(HTML::EventHandler value)
+{
+    set_event_handler_attribute(Web::XHR::EventNames::readystatechange, move(value));
+}
+
+// https://xhr.spec.whatwg.org/#the-getallresponseheaders()-method
+String XMLHttpRequest::get_all_response_headers() const
+{
+    // FIXME: Implement the spec-compliant sort order.
+
+    StringBuilder builder;
+    auto keys = m_response_headers.keys();
+    quick_sort(keys);
+
+    for (auto& key : keys) {
+        builder.append(key);
+        builder.append(": ");
+        builder.append(m_response_headers.get(key).value());
+        builder.append("\r\n");
+    }
+    return builder.to_string();
 }
 
 }

@@ -1,27 +1,8 @@
 /*
- * Copyright (c) 2020-2021, Linus Groh <mail@linusgroh.de>
- * All rights reserved.
+ * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/LexicalPath.h>
@@ -31,11 +12,11 @@
 #include <Applications/CrashReporter/CrashReporterWindowGML.h>
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
-#include <LibCoreDump/Backtrace.h>
-#include <LibCoreDump/Reader.h>
+#include <LibCoredump/Backtrace.h>
+#include <LibCoredump/Reader.h>
 #include <LibDesktop/AppFile.h>
 #include <LibDesktop/Launcher.h>
-#include <LibELF/CoreDump.h>
+#include <LibELF/Core.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
@@ -44,6 +25,7 @@
 #include <LibGUI/ImageWidget.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/LinkLabel.h>
+#include <LibGUI/Progressbar.h>
 #include <LibGUI/TabWidget.h>
 #include <LibGUI/TextEditor.h>
 #include <LibGUI/Widget.h>
@@ -56,10 +38,56 @@ struct TitleAndText {
     String text;
 };
 
-static TitleAndText build_backtrace(const CoreDump::Reader& coredump, const ELF::Core::ThreadInfo& thread_info, size_t thread_index)
+static NonnullRefPtr<GUI::Window> create_progress_window()
 {
-    CoreDump::Backtrace backtrace(coredump, thread_info);
+    auto window = GUI::Window::construct();
+
+    window->set_title("CrashReporter");
+    window->set_resizable(false);
+    window->resize(240, 64);
+    window->center_on_screen();
+
+    auto& main_widget = window->set_main_widget<GUI::Widget>();
+    main_widget.set_fill_with_background_color(true);
+    main_widget.set_layout<GUI::VerticalBoxLayout>();
+
+    auto& label = main_widget.add<GUI::Label>("Generating crash report...");
+    label.set_fixed_height(30);
+
+    auto& progressbar = main_widget.add<GUI::Progressbar>();
+    progressbar.set_name("progressbar");
+    progressbar.set_fixed_width(150);
+    progressbar.set_fixed_height(22);
+
+    window->on_close = [&]() {
+        if (progressbar.value() != progressbar.max())
+            exit(0);
+    };
+
+    return window;
+}
+
+static TitleAndText build_backtrace(Coredump::Reader const& coredump, ELF::Core::ThreadInfo const& thread_info, size_t thread_index)
+{
+    // Show a very simple progress window ASAP to make crashing feel more responsive.
+    // FIXME: This is not the most beautifully factored thing.
+    auto progress_window = create_progress_window();
+    progress_window->show();
+
+    auto& progressbar = *progress_window->main_widget()->find_descendant_of_type_named<GUI::Progressbar>("progressbar");
+
+    auto timer = Core::ElapsedTimer::start_new();
+    Coredump::Backtrace backtrace(coredump, thread_info, [&](size_t frame_index, size_t frame_count) {
+        progress_window->set_progress(100.0f * (float)(frame_index + 1) / (float)frame_count);
+        progressbar.set_value(frame_index + 1);
+        progressbar.set_max(frame_count);
+        Core::EventLoop::current().pump(Core::EventLoop::WaitMode::PollForEvents);
+    });
+    progress_window->close();
+
     auto metadata = coredump.metadata();
+
+    dbgln("Generating backtrace took {} ms", timer.elapsed());
 
     StringBuilder builder;
 
@@ -71,8 +99,6 @@ static TitleAndText build_backtrace(const CoreDump::Reader& coredump, const ELF:
         builder.append('\n');
         builder.append('\n');
     };
-
-    auto& backtrace_entries = backtrace.entries();
 
     if (metadata.contains("assertion"))
         prepend_metadata("assertion", "ASSERTION FAILED: {}");
@@ -95,6 +121,11 @@ static TitleAndText build_backtrace(const CoreDump::Reader& coredump, const ELF:
         builder.append(entry.to_string());
     }
 
+    dbgln("--- Backtrace for thread #{} (TID {}) ---", thread_index, thread_info.tid);
+    for (auto& entry : backtrace.entries()) {
+        dbgln("{}", entry.to_string(true));
+    }
+
     return {
         String::formatted("Thread #{} (TID {})", thread_index, thread_info.tid),
         builder.build()
@@ -107,11 +138,17 @@ static TitleAndText build_cpu_registers(const ELF::Core::ThreadInfo& thread_info
 
     StringBuilder builder;
 
-    builder.appendff("eax={:08x} ebx={:08x} ecx={:08x} edx={:08x}", regs.eax, regs.ebx, regs.ecx, regs.edx);
-    builder.append('\n');
-    builder.appendff("ebp={:08x} esp={:08x} esi={:08x} edi={:08x}", regs.ebp, regs.esp, regs.esi, regs.edi);
-    builder.append('\n');
-    builder.appendff("eip={:08x} eflags={:08x}", regs.eip, regs.eflags);
+#if ARCH(I386)
+    builder.appendff("eax={:p} ebx={:p} ecx={:p} edx={:p}\n", regs.eax, regs.ebx, regs.ecx, regs.edx);
+    builder.appendff("ebp={:p} esp={:p} esi={:p} edi={:p}\n", regs.ebp, regs.esp, regs.esi, regs.edi);
+    builder.appendff("eip={:p} eflags={:p}", regs.eip, regs.eflags);
+#else
+    builder.appendff("rax={:p} rbx={:p} rcx={:p} rdx={:p}\n", regs.rax, regs.rbx, regs.rcx, regs.rdx);
+    builder.appendff("rbp={:p} rsp={:p} rsi={:p} rdi={:p}\n", regs.rbp, regs.rsp, regs.rsi, regs.rdi);
+    builder.appendff(" r8={:p}  r9={:p} r10={:p} r11={:p}\n", regs.r8, regs.r9, regs.r10, regs.r11);
+    builder.appendff("r12={:p} r13={:p} r14={:p} r15={:p}\n", regs.r12, regs.r13, regs.r14, regs.r15);
+    builder.appendff("rip={:p} rflags={:p}", regs.rip, regs.rflags);
+#endif
 
     return {
         String::formatted("Thread #{} (TID {})", thread_index, thread_info.tid),
@@ -121,10 +158,12 @@ static TitleAndText build_cpu_registers(const ELF::Core::ThreadInfo& thread_info
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio recvfd sendfd accept cpath rpath unix fattr", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd cpath rpath unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
+
+    auto app = GUI::Application::construct(argc, argv);
 
     const char* coredump_path = nullptr;
     bool unlink_after_use = false;
@@ -145,7 +184,7 @@ int main(int argc, char** argv)
     u8 termination_signal { 0 };
 
     {
-        auto coredump = CoreDump::Reader::create(coredump_path);
+        auto coredump = Coredump::Reader::create(coredump_path);
         if (!coredump) {
             warnln("Could not open coredump '{}'", coredump_path);
             return 1;
@@ -171,9 +210,7 @@ int main(int argc, char** argv)
             dbgln("Failed deleting coredump file");
     }
 
-    auto app = GUI::Application::construct(argc, argv);
-
-    if (pledge("stdio recvfd sendfd accept rpath unix", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd rpath unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -212,7 +249,7 @@ int main(int argc, char** argv)
     auto& icon_image_widget = *widget.find_descendant_of_type_named<GUI::ImageWidget>("icon");
     icon_image_widget.set_bitmap(GUI::FileIconProvider::icon_for_executable(executable_path).bitmap_for_size(32));
 
-    auto app_name = LexicalPath(executable_path).basename();
+    auto app_name = LexicalPath::basename(executable_path);
     auto af = Desktop::AppFile::get_for_app(app_name);
     if (af->is_valid())
         app_name = af->name();
@@ -241,7 +278,7 @@ int main(int argc, char** argv)
 
     auto& backtrace_tab = tab_widget.add_tab<GUI::Widget>("Backtrace");
     backtrace_tab.set_layout<GUI::VerticalBoxLayout>();
-    backtrace_tab.layout()->set_margins({ 4, 4, 4, 4 });
+    backtrace_tab.layout()->set_margins(4);
 
     auto& backtrace_label = backtrace_tab.add<GUI::Label>("A backtrace for each thread alive during the crash is listed below:");
     backtrace_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
@@ -250,9 +287,10 @@ int main(int argc, char** argv)
     auto& backtrace_tab_widget = backtrace_tab.add<GUI::TabWidget>();
     backtrace_tab_widget.set_tab_position(GUI::TabWidget::TabPosition::Bottom);
     for (auto& backtrace : thread_backtraces) {
-        auto& backtrace_text_editor = backtrace_tab_widget.add_tab<GUI::TextEditor>(backtrace.title);
-        backtrace_text_editor.set_layout<GUI::VerticalBoxLayout>();
-        backtrace_text_editor.layout()->set_margins({ 4, 4, 4, 4 });
+        auto& container = backtrace_tab_widget.add_tab<GUI::Widget>(backtrace.title);
+        container.set_layout<GUI::VerticalBoxLayout>();
+        container.layout()->set_margins(4);
+        auto& backtrace_text_editor = container.add<GUI::TextEditor>();
         backtrace_text_editor.set_text(backtrace.text);
         backtrace_text_editor.set_mode(GUI::TextEditor::Mode::ReadOnly);
         backtrace_text_editor.set_should_hide_unnecessary_scrollbars(true);
@@ -260,7 +298,7 @@ int main(int argc, char** argv)
 
     auto& cpu_registers_tab = tab_widget.add_tab<GUI::Widget>("CPU Registers");
     cpu_registers_tab.set_layout<GUI::VerticalBoxLayout>();
-    cpu_registers_tab.layout()->set_margins({ 4, 4, 4, 4 });
+    cpu_registers_tab.layout()->set_margins(4);
 
     auto& cpu_registers_label = cpu_registers_tab.add<GUI::Label>("The CPU register state for each thread alive during the crash is listed below:");
     cpu_registers_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
@@ -269,9 +307,10 @@ int main(int argc, char** argv)
     auto& cpu_registers_tab_widget = cpu_registers_tab.add<GUI::TabWidget>();
     cpu_registers_tab_widget.set_tab_position(GUI::TabWidget::TabPosition::Bottom);
     for (auto& cpu_registers : thread_cpu_registers) {
-        auto& cpu_registers_text_editor = cpu_registers_tab_widget.add_tab<GUI::TextEditor>(cpu_registers.title);
-        cpu_registers_text_editor.set_layout<GUI::VerticalBoxLayout>();
-        cpu_registers_text_editor.layout()->set_margins({ 4, 4, 4, 4 });
+        auto& container = cpu_registers_tab_widget.add_tab<GUI::Widget>(cpu_registers.title);
+        container.set_layout<GUI::VerticalBoxLayout>();
+        container.layout()->set_margins(4);
+        auto& cpu_registers_text_editor = container.add<GUI::TextEditor>();
         cpu_registers_text_editor.set_text(cpu_registers.text);
         cpu_registers_text_editor.set_mode(GUI::TextEditor::Mode::ReadOnly);
         cpu_registers_text_editor.set_should_hide_unnecessary_scrollbars(true);
@@ -279,7 +318,7 @@ int main(int argc, char** argv)
 
     auto& environment_tab = tab_widget.add_tab<GUI::Widget>("Environment");
     environment_tab.set_layout<GUI::VerticalBoxLayout>();
-    environment_tab.layout()->set_margins({ 4, 4, 4, 4 });
+    environment_tab.layout()->set_margins(4);
 
     auto& environment_text_editor = environment_tab.add<GUI::TextEditor>();
     environment_text_editor.set_text(String::join("\n", environment));

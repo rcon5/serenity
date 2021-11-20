@@ -1,29 +1,10 @@
 /*
- * Copyright (c) 2020, The SerenityOS developers.
- * All rights reserved.
+ * Copyright (c) 2020, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Array.h>
 #include <AK/Checked.h>
 #include <AK/Time.h>
 
@@ -33,6 +14,7 @@
 #    include <Kernel/UnixTypes.h>
 #else
 #    include <sys/time.h>
+#    include <time.h>
 #endif
 
 namespace AK {
@@ -41,7 +23,7 @@ int day_of_year(int year, unsigned month, int day)
 {
     VERIFY(month >= 1 && month <= 12);
 
-    static const int seek_table[] = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+    constexpr Array seek_table = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
     int day_of_year = seek_table[month - 1] + day - 1;
 
     if (is_leap_year(year) && month >= 3)
@@ -63,7 +45,7 @@ int days_in_month(int year, unsigned month)
 unsigned day_of_week(int year, unsigned month, int day)
 {
     VERIFY(month >= 1 && month <= 12);
-    static const int seek_table[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
+    constexpr Array seek_table = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
     if (month < 3)
         --year;
 
@@ -188,12 +170,12 @@ i64 Time::to_nanoseconds() const
 timespec Time::to_timespec() const
 {
     VERIFY(m_nanoseconds < 1'000'000'000);
-    return { static_cast<i64>(m_seconds), static_cast<i32>(m_nanoseconds) };
+    return { static_cast<time_t>(m_seconds), static_cast<long>(m_nanoseconds) };
 }
 timeval Time::to_timeval() const
 {
     VERIFY(m_nanoseconds < 1'000'000'000);
-    return { static_cast<i64>(m_seconds), static_cast<i32>(m_nanoseconds) / 1000 };
+    return { static_cast<time_t>(m_seconds), static_cast<suseconds_t>(m_nanoseconds) / 1000 };
 }
 
 Time Time::operator+(const Time& other) const
@@ -222,7 +204,6 @@ Time Time::operator+(const Time& other) const
             /* If *both* are INT64_MAX, then adding them will overflow in any case. */
             return Time::max();
         }
-        extra_secs = 0;
     }
 
     Checked<i64> new_secs { this_secs };
@@ -306,5 +287,36 @@ Time Time::from_half_sanitized(i64 seconds, i32 extra_seconds, u32 nanoseconds)
 
     return Time { seconds + extra_seconds, nanoseconds };
 }
+
+#ifndef KERNEL
+namespace {
+static Time now_time_from_clock(clockid_t clock_id)
+{
+    timespec now_spec {};
+    ::clock_gettime(clock_id, &now_spec);
+    return Time::from_timespec(now_spec);
+}
+}
+Time Time::now_realtime()
+{
+    return now_time_from_clock(CLOCK_REALTIME);
+}
+
+Time Time::now_realtime_coarse()
+{
+    return now_time_from_clock(CLOCK_REALTIME_COARSE);
+}
+
+Time Time::now_monotonic()
+{
+    return now_time_from_clock(CLOCK_MONOTONIC);
+}
+
+Time Time::now_monotonic_coarse()
+{
+    return now_time_from_clock(CLOCK_MONOTONIC_COARSE);
+}
+
+#endif
 
 }

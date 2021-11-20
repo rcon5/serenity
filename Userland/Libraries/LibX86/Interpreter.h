@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -296,6 +276,7 @@ public:
     virtual void INSB(const Instruction&) = 0;
     virtual void INSD(const Instruction&) = 0;
     virtual void INSW(const Instruction&) = 0;
+    virtual void INT1(const Instruction&) = 0;
     virtual void INT3(const Instruction&) = 0;
     virtual void INTO(const Instruction&) = 0;
     virtual void INT_imm8(const Instruction&) = 0;
@@ -416,9 +397,27 @@ public:
     virtual void OUT_imm8_AL(const Instruction&) = 0;
     virtual void OUT_imm8_AX(const Instruction&) = 0;
     virtual void OUT_imm8_EAX(const Instruction&) = 0;
+    virtual void PACKSSDW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PACKSSWB_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PACKUSWB_mm1_mm2m64(const Instruction&) = 0;
     virtual void PADDB_mm1_mm2m64(const Instruction&) = 0;
     virtual void PADDW_mm1_mm2m64(const Instruction&) = 0;
     virtual void PADDD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PADDSB_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PADDSW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PADDUSB_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PADDUSW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PAND_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PANDN_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PCMPEQB_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PCMPEQW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PCMPEQD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PCMPGTB_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PCMPGTW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PCMPGTD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PMADDWD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PMULHW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PMULLW_mm1_mm2m64(const Instruction&) = 0;
     virtual void POPA(const Instruction&) = 0;
     virtual void POPAD(const Instruction&) = 0;
     virtual void POPF(const Instruction&) = 0;
@@ -432,6 +431,36 @@ public:
     virtual void POP_SS(const Instruction&) = 0;
     virtual void POP_reg16(const Instruction&) = 0;
     virtual void POP_reg32(const Instruction&) = 0;
+    virtual void POR_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSLLW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSLLW_mm1_imm8(const Instruction&) = 0;
+    virtual void PSLLD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSLLD_mm1_imm8(const Instruction&) = 0;
+    virtual void PSLLQ_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSLLQ_mm1_imm8(const Instruction&) = 0;
+    virtual void PSRAW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSRAW_mm1_imm8(const Instruction&) = 0;
+    virtual void PSRAD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSRAD_mm1_imm8(const Instruction&) = 0;
+    virtual void PSRLW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSRLW_mm1_imm8(const Instruction&) = 0;
+    virtual void PSRLD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSRLD_mm1_imm8(const Instruction&) = 0;
+    virtual void PSRLQ_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSRLQ_mm1_imm8(const Instruction&) = 0;
+    virtual void PSUBB_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSUBW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSUBD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSUBSB_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSUBSW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSUBUSB_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PSUBUSW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PUNPCKHBW_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PUNPCKHWD_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PUNPCKHDQ_mm1_mm2m64(const Instruction&) = 0;
+    virtual void PUNPCKLBW_mm1_mm2m32(const Instruction&) = 0;
+    virtual void PUNPCKLWD_mm1_mm2m32(const Instruction&) = 0;
+    virtual void PUNPCKLDQ_mm1_mm2m32(const Instruction&) = 0;
     virtual void PUSHA(const Instruction&) = 0;
     virtual void PUSHAD(const Instruction&) = 0;
     virtual void PUSHF(const Instruction&) = 0;
@@ -450,6 +479,7 @@ public:
     virtual void PUSH_imm8(const Instruction&) = 0;
     virtual void PUSH_reg16(const Instruction&) = 0;
     virtual void PUSH_reg32(const Instruction&) = 0;
+    virtual void PXOR_mm1_mm2m64(const Instruction&) = 0;
     virtual void RCL_RM16_1(const Instruction&) = 0;
     virtual void RCL_RM16_CL(const Instruction&) = 0;
     virtual void RCL_RM16_imm8(const Instruction&) = 0;
@@ -611,8 +641,12 @@ public:
     virtual void XOR_reg32_RM32(const Instruction&) = 0;
     virtual void XOR_reg8_RM8(const Instruction&) = 0;
     virtual void MOVQ_mm1_mm2m64(const Instruction&) = 0;
+    virtual void MOVQ_mm1m64_mm2(const Instruction&) = 0;
+    virtual void MOVD_mm1_rm32(const Instruction&) = 0;
+    virtual void MOVQ_mm1_rm64(const Instruction&) = 0; // long mode
+    virtual void MOVD_rm32_mm2(const Instruction&) = 0;
+    virtual void MOVQ_rm64_mm2(const Instruction&) = 0; // long mode
     virtual void EMMS(const Instruction&) = 0;
-    virtual void MOVQ_mm1_m64_mm2(const Instruction&) = 0;
     virtual void wrap_0xC0(const Instruction&) = 0;
     virtual void wrap_0xC1_16(const Instruction&) = 0;
     virtual void wrap_0xC1_32(const Instruction&) = 0;
@@ -622,6 +656,85 @@ public:
     virtual void wrap_0xD2(const Instruction&) = 0;
     virtual void wrap_0xD3_16(const Instruction&) = 0;
     virtual void wrap_0xD3_32(const Instruction&) = 0;
+
+    virtual void PREFETCHTNTA(Instruction const&) = 0;
+    virtual void PREFETCHT0(Instruction const&) = 0;
+    virtual void PREFETCHT1(Instruction const&) = 0;
+    virtual void PREFETCHT2(Instruction const&) = 0;
+    virtual void LDMXCSR(Instruction const&) = 0;
+    virtual void STMXCSR(Instruction const&) = 0;
+    virtual void MOVUPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void MOVSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void MOVUPS_xmm1m128_xmm2(Instruction const&) = 0;
+    virtual void MOVSS_xmm1m32_xmm2(Instruction const&) = 0;
+    virtual void MOVLPS_xmm1_xmm2m64(Instruction const&) = 0;
+    virtual void MOVLPS_m64_xmm2(Instruction const&) = 0;
+    virtual void UNPCKLPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void UNPCKHPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void MOVHPS_xmm1_xmm2m64(Instruction const&) = 0;
+    virtual void MOVHPS_m64_xmm2(Instruction const&) = 0;
+    virtual void MOVAPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void MOVAPS_xmm1m128_xmm2(Instruction const&) = 0;
+    virtual void CVTTPS2PI_mm1_xmm2m64(Instruction const&) = 0;
+    virtual void CVTTPS2PI_r32_xmm2m32(Instruction const&) = 0;
+    virtual void CVTPI2PS_xmm1_mm2m64(Instruction const&) = 0;
+    virtual void CVTSI2SS_xmm1_rm32(Instruction const&) = 0;
+    virtual void MOVNTPS_xmm1m128_xmm2(Instruction const&) = 0;
+    virtual void CVTPS2PI_xmm1_mm2m64(Instruction const&) = 0;
+    virtual void CVTSS2SI_xmm1_rm32(Instruction const&) = 0;
+    virtual void UCOMISS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void COMISS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void MOVMSKPS_reg_xmm(Instruction const&) = 0;
+    virtual void SQRTPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void SQRTSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void RSQRTPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void RSQRTSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void RCPPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void RCPSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void ANDPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void ANDNPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void ORPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void XORPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void ADDPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void ADDSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void MULPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void MULSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void SUBPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void SUBSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void MINPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void MINSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void DIVPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void DIVSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void MAXPS_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void MAXSS_xmm1_xmm2m32(Instruction const&) = 0;
+    virtual void PSHUFW_mm1_mm2m64_imm8(Instruction const&) = 0;
+    virtual void CMPPS_xmm1_xmm2m128_imm8(Instruction const&) = 0;
+    virtual void CMPSS_xmm1_xmm2m32_imm8(Instruction const&) = 0;
+    virtual void PINSRW_mm1_r32m16_imm8(Instruction const&) = 0;
+    virtual void PINSRW_xmm1_r32m16_imm8(Instruction const&) = 0;
+    virtual void PEXTRW_reg_mm1_imm8(Instruction const&) = 0;
+    virtual void PEXTRW_reg_xmm1_imm8(Instruction const&) = 0;
+    virtual void SHUFPS_xmm1_xmm2m128_imm8(Instruction const&) = 0;
+    virtual void PMOVMSKB_reg_mm1(Instruction const&) = 0;
+    virtual void PMOVMSKB_reg_xmm1(Instruction const&) = 0;
+    virtual void PMINUB_mm1_mm2m64(Instruction const&) = 0;
+    virtual void PMINUB_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void PMAXUB_mm1_mm2m64(Instruction const&) = 0;
+    virtual void PMAXUB_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void PAVGB_mm1_mm2m64(Instruction const&) = 0;
+    virtual void PAVGB_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void PAVGW_mm1_mm2m64(Instruction const&) = 0;
+    virtual void PAVGW_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void PMULHUW_mm1_mm2m64(Instruction const&) = 0;
+    virtual void PMULHUW_xmm1_xmm2m64(Instruction const&) = 0;
+    virtual void MOVNTQ_m64_mm1(Instruction const&) = 0;
+    virtual void PMINSB_mm1_mm2m64(Instruction const&) = 0;
+    virtual void PMINSB_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void PMAXSB_mm1_mm2m64(Instruction const&) = 0;
+    virtual void PMAXSB_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void PSADBB_mm1_mm2m64(Instruction const&) = 0;
+    virtual void PSADBB_xmm1_xmm2m128(Instruction const&) = 0;
+    virtual void MASKMOVQ_mm1_mm2m64(Instruction const&) = 0;
 
 protected:
     virtual ~Interpreter() = default;

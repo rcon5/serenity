@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "DebugSession.h"
@@ -29,6 +9,7 @@
 #include <AK/JsonValue.h>
 #include <AK/LexicalPath.h>
 #include <AK/Optional.h>
+#include <AK/Platform.h>
 #include <LibCore/File.h>
 #include <LibRegex/Regex.h>
 #include <stdlib.h>
@@ -63,7 +44,7 @@ DebugSession::~DebugSession()
     }
 }
 
-OwnPtr<DebugSession> DebugSession::exec_and_attach(const String& command, String source_root)
+OwnPtr<DebugSession> DebugSession::exec_and_attach(String const& command, String source_root)
 {
     auto pid = fork();
 
@@ -305,7 +286,7 @@ PtraceRegisters DebugSession::get_registers() const
     return regs;
 }
 
-void DebugSession::set_registers(const PtraceRegisters& regs)
+void DebugSession::set_registers(PtraceRegisters const& regs)
 {
     if (ptrace(PT_SETREGS, m_debuggee_pid, reinterpret_cast<void*>(&const_cast<PtraceRegisters&>(regs)), 0) < 0) {
         perror("PT_SETREGS");
@@ -343,7 +324,11 @@ void* DebugSession::single_step()
 
     auto regs = get_registers();
     constexpr u32 TRAP_FLAG = 0x100;
+#if ARCH(I386)
     regs.eflags |= TRAP_FLAG;
+#else
+    regs.rflags |= TRAP_FLAG;
+#endif
     set_registers(regs);
 
     continue_debuggee();
@@ -354,9 +339,13 @@ void* DebugSession::single_step()
     }
 
     regs = get_registers();
+#if ARCH(I386)
     regs.eflags &= ~(TRAP_FLAG);
+#else
+    regs.rflags &= ~(TRAP_FLAG);
+#endif
     set_registers(regs);
-    return (void*)regs.eip;
+    return (void*)regs.ip();
 }
 
 void DebugSession::detach()
@@ -369,7 +358,7 @@ void DebugSession::detach()
     continue_debuggee();
 }
 
-Optional<DebugSession::InsertBreakpointAtSymbolResult> DebugSession::insert_breakpoint(const String& symbol_name)
+Optional<DebugSession::InsertBreakpointAtSymbolResult> DebugSession::insert_breakpoint(String const& symbol_name)
 {
     Optional<InsertBreakpointAtSymbolResult> result;
     for_each_loaded_library([this, symbol_name, &result](auto& lib) {
@@ -392,9 +381,9 @@ Optional<DebugSession::InsertBreakpointAtSymbolResult> DebugSession::insert_brea
     return result;
 }
 
-Optional<DebugSession::InsertBreakpointAtSourcePositionResult> DebugSession::insert_breakpoint(const String& file_name, size_t line_number)
+Optional<DebugSession::InsertBreakpointAtSourcePositionResult> DebugSession::insert_breakpoint(String const& filename, size_t line_number)
 {
-    auto address_and_source_position = get_address_from_source_position(file_name, line_number);
+    auto address_and_source_position = get_address_from_source_position(filename, line_number);
     if (!address_and_source_position.has_value())
         return {};
 
@@ -411,8 +400,8 @@ Optional<DebugSession::InsertBreakpointAtSourcePositionResult> DebugSession::ins
 
 void DebugSession::update_loaded_libs()
 {
-    auto file = Core::File::construct(String::format("/proc/%u/vm", m_debuggee_pid));
-    bool rc = file->open(Core::IODevice::ReadOnly);
+    auto file = Core::File::construct(String::formatted("/proc/{}/vm", m_debuggee_pid));
+    bool rc = file->open(Core::OpenMode::ReadOnly);
     VERIFY(rc);
 
     auto file_contents = file->read_all();
@@ -420,19 +409,19 @@ void DebugSession::update_loaded_libs()
     VERIFY(json.has_value());
 
     auto vm_entries = json.value().as_array();
-    Regex<PosixExtended> re("(.+): \\.text");
+    Regex<PosixExtended> segment_name_re("(.+): ");
 
-    auto get_path_to_object = [&re](const String& vm_name) -> Optional<String> {
+    auto get_path_to_object = [&segment_name_re](String const& vm_name) -> Optional<String> {
         if (vm_name == "/usr/lib/Loader.so")
             return vm_name;
         RegexResult result;
-        auto rc = re.search(vm_name, result);
+        auto rc = segment_name_re.search(vm_name, result);
         if (!rc)
             return {};
-        auto lib_name = result.capture_group_matches.at(0).at(0).view.u8view().to_string();
+        auto lib_name = result.capture_group_matches.at(0).at(0).view.string_view().to_string();
         if (lib_name.starts_with("/"))
             return lib_name;
-        return String::format("/usr/lib/%s", lib_name.characters());
+        return String::formatted("/usr/lib/{}", lib_name);
     };
 
     vm_entries.for_each([&](auto& entry) {
@@ -445,22 +434,22 @@ void DebugSession::update_loaded_libs()
 
         String lib_name = object_path.value();
         if (lib_name.ends_with(".so"))
-            lib_name = LexicalPath(object_path.value()).basename();
+            lib_name = LexicalPath::basename(object_path.value());
 
-        // FIXME: DebugInfo currently cannot parse the debug information of libgcc_s.so
-        if (lib_name == "libgcc_s.so")
+        FlatPtr base_address = entry.as_object().get("address").to_addr();
+        if (auto it = m_loaded_libraries.find(lib_name); it != m_loaded_libraries.end()) {
+            // We expect the VM regions to be sorted by address.
+            VERIFY(base_address >= it->value->base_address);
             return IterationDecision::Continue;
+        }
 
-        if (m_loaded_libraries.contains(lib_name))
-            return IterationDecision::Continue;
-
-        auto file_or_error = MappedFile ::map(object_path.value());
+        auto file_or_error = MappedFile::map(object_path.value());
         if (file_or_error.is_error())
             return IterationDecision::Continue;
 
-        FlatPtr base_address = entry.as_object().get("address").as_u32();
-        auto debug_info = make<DebugInfo>(make<ELF::Image>(file_or_error.value()->bytes()), m_source_root, base_address);
-        auto lib = make<LoadedLibrary>(lib_name, file_or_error.release_value(), move(debug_info), base_address);
+        auto image = make<ELF::Image>(file_or_error.value()->bytes());
+        auto debug_info = make<DebugInfo>(*image, m_source_root, base_address);
+        auto lib = make<LoadedLibrary>(lib_name, file_or_error.release_value(), move(image), move(debug_info), base_address);
         m_loaded_libraries.set(lib_name, move(lib));
 
         return IterationDecision::Continue;
@@ -490,10 +479,10 @@ Optional<DebugSession::SymbolicationResult> DebugSession::symbolicate(FlatPtr ad
     return { { lib->name, symbol } };
 }
 
-Optional<DebugInfo::SourcePositionAndAddress> DebugSession::get_address_from_source_position(const String& file, size_t line) const
+Optional<DebugInfo::SourcePositionAndAddress> DebugSession::get_address_from_source_position(String const& file, size_t line) const
 {
     Optional<DebugInfo::SourcePositionAndAddress> result;
-    for_each_loaded_library([this, file, line, &result](auto& lib) {
+    for_each_loaded_library([file, line, &result](auto& lib) {
         // The loader contains its own definitions for LibC symbols, so we don't want to include it in the search.
         if (lib.name == "Loader.so")
             return IterationDecision::Continue;

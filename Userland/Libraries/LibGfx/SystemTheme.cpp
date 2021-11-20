@@ -1,27 +1,8 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibCore/ConfigFile.h>
@@ -33,12 +14,6 @@ namespace Gfx {
 static SystemTheme dummy_theme;
 static const SystemTheme* theme_page = &dummy_theme;
 static Core::AnonymousBuffer theme_buffer;
-
-const SystemTheme& current_system_theme()
-{
-    VERIFY(theme_page);
-    return *theme_page;
-}
 
 Core::AnonymousBuffer& current_system_theme_buffer()
 {
@@ -52,23 +27,27 @@ void set_system_theme(Core::AnonymousBuffer buffer)
     theme_page = theme_buffer.data<SystemTheme>();
 }
 
-Core::AnonymousBuffer load_system_theme(const String& path)
+Core::AnonymousBuffer load_system_theme(Core::ConfigFile const& file)
 {
-    auto file = Core::ConfigFile::open(path);
     auto buffer = Core::AnonymousBuffer::create_with_size(sizeof(SystemTheme));
 
     auto* data = buffer.data<SystemTheme>();
 
     auto get_color = [&](auto& name) {
-        auto color_string = file->read_entry("Colors", name);
+        auto color_string = file.read_entry("Colors", name);
         auto color = Color::from_string(color_string);
         if (!color.has_value())
             return Color(Color::Black);
         return color.value();
     };
 
+    auto get_flag = [&](auto& name) {
+        auto flag_string = file.read_entry("Flags", name);
+        return flag_string.equals_ignoring_case("true");
+    };
+
     auto get_metric = [&](auto& name, auto role) {
-        int metric = file->read_num_entry("Metrics", name, -1);
+        int metric = file.read_num_entry("Metrics", name, -1);
         if (metric == -1) {
             switch (role) {
             case (int)MetricRole::TitleHeight:
@@ -86,7 +65,7 @@ Core::AnonymousBuffer load_system_theme(const String& path)
     };
 
     auto get_path = [&](auto& name, auto role, bool allow_empty) {
-        auto path = file->read_entry("Paths", name);
+        auto path = file.read_entry("Paths", name);
         if (path.is_empty()) {
             switch (role) {
             case (int)PathRole::TitleButtonIcons:
@@ -104,12 +83,17 @@ Core::AnonymousBuffer load_system_theme(const String& path)
     ENUMERATE_COLOR_ROLES(__ENUMERATE_COLOR_ROLE)
 #undef __ENUMERATE_COLOR_ROLE
 
-#define DO_METRIC(x) \
-    data->metric[(int)MetricRole::x] = get_metric(#x, (int)MetricRole::x)
+#undef __ENUMERATE_FLAG_ROLE
+#define __ENUMERATE_FLAG_ROLE(role) \
+    data->flag[(int)FlagRole::role] = get_flag(#role);
+    ENUMERATE_FLAG_ROLES(__ENUMERATE_FLAG_ROLE)
+#undef __ENUMERATE_FLAG_ROLE
 
-    DO_METRIC(TitleHeight);
-    DO_METRIC(TitleButtonWidth);
-    DO_METRIC(TitleButtonHeight);
+#undef __ENUMERATE_METRIC_ROLE
+#define __ENUMERATE_METRIC_ROLE(role) \
+    data->metric[(int)MetricRole::role] = get_metric(#role, (int)MetricRole::role);
+    ENUMERATE_METRIC_ROLES(__ENUMERATE_METRIC_ROLE)
+#undef __ENUMERATE_METRIC_ROLE
 
 #define DO_PATH(x, allow_empty)                                                                                  \
     do {                                                                                                         \
@@ -126,6 +110,11 @@ Core::AnonymousBuffer load_system_theme(const String& path)
     DO_PATH(TooltipShadow, true);
 
     return buffer;
+}
+
+Core::AnonymousBuffer load_system_theme(String const& path)
+{
+    return load_system_theme(Core::ConfigFile::open(path));
 }
 
 }

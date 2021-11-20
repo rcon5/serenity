@@ -1,82 +1,120 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Jakob-Niklas See <git@nwex.de>
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "PreviewWidget.h"
+#include <Applications/ThemeEditor/ThemeEditorGML.h>
+#include <LibCore/ArgsParser.h>
+#include <LibCore/ConfigFile.h>
+#include <LibFileSystemAccessClient/Client.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
+#include <LibGUI/Button.h>
 #include <LibGUI/ColorInput.h>
 #include <LibGUI/ComboBox.h>
+#include <LibGUI/FilePicker.h>
 #include <LibGUI/Icon.h>
-#include <LibGUI/Model.h>
+#include <LibGUI/ItemListModel.h>
+#include <LibGUI/Menu.h>
+#include <LibGUI/Menubar.h>
+#include <LibGUI/SpinBox.h>
+#include <LibGUI/TextBox.h>
 #include <LibGUI/Window.h>
 #include <unistd.h>
 
-class ColorRoleModel final : public GUI::Model {
+class ColorRoleModel final : public GUI::ItemListModel<Gfx::ColorRole> {
 public:
-    virtual int row_count(const GUI::ModelIndex&) const { return m_color_roles.size(); }
-    virtual int column_count(const GUI::ModelIndex&) const { return 1; }
-    virtual GUI::Variant data(const GUI::ModelIndex& index, GUI::ModelRole role = GUI::ModelRole::Display) const
+    explicit ColorRoleModel(const Vector<Gfx::ColorRole>& data)
+        : ItemListModel<Gfx::ColorRole>(data)
+    {
+    }
+
+    virtual GUI::Variant data(GUI::ModelIndex const& index, GUI::ModelRole role) const override
     {
         if (role == GUI::ModelRole::Display)
-            return Gfx::to_string(m_color_roles[(size_t)index.row()]);
-        return {};
-    }
-    virtual void update() { did_update(); }
+            return Gfx::to_string(m_data[(size_t)index.row()]);
+        if (role == GUI::ModelRole::Custom)
+            return m_data[(size_t)index.row()];
 
-    explicit ColorRoleModel(const Vector<Gfx::ColorRole>& color_roles)
-        : m_color_roles(color_roles)
+        return ItemListModel::data(index, role);
+    }
+};
+
+class MetricRoleModel final : public GUI::ItemListModel<Gfx::MetricRole> {
+public:
+    explicit MetricRoleModel(Vector<Gfx::MetricRole> const& data)
+        : ItemListModel<Gfx::MetricRole>(data)
     {
     }
 
-    Gfx::ColorRole color_role(const GUI::ModelIndex& index) const
+    virtual GUI::Variant data(GUI::ModelIndex const& index, GUI::ModelRole role) const override
     {
-        return m_color_roles[index.row()];
+        if (role == GUI::ModelRole::Display)
+            return Gfx::to_string(static_cast<Gfx::MetricRole>(m_data[(size_t)index.row()]));
+        if (role == GUI::ModelRole::Custom)
+            return m_data[(size_t)index.row()];
+
+        return ItemListModel::data(index, role);
+    }
+};
+
+class PathRoleModel final : public GUI::ItemListModel<Gfx::PathRole> {
+public:
+    explicit PathRoleModel(Vector<Gfx::PathRole> const& data)
+        : ItemListModel<Gfx::PathRole>(data)
+    {
     }
 
-    Gfx::ColorRole color_role(size_t index) const
+    virtual GUI::Variant data(GUI::ModelIndex const& index, GUI::ModelRole role) const override
     {
-        return m_color_roles[index];
-    }
+        if (role == GUI::ModelRole::Display)
+            return Gfx::to_string(static_cast<Gfx::PathRole>(m_data[(size_t)index.row()]));
+        if (role == GUI::ModelRole::Custom)
+            return m_data[(size_t)index.row()];
 
-private:
-    const Vector<Gfx::ColorRole>& m_color_roles;
+        return ItemListModel::data(index, role);
+    }
 };
 
 int main(int argc, char** argv)
 {
-
-    if (pledge("stdio recvfd sendfd thread rpath accept cpath wpath unix fattr", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd thread rpath cpath wpath unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
     auto app = GUI::Application::construct(argc, argv);
 
-    if (pledge("stdio recvfd sendfd thread rpath accept", nullptr) < 0) {
+    char const* file_to_edit = nullptr;
+
+    Core::ArgsParser parser;
+    parser.add_positional_argument(file_to_edit, "Theme file to edit", "file", Core::ArgsParser::Required::No);
+    parser.parse(argc, argv);
+
+    Optional<String> path = {};
+
+    if (file_to_edit) {
+        path = Core::File::absolute_path(file_to_edit);
+        if (Core::File::exists(*path)) {
+            dbgln("unveil for: {}", *path);
+            if (unveil(path->characters(), "r") < 0) {
+                perror("unveil");
+                return 1;
+            }
+        }
+    }
+
+    if (pledge("stdio recvfd sendfd thread rpath unix", nullptr) < 0) {
         perror("pledge");
+        return 1;
+    }
+
+    if (unveil("/tmp/portal/filesystemaccess", "rw") < 0) {
+        perror("unveil");
         return 1;
     }
 
@@ -92,46 +130,168 @@ int main(int argc, char** argv)
 
     auto app_icon = GUI::Icon::default_icon("app-theme-editor");
 
-    Gfx::Palette preview_palette = app->palette();
+    Gfx::Palette startup_preview_palette = file_to_edit ? Gfx::Palette(Gfx::PaletteImpl::create_with_anonymous_buffer(Gfx::load_system_theme(*path))) : app->palette();
 
     auto window = GUI::Window::construct();
-    auto& main_widget = window->set_main_widget<GUI::Widget>();
-    main_widget.set_fill_with_background_color(true);
-    main_widget.set_layout<GUI::VerticalBoxLayout>();
-
-    auto& preview_widget = main_widget.add<ThemeEditor::PreviewWidget>(app->palette());
-    preview_widget.set_fixed_size(480, 360);
-
-    auto& horizontal_container = main_widget.add<GUI::Widget>();
-    horizontal_container.set_layout<GUI::HorizontalBoxLayout>();
-    horizontal_container.set_fixed_size(480, 20);
-
-    auto& combo_box = horizontal_container.add<GUI::ComboBox>();
-    auto& color_input = horizontal_container.add<GUI::ColorInput>();
 
     Vector<Gfx::ColorRole> color_roles;
 #define __ENUMERATE_COLOR_ROLE(role) color_roles.append(Gfx::ColorRole::role);
     ENUMERATE_COLOR_ROLES(__ENUMERATE_COLOR_ROLE)
 #undef __ENUMERATE_COLOR_ROLE
 
-    combo_box.set_only_allow_values_from_model(true);
-    combo_box.set_model(adopt(*new ColorRoleModel(color_roles)));
-    combo_box.on_change = [&](auto&, auto& index) {
-        auto role = static_cast<const ColorRoleModel*>(index.model())->color_role(index);
-        color_input.set_color(preview_palette.color(role));
-    };
+    Vector<Gfx::MetricRole> metric_roles;
+#define __ENUMERATE_METRIC_ROLE(role) metric_roles.append(Gfx::MetricRole::role);
+    ENUMERATE_METRIC_ROLES(__ENUMERATE_METRIC_ROLE)
+#undef __ENUMERATE_METRIC_ROLE
 
-    combo_box.set_selected_index((size_t)Gfx::ColorRole::Window - 1);
+    Vector<Gfx::PathRole> path_roles;
+#define __ENUMERATE_PATH_ROLE(role) path_roles.append(Gfx::PathRole::role);
+    ENUMERATE_PATH_ROLES(__ENUMERATE_PATH_ROLE)
+#undef __ENUMERATE_PATH_ROLE
+
+    auto& main_widget = window->set_main_widget<GUI::Widget>();
+    main_widget.load_from_gml(theme_editor_gml);
+
+    auto& preview_widget = main_widget.find_descendant_of_type_named<GUI::Frame>("preview_frame")
+                               ->add<ThemeEditor::PreviewWidget>(startup_preview_palette);
+    auto& color_combo_box = *main_widget.find_descendant_of_type_named<GUI::ComboBox>("color_combo_box");
+    auto& color_input = *main_widget.find_descendant_of_type_named<GUI::ColorInput>("color_input");
+    auto& metric_combo_box = *main_widget.find_descendant_of_type_named<GUI::ComboBox>("metric_combo_box");
+    auto& metric_input = *main_widget.find_descendant_of_type_named<GUI::SpinBox>("metric_input");
+    auto& path_combo_box = *main_widget.find_descendant_of_type_named<GUI::ComboBox>("path_combo_box");
+    auto& path_input = *main_widget.find_descendant_of_type_named<GUI::TextBox>("path_input");
+    auto& path_picker_button = *main_widget.find_descendant_of_type_named<GUI::Button>("path_picker_button");
+
+    color_combo_box.set_model(adopt_ref(*new ColorRoleModel(color_roles)));
+    color_combo_box.on_change = [&](auto&, auto& index) {
+        auto role = index.model()->data(index, GUI::ModelRole::Custom).to_color_role();
+        color_input.set_color(preview_widget.preview_palette().color(role));
+    };
+    color_combo_box.set_selected_index((size_t)Gfx::ColorRole::Window - 1);
 
     color_input.on_change = [&] {
-        auto role = static_cast<const ColorRoleModel*>(combo_box.model())->color_role(combo_box.selected_index());
+        auto role = color_combo_box.model()->index(color_combo_box.selected_index()).data(GUI::ModelRole::Custom).to_color_role();
+        auto preview_palette = preview_widget.preview_palette();
         preview_palette.set_color(role, color_input.color());
         preview_widget.set_preview_palette(preview_palette);
     };
+    color_input.set_color(startup_preview_palette.color(Gfx::ColorRole::Window));
+
+    metric_combo_box.set_model(adopt_ref(*new MetricRoleModel(metric_roles)));
+    metric_combo_box.on_change = [&](auto&, auto& index) {
+        auto role = index.model()->data(index, GUI::ModelRole::Custom).to_metric_role();
+        metric_input.set_value(preview_widget.preview_palette().metric(role), GUI::AllowCallback::No);
+    };
+    metric_combo_box.set_selected_index((size_t)Gfx::MetricRole::TitleButtonHeight - 1);
+
+    metric_input.on_change = [&](int value) {
+        auto role = metric_combo_box.model()->index(metric_combo_box.selected_index()).data(GUI::ModelRole::Custom).to_metric_role();
+        auto preview_palette = preview_widget.preview_palette();
+        preview_palette.set_metric(role, value);
+        preview_widget.set_preview_palette(preview_palette);
+    };
+    metric_input.set_value(startup_preview_palette.metric(Gfx::MetricRole::TitleButtonHeight), GUI::AllowCallback::No);
+
+    path_combo_box.set_model(adopt_ref(*new PathRoleModel(path_roles)));
+    path_combo_box.on_change = [&](auto&, auto& index) {
+        auto role = index.model()->data(index, GUI::ModelRole::Custom).to_path_role();
+        path_input.set_text(preview_widget.preview_palette().path(role));
+    };
+    path_combo_box.set_selected_index((size_t)Gfx::PathRole::TitleButtonIcons - 1);
+
+    path_input.on_change = [&] {
+        auto role = path_combo_box.model()->index(path_combo_box.selected_index()).data(GUI::ModelRole::Custom).to_path_role();
+        auto preview_palette = preview_widget.preview_palette();
+        preview_palette.set_path(role, path_input.text());
+        preview_widget.set_preview_palette(preview_palette);
+    };
+    path_input.set_text(startup_preview_palette.path(Gfx::PathRole::TitleButtonIcons));
+
+    path_picker_button.on_click = [&](auto) {
+        // FIXME: Open at the path_input location. Right now that's panicking the kernel though! :^(
+        auto role = path_combo_box.model()->index(path_combo_box.selected_index()).data(GUI::ModelRole::Custom).to_path_role();
+        bool open_folder = (role == Gfx::PathRole::TitleButtonIcons);
+        auto window_title = String::formatted(open_folder ? "Select {} folder" : "Select {} file", path_combo_box.text());
+        auto result = GUI::FilePicker::get_open_filepath(window, window_title, "/res/icons", open_folder);
+        if (!result.has_value())
+            return;
+        path_input.set_text(*result);
+    };
+
+    auto& file_menu = window->add_menu("&File");
+
+    auto update_window_title = [&] {
+        window->set_title(String::formatted("{} - Theme Editor", path.value_or("Untitled")));
+    };
+
+    preview_widget.on_theme_load_from_file = [&](String const& new_path) {
+        path = new_path;
+        update_window_title();
+
+        auto selected_color_role = color_combo_box.model()->index(color_combo_box.selected_index()).data(GUI::ModelRole::Custom).to_color_role();
+        color_input.set_color(preview_widget.preview_palette().color(selected_color_role));
+
+        auto selected_metric_role = metric_combo_box.model()->index(metric_combo_box.selected_index()).data(GUI::ModelRole::Custom).to_metric_role();
+        metric_input.set_value(preview_widget.preview_palette().metric(selected_metric_role), GUI::AllowCallback::No);
+
+        auto selected_path_role = path_combo_box.model()->index(path_combo_box.selected_index()).data(GUI::ModelRole::Custom).to_path_role();
+        path_input.set_text(preview_widget.preview_palette().path(selected_path_role));
+    };
+
+    auto save_to_result = [&](FileSystemAccessClient::Result const& result) {
+        if (result.error != 0)
+            return;
+
+        path = result.chosen_file;
+        update_window_title();
+
+        auto theme = Core::ConfigFile::open(*result.chosen_file, *result.fd);
+        for (auto role : color_roles) {
+            theme->write_entry("Colors", to_string(role), preview_widget.preview_palette().color(role).to_string());
+        }
+
+        for (auto role : metric_roles) {
+            theme->write_num_entry("Metrics", to_string(role), preview_widget.preview_palette().metric(role));
+        }
+
+        for (auto role : path_roles) {
+            theme->write_entry("Paths", to_string(role), preview_widget.preview_palette().path(role));
+        }
+
+        theme->sync();
+    };
+
+    file_menu.add_action(GUI::CommonActions::make_open_action([&](auto&) {
+        auto result = FileSystemAccessClient::Client::the().open_file(window->window_id(), "Select theme file", "/res/themes");
+        if (result.error != 0)
+            return;
+
+        preview_widget.set_theme_from_file(*result.chosen_file, *result.fd);
+    }));
+
+    file_menu.add_action(GUI::CommonActions::make_save_action([&](auto&) {
+        if (path.has_value()) {
+            save_to_result(FileSystemAccessClient::Client::the().request_file(window->window_id(), *path, Core::OpenMode::WriteOnly | Core::OpenMode::Truncate));
+        } else {
+            save_to_result(FileSystemAccessClient::Client::the().save_file(window->window_id(), "Theme", "ini"));
+        }
+    }));
+
+    file_menu.add_action(GUI::CommonActions::make_save_as_action([&](auto&) {
+        save_to_result(FileSystemAccessClient::Client::the().save_file(window->window_id(), "Theme", "ini"));
+    }));
+
+    file_menu.add_separator();
+    file_menu.add_action(GUI::CommonActions::make_quit_action([&](auto&) { app->quit(); }));
+
+    auto& help_menu = window->add_menu("&Help");
+    help_menu.add_action(GUI::CommonActions::make_about_action("Theme Editor", app_icon, window));
+
+    update_window_title();
 
     window->resize(480, 500);
+    window->set_resizable(false);
     window->show();
-    window->set_title("Theme Editor");
     window->set_icon(app_icon.bitmap_for_size(16));
     return app->exec();
 }

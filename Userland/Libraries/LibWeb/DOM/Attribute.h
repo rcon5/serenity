@@ -1,51 +1,49 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/FlyString.h>
+#include <AK/WeakPtr.h>
+#include <LibWeb/DOM/Node.h>
+#include <LibWeb/QualifiedName.h>
 
-namespace Web {
+namespace Web::DOM {
 
-class Attribute {
+// https://dom.spec.whatwg.org/#attr
+class Attribute final : public Node {
 public:
-    Attribute(const FlyString& name, const String& value)
-        : m_name(name)
-        , m_value(value)
-    {
-    }
+    using WrapperType = Bindings::AttributeWrapper;
 
-    const FlyString& name() const { return m_name; }
-    const String& value() const { return m_value; }
+    static NonnullRefPtr<Attribute> create(Document&, FlyString local_name, String value, Element const* = nullptr);
 
-    void set_value(const String& value) { m_value = value; }
+    virtual ~Attribute() override = default;
+
+    virtual FlyString node_name() const override { return name(); }
+
+    FlyString const& namespace_uri() const { return m_qualified_name.namespace_(); }
+    FlyString const& prefix() const { return m_qualified_name.prefix(); }
+    FlyString const& local_name() const { return m_qualified_name.local_name(); }
+    String const& name() const { return m_qualified_name.as_string(); }
+
+    String const& value() const { return m_value; }
+    void set_value(String value) { m_value = move(value); }
+
+    Element const* owner_element() const;
+    void set_owner_element(Element const* owner_element);
+
+    // Always returns true: https://dom.spec.whatwg.org/#dom-attr-specified
+    constexpr bool specified() const { return true; }
 
 private:
-    FlyString m_name;
+    Attribute(Document&, FlyString local_name, String value, Element const*);
+
+    QualifiedName m_qualified_name;
     String m_value;
+    WeakPtr<Element> m_owner_element;
 };
 
 }

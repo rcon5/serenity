@@ -1,45 +1,27 @@
 /*
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Badge.h>
 #include <AK/Debug.h>
+#include <AK/JsonObject.h>
 #include <LibGfx/Bitmap.h>
+#include <LibGfx/FontDatabase.h>
 #include <LibGfx/SystemTheme.h>
 #include <LibJS/Console.h>
 #include <LibJS/Heap/Heap.h>
 #include <LibJS/Interpreter.h>
 #include <LibJS/Parser.h>
-#include <LibJS/Runtime/VM.h>
 #include <LibWeb/Bindings/MainThreadVM.h>
 #include <LibWeb/Cookie/ParsedCookie.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Dump.h>
-#include <LibWeb/Layout/InitialContainingBlockBox.h>
+#include <LibWeb/Layout/InitialContainingBlock.h>
+#include <LibWeb/Loader/ContentFilter.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <LibWeb/Page/Frame.h>
+#include <LibWeb/Page/BrowsingContext.h>
 #include <WebContent/ClientConnection.h>
 #include <WebContent/PageHost.h>
 #include <WebContent/WebContentClientEndpoint.h>
@@ -78,77 +60,78 @@ const Web::Page& ClientConnection::page() const
     return m_page_host->page();
 }
 
-OwnPtr<Messages::WebContentServer::GreetResponse> ClientConnection::handle(const Messages::WebContentServer::Greet&)
+void ClientConnection::update_system_theme(const Core::AnonymousBuffer& theme_buffer)
 {
-    return make<Messages::WebContentServer::GreetResponse>();
-}
-
-void ClientConnection::handle(const Messages::WebContentServer::UpdateSystemTheme& message)
-{
-    Gfx::set_system_theme(message.theme_buffer());
-    auto impl = Gfx::PaletteImpl::create_with_anonymous_buffer(message.theme_buffer());
+    Gfx::set_system_theme(theme_buffer);
+    auto impl = Gfx::PaletteImpl::create_with_anonymous_buffer(theme_buffer);
     m_page_host->set_palette_impl(*impl);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::UpdateScreenRect& message)
+void ClientConnection::update_system_fonts(String const& default_font_query, String const& fixed_width_font_query)
 {
-    m_page_host->set_screen_rect(message.rect());
+    Gfx::FontDatabase::set_default_font_query(default_font_query);
+    Gfx::FontDatabase::set_fixed_width_font_query(fixed_width_font_query);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::LoadURL& message)
+void ClientConnection::update_screen_rects(const Vector<Gfx::IntRect>& rects, u32 main_screen)
 {
-    dbgln_if(SPAM_DEBUG, "handle: WebContentServer::LoadURL: url={}", message.url());
+    m_page_host->set_screen_rects(rects, main_screen);
+}
+
+void ClientConnection::load_url(const URL& url)
+{
+    dbgln_if(SPAM_DEBUG, "handle: WebContentServer::LoadURL: url={}", url);
 
     String process_name;
-    if (message.url().host().is_empty())
+    if (url.host().is_empty())
         process_name = "WebContent";
     else
-        process_name = String::formatted("WebContent: {}", message.url().host());
+        process_name = String::formatted("WebContent: {}", url.host());
 
     pthread_setname_np(pthread_self(), process_name.characters());
 
-    page().load(message.url());
+    page().load(url);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::LoadHTML& message)
+void ClientConnection::load_html(const String& html, const URL& url)
 {
-    dbgln_if(SPAM_DEBUG, "handle: WebContentServer::LoadHTML: html={}, url={}", message.html(), message.url());
-    page().load_html(message.html(), message.url());
+    dbgln_if(SPAM_DEBUG, "handle: WebContentServer::LoadHTML: html={}, url={}", html, url);
+    page().load_html(html, url);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::SetViewportRect& message)
+void ClientConnection::set_viewport_rect(const Gfx::IntRect& rect)
 {
-    dbgln_if(SPAM_DEBUG, "handle: WebContentServer::SetViewportRect: rect={}", message.rect());
-    m_page_host->set_viewport_rect(message.rect());
+    dbgln_if(SPAM_DEBUG, "handle: WebContentServer::SetViewportRect: rect={}", rect);
+    m_page_host->set_viewport_rect(rect);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::AddBackingStore& message)
+void ClientConnection::add_backing_store(i32 backing_store_id, const Gfx::ShareableBitmap& bitmap)
 {
-    m_backing_stores.set(message.backing_store_id(), *message.bitmap().bitmap());
+    m_backing_stores.set(backing_store_id, *bitmap.bitmap());
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::RemoveBackingStore& message)
+void ClientConnection::remove_backing_store(i32 backing_store_id)
 {
-    m_backing_stores.remove(message.backing_store_id());
+    m_backing_stores.remove(backing_store_id);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::Paint& message)
+void ClientConnection::paint(const Gfx::IntRect& content_rect, i32 backing_store_id)
 {
     for (auto& pending_paint : m_pending_paint_requests) {
-        if (pending_paint.bitmap_id == message.backing_store_id()) {
-            pending_paint.content_rect = message.content_rect();
+        if (pending_paint.bitmap_id == backing_store_id) {
+            pending_paint.content_rect = content_rect;
             return;
         }
     }
 
-    auto it = m_backing_stores.find(message.backing_store_id());
+    auto it = m_backing_stores.find(backing_store_id);
     if (it == m_backing_stores.end()) {
         did_misbehave("Client requested paint with backing store ID");
         return;
     }
 
     auto& bitmap = *it->value;
-    m_pending_paint_requests.append({ message.content_rect(), bitmap, message.backing_store_id() });
+    m_pending_paint_requests.append({ content_rect, bitmap, backing_store_id });
     m_paint_flush_timer->start();
 }
 
@@ -156,101 +139,221 @@ void ClientConnection::flush_pending_paint_requests()
 {
     for (auto& pending_paint : m_pending_paint_requests) {
         m_page_host->paint(pending_paint.content_rect, *pending_paint.bitmap);
-        post_message(Messages::WebContentClient::DidPaint(pending_paint.content_rect, pending_paint.bitmap_id));
+        async_did_paint(pending_paint.content_rect, pending_paint.bitmap_id);
     }
     m_pending_paint_requests.clear();
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::MouseDown& message)
+void ClientConnection::mouse_down(const Gfx::IntPoint& position, unsigned int button, [[maybe_unused]] unsigned int buttons, unsigned int modifiers)
 {
-    page().handle_mousedown(message.position(), message.button(), message.modifiers());
+    page().handle_mousedown(position, button, modifiers);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::MouseMove& message)
+void ClientConnection::mouse_move(const Gfx::IntPoint& position, [[maybe_unused]] unsigned int button, unsigned int buttons, unsigned int modifiers)
 {
-    page().handle_mousemove(message.position(), message.buttons(), message.modifiers());
+    page().handle_mousemove(position, buttons, modifiers);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::MouseUp& message)
+void ClientConnection::mouse_up(const Gfx::IntPoint& position, unsigned int button, [[maybe_unused]] unsigned int buttons, unsigned int modifiers)
 {
-    page().handle_mouseup(message.position(), message.button(), message.modifiers());
+    page().handle_mouseup(position, button, modifiers);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::MouseWheel& message)
+void ClientConnection::mouse_wheel(const Gfx::IntPoint& position, unsigned int button, [[maybe_unused]] unsigned int buttons, unsigned int modifiers, i32 wheel_delta)
 {
-    page().handle_mousewheel(message.position(), message.button(), message.modifiers(), message.wheel_delta());
+    page().handle_mousewheel(position, button, modifiers, wheel_delta);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::KeyDown& message)
+void ClientConnection::key_down(i32 key, unsigned int modifiers, u32 code_point)
 {
-    page().handle_keydown((KeyCode)message.key(), message.modifiers(), message.code_point());
+    page().handle_keydown((KeyCode)key, modifiers, code_point);
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::DebugRequest& message)
+void ClientConnection::key_up(i32 key, unsigned int modifiers, u32 code_point)
 {
-    if (message.request() == "dump-dom-tree") {
-        if (auto* doc = page().main_frame().document())
+    page().handle_keyup((KeyCode)key, modifiers, code_point);
+}
+
+void ClientConnection::debug_request(const String& request, const String& argument)
+{
+    if (request == "dump-dom-tree") {
+        if (auto* doc = page().top_level_browsing_context().active_document())
             Web::dump_tree(*doc);
     }
 
-    if (message.request() == "dump-layout-tree") {
-        if (auto* doc = page().main_frame().document()) {
+    if (request == "dump-layout-tree") {
+        if (auto* doc = page().top_level_browsing_context().active_document()) {
             if (auto* icb = doc->layout_node())
                 Web::dump_tree(*icb);
         }
     }
 
-    if (message.request() == "dump-style-sheets") {
-        if (auto* doc = page().main_frame().document()) {
+    if (request == "dump-style-sheets") {
+        if (auto* doc = page().top_level_browsing_context().active_document()) {
             for (auto& sheet : doc->style_sheets().sheets()) {
                 Web::dump_sheet(sheet);
             }
         }
     }
 
-    if (message.request() == "collect-garbage") {
+    if (request == "collect-garbage") {
         Web::Bindings::main_thread_vm().heap().collect_garbage(JS::Heap::CollectionType::CollectGarbage, true);
     }
 
-    if (message.request() == "set-line-box-borders") {
-        bool state = message.argument() == "on";
+    if (request == "set-line-box-borders") {
+        bool state = argument == "on";
         m_page_host->set_should_show_line_box_borders(state);
-        page().main_frame().set_needs_display(page().main_frame().viewport_rect());
+        page().top_level_browsing_context().set_needs_display(page().top_level_browsing_context().viewport_rect());
     }
 
-    if (message.request() == "clear-cache") {
+    if (request == "clear-cache") {
         Web::ResourceLoader::the().clear_cache();
     }
 
-    if (message.request() == "spoof-user-agent") {
-        Web::ResourceLoader::the().set_user_agent(message.argument());
+    if (request == "spoof-user-agent") {
+        Web::ResourceLoader::the().set_user_agent(argument);
+    }
+
+    if (request == "same-origin-policy") {
+        m_page_host->page().set_same_origin_policy_enabled(argument == "on");
     }
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::GetSource&)
+void ClientConnection::get_source()
 {
-    if (auto* doc = page().main_frame().document()) {
-        post_message(Messages::WebContentClient::DidGetSource(doc->url(), doc->source()));
+    if (auto* doc = page().top_level_browsing_context().active_document()) {
+        async_did_get_source(doc->url(), doc->source());
     }
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::JSConsoleInitialize&)
+void ClientConnection::inspect_dom_tree()
 {
-    if (auto* document = page().main_frame().document()) {
-        auto interpreter = document->interpreter().make_weak_ptr();
-        if (m_interpreter.ptr() == interpreter.ptr())
-            return;
-
-        m_interpreter = interpreter;
-        m_console_client = make<WebContentConsoleClient>(interpreter->global_object().console(), interpreter, *this);
-        interpreter->global_object().console().set_client(*m_console_client.ptr());
+    if (auto* doc = page().top_level_browsing_context().active_document()) {
+        async_did_get_dom_tree(doc->dump_dom_tree_as_json());
     }
 }
 
-void ClientConnection::handle(const Messages::WebContentServer::JSConsoleInput& message)
+Messages::WebContentServer::InspectDomNodeResponse ClientConnection::inspect_dom_node(i32 node_id)
+{
+    if (auto* doc = page().top_level_browsing_context().active_document()) {
+        Web::DOM::Node* node = Web::DOM::Node::from_id(node_id);
+        if (!node || (&node->document() != doc)) {
+            doc->set_inspected_node(nullptr);
+            return { false, "", "" };
+        }
+
+        doc->set_inspected_node(node);
+
+        if (node->is_element()) {
+            auto& element = verify_cast<Web::DOM::Element>(*node);
+            if (!element.specified_css_values())
+                return { false, "", "" };
+
+            auto serialize_json = [](Web::CSS::StyleProperties const& properties) -> String {
+                StringBuilder builder;
+
+                JsonObjectSerializer serializer(builder);
+                properties.for_each_property([&](auto property_id, auto& value) {
+                    serializer.add(Web::CSS::string_from_property_id(property_id), value.to_string());
+                });
+                serializer.finish();
+
+                return builder.to_string();
+            };
+
+            String specified_values_json = serialize_json(*element.specified_css_values());
+            String computed_values_json = serialize_json(element.computed_style());
+            return { true, specified_values_json, computed_values_json };
+        }
+    }
+
+    return { false, "", "" };
+}
+
+Messages::WebContentServer::GetHoveredNodeIdResponse ClientConnection::get_hovered_node_id()
+{
+    if (auto* document = page().top_level_browsing_context().active_document()) {
+        auto hovered_node = document->hovered_node();
+        if (hovered_node)
+            return hovered_node->id();
+    }
+    return (i32)0;
+}
+
+void ClientConnection::initialize_js_console(Badge<PageHost>)
+{
+    auto* document = page().top_level_browsing_context().active_document();
+    auto interpreter = document->interpreter().make_weak_ptr();
+    if (m_interpreter.ptr() == interpreter.ptr())
+        return;
+
+    m_interpreter = interpreter;
+    m_console_client = make<WebContentConsoleClient>(interpreter->global_object().console(), interpreter, *this);
+    interpreter->global_object().console().set_client(*m_console_client.ptr());
+}
+
+void ClientConnection::js_console_input(const String& js_source)
 {
     if (m_console_client)
-        m_console_client->handle_input(message.js_source());
+        m_console_client->handle_input(js_source);
+}
+
+void ClientConnection::run_javascript(String const& js_source)
+{
+    if (!page().top_level_browsing_context().active_document())
+        return;
+
+    auto& interpreter = page().top_level_browsing_context().active_document()->interpreter();
+
+    auto parser = JS::Parser(JS::Lexer(js_source));
+    auto program = parser.parse_program();
+    interpreter.run(interpreter.global_object(), *program);
+
+    if (interpreter.vm().exception()) {
+        dbgln("Exception :(");
+        interpreter.vm().clear_exception();
+    }
+}
+
+void ClientConnection::js_console_request_messages(i32 start_index)
+{
+    if (m_console_client)
+        m_console_client->send_messages(start_index);
+}
+
+Messages::WebContentServer::GetSelectedTextResponse ClientConnection::get_selected_text()
+{
+    return page().focused_context().selected_text();
+}
+
+void ClientConnection::select_all()
+{
+    page().focused_context().select_all();
+    page().client().page_did_change_selection();
+}
+
+Messages::WebContentServer::DumpLayoutTreeResponse ClientConnection::dump_layout_tree()
+{
+    auto* document = page().top_level_browsing_context().active_document();
+    if (!document)
+        return String { "(no DOM tree)" };
+    auto* layout_root = document->layout_node();
+    if (!layout_root)
+        return String { "(no layout tree)" };
+    StringBuilder builder;
+    Web::dump_tree(builder, *layout_root);
+    return builder.to_string();
+}
+
+void ClientConnection::set_content_filters(Vector<String> const& filters)
+{
+    for (auto& filter : filters)
+        Web::ContentFilter::the().add_pattern(filter);
+}
+
+void ClientConnection::set_preferred_color_scheme(Web::CSS::PreferredColorScheme const& color_scheme)
+{
+    m_page_host->set_preferred_color_scheme(color_scheme);
 }
 
 }

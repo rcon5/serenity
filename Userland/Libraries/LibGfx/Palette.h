@@ -1,27 +1,8 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -50,6 +31,12 @@ public:
         return Color::from_rgba(theme().color[(int)role]);
     }
 
+    bool flag(FlagRole role) const
+    {
+        VERIFY((int)role < (int)FlagRole::__Count);
+        return theme().flag[(int)role];
+    }
+
     int metric(MetricRole) const;
     String path(PathRole) const;
     const SystemTheme& theme() const { return *m_theme_buffer.data<SystemTheme>(); }
@@ -68,6 +55,7 @@ public:
     explicit Palette(const PaletteImpl&);
     ~Palette();
 
+    Color accent() const { return color(ColorRole::Accent); }
     Color window() const { return color(ColorRole::Window); }
     Color window_text() const { return color(ColorRole::WindowText); }
     Color selection() const { return color(ColorRole::Selection); }
@@ -112,6 +100,8 @@ public:
     Color hover_highlight() const { return color(ColorRole::HoverHighlight); }
     Color rubber_band_fill() const { return color(ColorRole::RubberBandFill); }
     Color rubber_band_border() const { return color(ColorRole::RubberBandBorder); }
+    Color gutter() const { return color(ColorRole::Gutter); }
+    Color gutter_border() const { return color(ColorRole::Gutter); }
     Color ruler() const { return color(ColorRole::Ruler); }
     Color ruler_border() const { return color(ColorRole::RulerBorder); }
     Color ruler_active_text() const { return color(ColorRole::RulerActiveText); }
@@ -135,6 +125,8 @@ public:
     Color syntax_preprocessor_statement() const { return color(ColorRole::SyntaxPreprocessorStatement); }
     Color syntax_preprocessor_value() const { return color(ColorRole::SyntaxPreprocessorValue); }
 
+    bool is_dark() const { return flag(FlagRole::IsDark); }
+
     int window_title_height() const { return metric(MetricRole::TitleHeight); }
     int window_title_button_width() const { return metric(MetricRole::TitleButtonWidth); }
     int window_title_button_height() const { return metric(MetricRole::TitleButtonHeight); }
@@ -147,10 +139,12 @@ public:
     String tooltip_shadow_path() const { return path(PathRole::TooltipShadow); }
 
     Color color(ColorRole role) const { return m_impl->color(role); }
+    bool flag(FlagRole role) const { return m_impl->flag(role); }
     int metric(MetricRole role) const { return m_impl->metric(role); }
     String path(PathRole role) const { return m_impl->path(role); }
 
     void set_color(ColorRole, Color);
+    void set_flag(FlagRole, bool);
     void set_metric(MetricRole, int);
     void set_path(PathRole, String);
 

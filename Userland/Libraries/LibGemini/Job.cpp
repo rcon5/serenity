@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2020, The SerenityOS developers.
- * All rights reserved.
+ * Copyright (c) 2020, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Debug.h>
@@ -73,7 +53,7 @@ void Job::on_socket_connected()
         }
         bool success = write(raw_request);
         if (!success)
-            deferred_invoke([this](auto&) { did_fail(Core::NetworkJob::Error::TransmissionFailed); });
+            deferred_invoke([this] { did_fail(Core::NetworkJob::Error::TransmissionFailed); });
     });
     register_on_ready_to_read([this] {
         if (is_cancelled())
@@ -85,20 +65,20 @@ void Job::on_socket_connected()
 
             auto line = read_line(PAGE_SIZE);
             if (line.is_null()) {
-                fprintf(stderr, "Job: Expected status line\n");
-                return deferred_invoke([this](auto&) { did_fail(Core::NetworkJob::Error::TransmissionFailed); });
+                warnln("Job: Expected status line");
+                return deferred_invoke([this] { did_fail(Core::NetworkJob::Error::TransmissionFailed); });
             }
 
             auto parts = line.split_limit(' ', 2);
             if (parts.size() != 2) {
                 warnln("Job: Expected 2-part status line, got '{}'", line);
-                return deferred_invoke([this](auto&) { did_fail(Core::NetworkJob::Error::ProtocolFailed); });
+                return deferred_invoke([this] { did_fail(Core::NetworkJob::Error::ProtocolFailed); });
             }
 
             auto status = parts[0].to_uint();
             if (!status.has_value()) {
-                fprintf(stderr, "Job: Expected numeric status code\n");
-                return deferred_invoke([this](auto&) { did_fail(Core::NetworkJob::Error::ProtocolFailed); });
+                warnln("Job: Expected numeric status code");
+                return deferred_invoke([this] { did_fail(Core::NetworkJob::Error::ProtocolFailed); });
             }
 
             m_status = status.value();
@@ -117,8 +97,8 @@ void Job::on_socket_connected()
             } else if (m_status >= 60 && m_status < 70) {
                 m_state = State::InBody;
             } else {
-                fprintf(stderr, "Job: Expected status between 10 and 69; instead got %d\n", m_status);
-                return deferred_invoke([this](auto&) { did_fail(Core::NetworkJob::Error::ProtocolFailed); });
+                warnln("Job: Expected status between 10 and 69; instead got {}", m_status);
+                return deferred_invoke([this] { did_fail(Core::NetworkJob::Error::ProtocolFailed); });
             }
 
             return;
@@ -130,14 +110,14 @@ void Job::on_socket_connected()
             auto read_size = 64 * KiB;
 
             auto payload = receive(read_size);
-            if (!payload) {
+            if (payload.is_empty()) {
                 if (eof()) {
                     finish_up();
                     return IterationDecision::Break;
                 }
 
                 if (should_fail_on_empty_payload()) {
-                    deferred_invoke([this](auto&) { did_fail(Core::NetworkJob::Error::ProtocolFailed); });
+                    deferred_invoke([this] { did_fail(Core::NetworkJob::Error::ProtocolFailed); });
                     return IterationDecision::Break;
                 }
             }
@@ -146,15 +126,13 @@ void Job::on_socket_connected()
             m_received_size += payload.size();
             flush_received_buffers();
 
-            deferred_invoke([this](auto&) { did_progress({}, m_received_size); });
+            deferred_invoke([this] { did_progress({}, m_received_size); });
 
             return IterationDecision::Continue;
         });
 
         if (!is_established()) {
-#if JOB_DEBUG
-            dbgln("Connection appears to have closed, finishing up");
-#endif
+            dbgln_if(JOB_DEBUG, "Connection appears to have closed, finishing up");
             finish_up();
         }
     });
@@ -169,14 +147,14 @@ void Job::finish_up()
         // before we can actually call `did_finish`. in a normal flow, this should
         // never be hit since the client is reading as we are writing, unless there
         // are too many concurrent downloads going on.
-        deferred_invoke([this](auto&) {
+        deferred_invoke([this] {
             finish_up();
         });
         return;
     }
 
     auto response = GeminiResponse::create(m_status, m_meta);
-    deferred_invoke([this, response](auto&) {
+    deferred_invoke([this, response] {
         did_finish(move(response));
     });
 }

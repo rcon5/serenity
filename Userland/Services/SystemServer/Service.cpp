@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Service.h"
@@ -34,9 +14,6 @@
 #include <LibCore/File.h>
 #include <LibCore/Socket.h>
 #include <fcntl.h>
-#include <grp.h>
-#include <libgen.h>
-#include <pwd.h>
 #include <sched.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
@@ -154,6 +131,11 @@ void Service::activate()
 
 void Service::spawn(int socket_fd)
 {
+    if (!Core::File::exists(m_executable_path)) {
+        dbgln("{}: binary \"{}\" does not exist, skipping service.", name(), m_executable_path);
+        return;
+    }
+
     dbgln_if(SERVICE_DEBUG, "Spawning {}", name());
 
     m_run_timer.start();
@@ -216,7 +198,7 @@ void Service::spawn(int socket_fd)
             VERIFY(m_sockets.size() == 1);
 
             int fd = dup(socket_fd);
-            builder.appendf("%s:%d", m_sockets[0].path.characters(), fd);
+            builder.appendff("{}:{}", m_sockets[0].path, fd);
         } else {
             // We were spawned as a regular process, so dup every socket for this
             // service and let the service know via SOCKET_TAKEOVER.
@@ -225,8 +207,8 @@ void Service::spawn(int socket_fd)
 
                 int new_fd = dup(socket.fd);
                 if (i != 0)
-                    builder.append(" ");
-                builder.appendf("%s:%d", socket.path.characters(), new_fd);
+                    builder.append(' ');
+                builder.appendff("{}:{}", socket.path, new_fd);
             }
         }
 
@@ -254,7 +236,8 @@ void Service::spawn(int socket_fd)
         argv[m_extra_arguments.size() + 1] = nullptr;
 
         rc = execv(argv[0], argv);
-        perror("exec");
+        warnln("Failed to execv({}, ...): {}", argv[0], strerror(errno));
+        dbgln("Failed to execv({}, ...): {}", argv[0], strerror(errno));
         VERIFY_NOT_REACHED();
     } else if (!m_multi_instance) {
         // We are the parent.
@@ -331,7 +314,7 @@ Service::Service(const Core::ConfigFile& config, const StringView& name)
 
     m_working_directory = config.read_entry(name, "WorkingDirectory");
     m_environment = config.read_entry(name, "Environment").split(' ');
-    m_boot_modes = config.read_entry(name, "BootModes", "graphical").split(',');
+    m_system_modes = config.read_entry(name, "SystemModes", "graphical").split(',');
     m_multi_instance = config.read_bool_entry(name, "MultiInstance");
     m_accept_socket_connections = config.read_bool_entry(name, "AcceptSocketConnections");
 
@@ -383,14 +366,14 @@ void Service::save_to(JsonObject& json)
         extra_args.append(arg);
     json.set("extra_arguments", move(extra_args));
 
-    JsonArray boot_modes;
-    for (String& mode : m_boot_modes)
-        boot_modes.append(mode);
-    json.set("boot_modes", boot_modes);
+    JsonArray system_modes;
+    for (String& mode : m_system_modes)
+        system_modes.append(mode);
+    json.set("system_modes", system_modes);
 
     JsonArray environment;
     for (String& env : m_environment)
-        boot_modes.append(env);
+        system_modes.append(env);
     json.set("environment", environment);
 
     JsonArray sockets;
@@ -422,6 +405,6 @@ void Service::save_to(JsonObject& json)
 
 bool Service::is_enabled() const
 {
-    extern String g_boot_mode;
-    return m_boot_modes.contains_slow(g_boot_mode);
+    extern String g_system_mode;
+    return m_system_modes.contains_slow(g_system_mode);
 }

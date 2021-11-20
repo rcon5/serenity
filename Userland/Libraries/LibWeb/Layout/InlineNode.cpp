@@ -1,34 +1,19 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGfx/Painter.h>
+#include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
-#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/InlineFormattingContext.h>
 #include <LibWeb/Layout/InlineNode.h>
+#include <LibWeb/Painting/BackgroundPainting.h>
+#include <LibWeb/Painting/BorderPainting.h>
+#include <LibWeb/Painting/ShadowPainting.h>
 
 namespace Web::Layout {
 
@@ -44,7 +29,7 @@ InlineNode::~InlineNode()
 
 void InlineNode::split_into_lines(InlineFormattingContext& context, LayoutMode layout_mode)
 {
-    auto& containing_block = context.context_box();
+    auto& containing_block = context.containing_block();
 
     if (!computed_values().padding().left.is_undefined_or_auto()) {
         float padding_left = computed_values().padding().left.resolved(CSS::Length::make_px(0), *this, containing_block.width()).to_px(*this);
@@ -59,13 +44,92 @@ void InlineNode::split_into_lines(InlineFormattingContext& context, LayoutMode l
     }
 }
 
-void InlineNode::paint_fragment(PaintContext& context, const LineBoxFragment& fragment, PaintPhase phase) const
+void InlineNode::paint(PaintContext& context, PaintPhase phase)
 {
     auto& painter = context.painter();
 
     if (phase == PaintPhase::Background) {
-        painter.fill_rect(enclosing_int_rect(fragment.absolute_rect()), computed_values().background_color());
+        auto background_data = Painting::BackgroundData {
+            .color = computed_values().background_color(),
+            .image = background_image() ? background_image()->bitmap() : nullptr,
+            .repeat_x = computed_values().background_repeat_x(),
+            .repeat_y = computed_values().background_repeat_y()
+        };
+
+        auto top_left_border_radius = computed_values().border_top_left_radius();
+        auto top_right_border_radius = computed_values().border_top_right_radius();
+        auto bottom_right_border_radius = computed_values().border_bottom_right_radius();
+        auto bottom_left_border_radius = computed_values().border_bottom_left_radius();
+
+        for_each_fragment([&](auto& fragment) {
+            // FIXME: This recalculates our (InlineNode's) absolute_rect() for every single fragment!
+            auto rect = fragment.absolute_rect();
+            auto border_radius_data = Painting::normalized_border_radius_data(*this, rect, top_left_border_radius, top_right_border_radius, bottom_right_border_radius, bottom_left_border_radius);
+            Painting::paint_background(context, enclosing_int_rect(rect), background_data, border_radius_data);
+
+            if (auto computed_box_shadow = computed_values().box_shadow(); computed_box_shadow.has_value()) {
+                auto box_shadow_data = Painting::BoxShadowData {
+                    .offset_x = (int)computed_box_shadow->offset_x.resolved_or_zero(*this, rect.width()).to_px(*this),
+                    .offset_y = (int)computed_box_shadow->offset_y.resolved_or_zero(*this, rect.height()).to_px(*this),
+                    .blur_radius = (int)computed_box_shadow->blur_radius.resolved_or_zero(*this, rect.width()).to_px(*this),
+                    .color = computed_box_shadow->color
+                };
+                Painting::paint_box_shadow(context, enclosing_int_rect(rect), box_shadow_data);
+            }
+
+            return IterationDecision::Continue;
+        });
     }
+
+    if (phase == PaintPhase::Border) {
+        auto top_left_border_radius = computed_values().border_top_left_radius();
+        auto top_right_border_radius = computed_values().border_top_right_radius();
+        auto bottom_right_border_radius = computed_values().border_bottom_right_radius();
+        auto bottom_left_border_radius = computed_values().border_bottom_left_radius();
+
+        auto borders_data = Painting::BordersData {
+            .top = computed_values().border_top(),
+            .right = computed_values().border_right(),
+            .bottom = computed_values().border_bottom(),
+            .left = computed_values().border_left(),
+        };
+
+        for_each_fragment([&](auto& fragment) {
+            // FIXME: This recalculates our (InlineNode's) absolute_rect() for every single fragment!
+            auto bordered_rect = fragment.absolute_rect();
+            bordered_rect.inflate(borders_data.top.width, borders_data.right.width, borders_data.bottom.width, borders_data.left.width);
+            auto border_radius_data = Painting::normalized_border_radius_data(*this, bordered_rect, top_left_border_radius, top_right_border_radius, bottom_right_border_radius, bottom_left_border_radius);
+
+            Painting::paint_all_borders(context, bordered_rect, border_radius_data, borders_data);
+
+            return IterationDecision::Continue;
+        });
+    }
+
+    if (phase == PaintPhase::Foreground && document().inspected_node() == dom_node()) {
+        // FIXME: This paints a double-thick border between adjacent fragments, where ideally there
+        //        would be none. Once we implement non-rectangular outlines for the `outline` CSS
+        //        property, we can use that here instead.
+        for_each_fragment([&](auto& fragment) {
+            painter.draw_rect(enclosing_int_rect(fragment.absolute_rect()), Color::Magenta);
+            return IterationDecision::Continue;
+        });
+    }
+}
+
+template<typename Callback>
+void InlineNode::for_each_fragment(Callback callback)
+{
+    // FIXME: This will be slow if the containing block has a lot of fragments!
+    containing_block()->for_each_fragment([&](auto& fragment) {
+        if (!is_inclusive_ancestor_of(fragment.layout_node()))
+            return IterationDecision::Continue;
+        // FIXME: This skips the 0-width fragments at the start and end of the InlineNode.
+        //        A better solution would be to not generate them in the first place.
+        if (fragment.width() == 0 || fragment.height() == 0)
+            return IterationDecision::Continue;
+        return callback(fragment);
+    });
 }
 
 }

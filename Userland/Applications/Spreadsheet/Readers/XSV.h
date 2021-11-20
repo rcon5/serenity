@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -34,7 +14,7 @@
 
 namespace Reader {
 
-enum class ParserBehaviour : u32 {
+enum class ParserBehavior : u32 {
     None = 0,
     ReadHeaders = 1,
     AllowNewlinesInFields = ReadHeaders << 1,
@@ -47,8 +27,8 @@ enum class ParserBehaviour : u32 {
                                 // - updates previous rows with extra columns
 };
 
-ParserBehaviour operator&(ParserBehaviour left, ParserBehaviour right);
-ParserBehaviour operator|(ParserBehaviour left, ParserBehaviour right);
+ParserBehavior operator&(ParserBehavior left, ParserBehavior right);
+ParserBehavior operator|(ParserBehavior left, ParserBehavior right);
 
 struct ParserTraits {
     String separator;
@@ -72,24 +52,25 @@ enum class ReadError {
 #undef E
 };
 
-inline constexpr ParserBehaviour default_behaviours()
+constexpr ParserBehavior default_behaviors()
 {
-    return ParserBehaviour::QuoteOnlyInFieldStart;
+    return ParserBehavior::QuoteOnlyInFieldStart;
 }
 
 class XSV {
 public:
-    XSV(StringView source, const ParserTraits& traits, ParserBehaviour behaviours = default_behaviours())
+    XSV(StringView source, ParserTraits traits, ParserBehavior behaviors = default_behaviors())
         : m_source(source)
         , m_lexer(m_source)
         , m_traits(traits)
-        , m_behaviours(behaviours)
+        , m_behaviors(behaviors)
     {
-        parse();
+        parse_preview();
     }
 
     virtual ~XSV() { }
 
+    void parse();
     bool has_error() const { return m_error != ReadError::None; }
     ReadError error() const { return m_error; }
     String error_string() const
@@ -107,7 +88,7 @@ public:
 
     size_t size() const { return m_rows.size(); }
     Vector<String> headers() const;
-    [[nodiscard]] bool has_explicit_headers() const { return (static_cast<u32>(m_behaviours) & static_cast<u32>(ParserBehaviour::ReadHeaders)) != 0; }
+    [[nodiscard]] bool has_explicit_headers() const { return (static_cast<u32>(m_behaviors) & static_cast<u32>(ParserBehavior::ReadHeaders)) != 0; }
 
     class Row {
     public:
@@ -126,7 +107,14 @@ public:
         size_t index() const { return m_index; }
         size_t size() const { return m_xsv.headers().size(); }
 
-        // FIXME: Implement begin() and end(), keeping `Field' out of the API.
+        using ConstIterator = AK::SimpleIterator<const Row, const StringView>;
+        using Iterator = AK::SimpleIterator<Row, StringView>;
+
+        constexpr ConstIterator begin() const { return ConstIterator::begin(*this); }
+        constexpr Iterator begin() { return Iterator::begin(*this); }
+
+        constexpr ConstIterator end() const { return ConstIterator::end(*this); }
+        constexpr Iterator end() { return Iterator::end(*this); }
 
     private:
         XSV& m_xsv;
@@ -167,6 +155,8 @@ public:
             return m_index == other.m_index && &m_xsv == &other.m_xsv;
         }
 
+        constexpr size_t index() const { return m_index; }
+
     private:
         XSV& m_xsv;
         size_t m_index { 0 };
@@ -200,8 +190,15 @@ private:
         }
     };
     void set_error(ReadError error);
-    void parse();
+    void parse_preview();
     void read_headers();
+    void reset()
+    {
+        m_lexer = GenericLexer { m_source };
+        m_rows.clear();
+        m_names.clear();
+        m_error = ReadError::None;
+    }
     Vector<Field> read_row(bool header_row = false);
     Field read_one_field();
     Field read_one_quoted_field();
@@ -209,8 +206,8 @@ private:
 
     StringView m_source;
     GenericLexer m_lexer;
-    const ParserTraits& m_traits;
-    ParserBehaviour m_behaviours;
+    ParserTraits m_traits;
+    ParserBehavior m_behaviors;
     Vector<Field> m_names;
     Vector<Vector<Field>> m_rows;
     ReadError m_error { ReadError::None };

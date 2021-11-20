@@ -1,41 +1,30 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Forward.h>
 #include <AK/HashFunctions.h>
 #include <AK/StdLibExtras.h>
+#include <AK/Traits.h>
 #include <AK/Types.h>
 #include <AK/kmalloc.h>
 
 namespace AK {
 
 enum class HashSetResult {
+    Failed = 0,
     InsertedNewEntry,
-    ReplacedExistingEntry
+    ReplacedExistingEntry,
+    KeptExistingEntry
+};
+
+enum class HashSetExistingEntryBehavior {
+    Keep,
+    Replace
 };
 
 template<typename HashTableType, typename T, typename BucketType>
@@ -71,7 +60,28 @@ private:
     BucketType* m_bucket { nullptr };
 };
 
-template<typename T, typename TraitsForT>
+template<typename OrderedHashTableType, typename T, typename BucketType>
+class OrderedHashTableIterator {
+    friend OrderedHashTableType;
+
+public:
+    bool operator==(const OrderedHashTableIterator& other) const { return m_bucket == other.m_bucket; }
+    bool operator!=(const OrderedHashTableIterator& other) const { return m_bucket != other.m_bucket; }
+    T& operator*() { return *m_bucket->slot(); }
+    T* operator->() { return m_bucket->slot(); }
+    void operator++() { m_bucket = m_bucket->next; }
+    void operator--() { m_bucket = m_bucket->previous; }
+
+private:
+    explicit OrderedHashTableIterator(BucketType* bucket)
+        : m_bucket(bucket)
+    {
+    }
+
+    BucketType* m_bucket { nullptr };
+};
+
+template<typename T, typename TraitsForT, bool IsOrdered>
 class HashTable {
     static constexpr size_t load_factor_in_percent = 60;
 
@@ -84,6 +94,28 @@ class HashTable {
         T* slot() { return reinterpret_cast<T*>(storage); }
         const T* slot() const { return reinterpret_cast<const T*>(storage); }
     };
+
+    struct OrderedBucket {
+        OrderedBucket* previous;
+        OrderedBucket* next;
+        bool used;
+        bool deleted;
+        alignas(T) u8 storage[sizeof(T)];
+        T* slot() { return reinterpret_cast<T*>(storage); }
+        const T* slot() const { return reinterpret_cast<const T*>(storage); }
+    };
+
+    using BucketType = Conditional<IsOrdered, OrderedBucket, Bucket>;
+
+    struct CollectionData {
+    };
+
+    struct OrderedCollectionData {
+        BucketType* head { nullptr };
+        BucketType* tail { nullptr };
+    };
+
+    using CollectionDataType = Conditional<IsOrdered, OrderedCollectionData, CollectionData>;
 
 public:
     HashTable() = default;
@@ -99,7 +131,7 @@ public:
                 m_buckets[i].slot()->~T();
         }
 
-        kfree(m_buckets);
+        kfree_sized(m_buckets, size_in_bytes(m_capacity));
     }
 
     HashTable(const HashTable& other)
@@ -118,6 +150,7 @@ public:
 
     HashTable(HashTable&& other) noexcept
         : m_buckets(other.m_buckets)
+        , m_collection_data(other.m_collection_data)
         , m_size(other.m_size)
         , m_capacity(other.m_capacity)
         , m_deleted_count(other.m_deleted_count)
@@ -126,11 +159,14 @@ public:
         other.m_capacity = 0;
         other.m_deleted_count = 0;
         other.m_buckets = nullptr;
+        if constexpr (IsOrdered)
+            other.m_collection_data = { nullptr, nullptr };
     }
 
     HashTable& operator=(HashTable&& other) noexcept
     {
-        swap(*this, other);
+        HashTable temporary { move(other) };
+        swap(*this, temporary);
         return *this;
     }
 
@@ -140,6 +176,9 @@ public:
         swap(a.m_size, b.m_size);
         swap(a.m_capacity, b.m_capacity);
         swap(a.m_deleted_count, b.m_deleted_count);
+
+        if constexpr (IsOrdered)
+            swap(a.m_collection_data, b.m_collection_data);
     }
 
     [[nodiscard]] bool is_empty() const { return !m_size; }
@@ -147,11 +186,19 @@ public:
     [[nodiscard]] size_t capacity() const { return m_capacity; }
 
     template<typename U, size_t N>
-    void set_from(U (&from_array)[N])
+    bool try_set_from(U (&from_array)[N])
     {
         for (size_t i = 0; i < N; ++i) {
-            set(from_array[i]);
+            if (try_set(from_array[i]) == HashSetResult::Failed)
+                return false;
         }
+        return true;
+    }
+    template<typename U, size_t N>
+    void set_from(U (&from_array)[N])
+    {
+        bool result = try_set_from(from_array);
+        VERIFY(result);
     }
 
     void ensure_capacity(size_t capacity)
@@ -160,15 +207,20 @@ public:
         rehash(capacity * 2);
     }
 
-    bool contains(const T& value) const
+    [[nodiscard]] bool contains(T const& value) const
     {
         return find(value) != end();
     }
 
-    using Iterator = HashTableIterator<HashTable, T, Bucket>;
+    using Iterator = Conditional<IsOrdered,
+        OrderedHashTableIterator<HashTable, T, BucketType>,
+        HashTableIterator<HashTable, T, BucketType>>;
 
-    Iterator begin()
+    [[nodiscard]] Iterator begin()
     {
+        if constexpr (IsOrdered)
+            return Iterator(m_collection_data.head);
+
         for (size_t i = 0; i < m_capacity; ++i) {
             if (m_buckets[i].used)
                 return Iterator(&m_buckets[i]);
@@ -176,15 +228,20 @@ public:
         return end();
     }
 
-    Iterator end()
+    [[nodiscard]] Iterator end()
     {
         return Iterator(nullptr);
     }
 
-    using ConstIterator = HashTableIterator<const HashTable, const T, const Bucket>;
+    using ConstIterator = Conditional<IsOrdered,
+        OrderedHashTableIterator<const HashTable, const T, const BucketType>,
+        HashTableIterator<const HashTable, const T, const BucketType>>;
 
-    ConstIterator begin() const
+    [[nodiscard]] ConstIterator begin() const
     {
+        if constexpr (IsOrdered)
+            return ConstIterator(m_collection_data.head);
+
         for (size_t i = 0; i < m_capacity; ++i) {
             if (m_buckets[i].used)
                 return ConstIterator(&m_buckets[i]);
@@ -192,7 +249,7 @@ public:
         return end();
     }
 
-    ConstIterator end() const
+    [[nodiscard]] ConstIterator end() const
     {
         return ConstIterator(nullptr);
     }
@@ -203,42 +260,64 @@ public:
     }
 
     template<typename U = T>
-    HashSetResult set(U&& value)
+    HashSetResult try_set(U&& value, HashSetExistingEntryBehavior existing_entry_behavior = HashSetExistingEntryBehavior::Replace)
     {
-        auto& bucket = lookup_for_writing(value);
-        if (bucket.used) {
-            (*bucket.slot()) = forward<U>(value);
+        auto* bucket = try_lookup_for_writing(value);
+        if (!bucket)
+            return HashSetResult::Failed;
+        if (bucket->used) {
+            if (existing_entry_behavior == HashSetExistingEntryBehavior::Keep)
+                return HashSetResult::KeptExistingEntry;
+            (*bucket->slot()) = forward<U>(value);
             return HashSetResult::ReplacedExistingEntry;
         }
 
-        new (bucket.slot()) T(forward<U>(value));
-        bucket.used = true;
-        if (bucket.deleted) {
-            bucket.deleted = false;
+        new (bucket->slot()) T(forward<U>(value));
+        bucket->used = true;
+        if (bucket->deleted) {
+            bucket->deleted = false;
             --m_deleted_count;
         }
+
+        if constexpr (IsOrdered) {
+            if (!m_collection_data.head) [[unlikely]] {
+                m_collection_data.head = bucket;
+            } else {
+                bucket->previous = m_collection_data.tail;
+                m_collection_data.tail->next = bucket;
+            }
+            m_collection_data.tail = bucket;
+        }
+
         ++m_size;
         return HashSetResult::InsertedNewEntry;
     }
-
-    template<typename Finder>
-    Iterator find(unsigned hash, Finder finder)
+    template<typename U = T>
+    HashSetResult set(U&& value, HashSetExistingEntryBehavior existing_entry_behaviour = HashSetExistingEntryBehavior::Replace)
     {
-        return Iterator(lookup_with_hash(hash, move(finder)));
+        auto result = try_set(forward<U>(value), existing_entry_behaviour);
+        VERIFY(result != HashSetResult::Failed);
+        return result;
     }
 
-    Iterator find(const T& value)
+    template<typename TUnaryPredicate>
+    [[nodiscard]] Iterator find(unsigned hash, TUnaryPredicate predicate)
+    {
+        return Iterator(lookup_with_hash(hash, move(predicate)));
+    }
+
+    [[nodiscard]] Iterator find(T const& value)
     {
         return find(TraitsForT::hash(value), [&](auto& other) { return TraitsForT::equals(value, other); });
     }
 
-    template<typename Finder>
-    ConstIterator find(unsigned hash, Finder finder) const
+    template<typename TUnaryPredicate>
+    [[nodiscard]] ConstIterator find(unsigned hash, TUnaryPredicate predicate) const
     {
-        return ConstIterator(lookup_with_hash(hash, move(finder)));
+        return ConstIterator(lookup_with_hash(hash, move(predicate)));
     }
 
-    ConstIterator find(const T& value) const
+    [[nodiscard]] ConstIterator find(T const& value) const
     {
         return find(TraitsForT::hash(value), [&](auto& other) { return TraitsForT::equals(value, other); });
     }
@@ -258,13 +337,28 @@ public:
         VERIFY(iterator.m_bucket);
         auto& bucket = *iterator.m_bucket;
         VERIFY(bucket.used);
-        VERIFY(!bucket.end);
         VERIFY(!bucket.deleted);
+
+        if constexpr (!IsOrdered)
+            VERIFY(!bucket.end);
+
         bucket.slot()->~T();
         bucket.used = false;
         bucket.deleted = true;
         --m_size;
         ++m_deleted_count;
+
+        if constexpr (IsOrdered) {
+            if (bucket.previous)
+                bucket.previous->next = bucket.next;
+            else
+                m_collection_data.head = bucket.next;
+
+            if (bucket.next)
+                bucket.next->previous = bucket.previous;
+            else
+                m_collection_data.tail = bucket.previous;
+        }
     }
 
 private:
@@ -273,38 +367,70 @@ private:
         auto& bucket = lookup_for_writing(value);
         new (bucket.slot()) T(move(value));
         bucket.used = true;
+
+        if constexpr (IsOrdered) {
+            if (!m_collection_data.head) [[unlikely]] {
+                m_collection_data.head = &bucket;
+            } else {
+                bucket.previous = m_collection_data.tail;
+                m_collection_data.tail->next = &bucket;
+            }
+            m_collection_data.tail = &bucket;
+        }
     }
 
-    void rehash(size_t new_capacity)
+    [[nodiscard]] static constexpr size_t size_in_bytes(size_t capacity)
+    {
+        if constexpr (IsOrdered) {
+            return sizeof(BucketType) * capacity;
+        } else {
+            return sizeof(BucketType) * (capacity + 1);
+        }
+    }
+
+    bool try_rehash(size_t new_capacity)
     {
         new_capacity = max(new_capacity, static_cast<size_t>(4));
+        new_capacity = kmalloc_good_size(new_capacity * sizeof(BucketType)) / sizeof(BucketType);
 
         auto* old_buckets = m_buckets;
         auto old_capacity = m_capacity;
+        Iterator old_iter = begin();
 
-        m_buckets = (Bucket*)kmalloc(sizeof(Bucket) * (new_capacity + 1));
-        __builtin_memset(m_buckets, 0, sizeof(Bucket) * (new_capacity + 1));
+        auto new_buckets = kmalloc(size_in_bytes(new_capacity));
+        if (!new_buckets)
+            return false;
+
+        m_buckets = (BucketType*)new_buckets;
+        __builtin_memset(m_buckets, 0, size_in_bytes(new_capacity));
+
         m_capacity = new_capacity;
         m_deleted_count = 0;
 
-        m_buckets[m_capacity].end = true;
+        if constexpr (IsOrdered)
+            m_collection_data = { nullptr, nullptr };
+        else
+            m_buckets[m_capacity].end = true;
 
         if (!old_buckets)
-            return;
+            return true;
 
-        for (size_t i = 0; i < old_capacity; ++i) {
-            auto& old_bucket = old_buckets[i];
-            if (old_bucket.used) {
-                insert_during_rehash(move(*old_bucket.slot()));
-                old_bucket.slot()->~T();
-            }
+        for (auto it = move(old_iter); it != end(); ++it) {
+            insert_during_rehash(move(*it));
+            it->~T();
         }
 
-        kfree(old_buckets);
+        kfree_sized(old_buckets, size_in_bytes(old_capacity));
+        return true;
+    }
+    void rehash(size_t new_capacity)
+    {
+        bool result = try_rehash(new_capacity);
+        VERIFY(result);
     }
 
-    template<typename Finder>
-    Bucket* lookup_with_hash(unsigned hash, Finder finder) const
+    template<typename TUnaryPredicate>
+    [[nodiscard]] BucketType* lookup_with_hash(unsigned hash, TUnaryPredicate predicate) const
     {
         if (is_empty())
             return nullptr;
@@ -312,7 +438,7 @@ private:
         for (;;) {
             auto& bucket = m_buckets[hash % m_capacity];
 
-            if (bucket.used && finder(*bucket.slot()))
+            if (bucket.used && predicate(*bucket.slot()))
                 return &bucket;
 
             if (!bucket.used && !bucket.deleted)
@@ -322,45 +448,52 @@ private:
         }
     }
 
-    const Bucket* lookup_for_reading(const T& value) const
+    [[nodiscard]] BucketType* try_lookup_for_writing(T const& value)
     {
-        return lookup_with_hash(TraitsForT::hash(value), [&value](auto& entry) { return TraitsForT::equals(entry, value); });
-    }
-
-    Bucket& lookup_for_writing(const T& value)
-    {
-        if (should_grow())
-            rehash(capacity() * 2);
-
+        // FIXME: Maybe overrun the "allowed" load factor to avoid OOM
+        //        If we are allowed to do that, separate that logic from
+        //        the normal lookup_for_writing
+        if (should_grow()) {
+            if (!try_rehash(capacity() * 2))
+                return nullptr;
+        }
         auto hash = TraitsForT::hash(value);
-        Bucket* first_empty_bucket = nullptr;
+        BucketType* first_empty_bucket = nullptr;
         for (;;) {
             auto& bucket = m_buckets[hash % m_capacity];
 
             if (bucket.used && TraitsForT::equals(*bucket.slot(), value))
-                return bucket;
+                return &bucket;
 
             if (!bucket.used) {
                 if (!first_empty_bucket)
                     first_empty_bucket = &bucket;
 
                 if (!bucket.deleted)
-                    return *const_cast<Bucket*>(first_empty_bucket);
+                    return const_cast<BucketType*>(first_empty_bucket);
             }
 
             hash = double_hash(hash);
         }
     }
+    [[nodiscard]] BucketType& lookup_for_writing(T const& value)
+    {
+        auto* item = try_lookup_for_writing(value);
+        VERIFY(item);
+        return *item;
+    }
 
     [[nodiscard]] size_t used_bucket_count() const { return m_size + m_deleted_count; }
     [[nodiscard]] bool should_grow() const { return ((used_bucket_count() + 1) * 100) >= (m_capacity * load_factor_in_percent); }
 
-    Bucket* m_buckets { nullptr };
+    BucketType* m_buckets { nullptr };
+
+    [[no_unique_address]] CollectionDataType m_collection_data;
     size_t m_size { 0 };
     size_t m_capacity { 0 };
     size_t m_deleted_count { 0 };
 };
-
 }
 
 using AK::HashTable;
+using AK::OrderedHashTable;

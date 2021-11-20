@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2021, Linus Groh <mail@linusgroh.de>
- * All rights reserved.
+ * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Debug.h>
@@ -45,8 +25,8 @@ PromiseReactionJob::PromiseReactionJob(PromiseReaction& reaction, Value argument
 {
 }
 
-// 27.2.2.1 NewPromiseReactionJob, https://tc39.es/ecma262/#sec-newpromisereactionjob
-Value PromiseReactionJob::call()
+// 27.2.2.1 NewPromiseReactionJob ( reaction, argument ), https://tc39.es/ecma262/#sec-newpromisereactionjob
+ThrowCompletionOr<Value> PromiseReactionJob::call()
 {
     auto& vm = this->vm();
     auto& promise_capability = m_reaction.capability();
@@ -73,7 +53,9 @@ Value PromiseReactionJob::call()
 
     if (!promise_capability.has_value()) {
         dbgln_if(PROMISE_DEBUG, "[PromiseReactionJob @ {}]: Reaction has no PromiseCapability, returning empty value", this);
-        return {};
+        // TODO: This can't return an empty value at the moment, because the implicit conversion to Completion would fail.
+        //       Change it back when this is using completions (`return normal_completion({})`)
+        return js_undefined();
     }
 
     if (vm.exception()) {
@@ -111,8 +93,8 @@ PromiseResolveThenableJob::PromiseResolveThenableJob(Promise& promise_to_resolve
 {
 }
 
-// 27.2.2.2 NewPromiseResolveThenableJob, https://tc39.es/ecma262/#sec-newpromiseresolvethenablejob
-Value PromiseResolveThenableJob::call()
+// 27.2.2.2 NewPromiseResolveThenableJob ( promiseToResolve, thenable, then ), https://tc39.es/ecma262/#sec-newpromiseresolvethenablejob
+ThrowCompletionOr<Value> PromiseResolveThenableJob::call()
 {
     auto& vm = this->vm();
     auto [resolve_function, reject_function] = m_promise_to_resolve.create_resolving_functions();

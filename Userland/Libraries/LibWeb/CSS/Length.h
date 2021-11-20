@@ -1,32 +1,13 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/String.h>
+#include <LibGfx/Forward.h>
 #include <LibWeb/Forward.h>
 
 namespace Web::CSS {
@@ -36,6 +17,7 @@ public:
     enum class Type {
         Undefined,
         Percentage,
+        Calculated,
         Auto,
         Cm,
         In,
@@ -46,6 +28,7 @@ public:
         Pc,
         Ex,
         Em,
+        Ch,
         Rem,
         Vh,
         Vw,
@@ -53,46 +36,24 @@ public:
         Vmin,
     };
 
-    Length() { }
-    Length(int value, Type type)
-        : m_type(type)
-        , m_value(value)
-    {
-    }
-    Length(float value, Type type)
-        : m_type(type)
-        , m_value(value)
-    {
-    }
+    // We have a RefPtr<CalculatedStyleValue> member, but can't include the header StyleValue.h as it includes
+    // this file already. To break the cyclic dependency, we must move all method definitions out.
+    Length();
+    Length(int value, Type type);
+    Length(float value, Type type);
 
-    static Length make_auto() { return Length(0, Type::Auto); }
-    static Length make_px(float value) { return Length(value, Type::Px); }
+    static Length make_auto();
+    static Length make_px(float value);
 
-    Length resolved(const Length& fallback_for_undefined, const Layout::Node& layout_node, float reference_for_percent) const
-    {
-        if (is_undefined())
-            return fallback_for_undefined;
-        if (is_percentage())
-            return make_px(raw_value() / 100.0f * reference_for_percent);
-        if (is_relative())
-            return make_px(to_px(layout_node));
-        return *this;
-    }
-
-    Length resolved_or_auto(const Layout::Node& layout_node, float reference_for_percent) const
-    {
-        return resolved(make_auto(), layout_node, reference_for_percent);
-    }
-
-    Length resolved_or_zero(const Layout::Node& layout_node, float reference_for_percent) const
-    {
-        return resolved(make_px(0), layout_node, reference_for_percent);
-    }
+    Length resolved(const Length& fallback_for_undefined, const Layout::Node& layout_node, float reference_for_percent) const;
+    Length resolved_or_auto(const Layout::Node& layout_node, float reference_for_percent) const;
+    Length resolved_or_zero(const Layout::Node& layout_node, float reference_for_percent) const;
 
     bool is_undefined_or_auto() const { return m_type == Type::Undefined || m_type == Type::Auto; }
     bool is_undefined() const { return m_type == Type::Undefined; }
-    bool is_percentage() const { return m_type == Type::Percentage; }
+    bool is_percentage() const { return m_type == Type::Percentage || m_type == Type::Calculated; }
     bool is_auto() const { return m_type == Type::Auto; }
+    bool is_calculated() const { return m_type == Type::Calculated; }
 
     bool is_absolute() const
     {
@@ -109,6 +70,7 @@ public:
     {
         return m_type == Type::Ex
             || m_type == Type::Em
+            || m_type == Type::Ch
             || m_type == Type::Rem
             || m_type == Type::Vh
             || m_type == Type::Vw
@@ -117,15 +79,23 @@ public:
     }
 
     float raw_value() const { return m_value; }
-    ALWAYS_INLINE float to_px(const Layout::Node& layout_node) const
+
+    float to_px(Layout::Node const&) const;
+
+    ALWAYS_INLINE float to_px(Gfx::IntRect const& viewport_rect, Gfx::FontMetrics const& font_metrics, float root_font_size) const
     {
+        if (is_auto())
+            return 0;
         if (is_relative())
-            return relative_length_to_px(layout_node);
+            return relative_length_to_px(viewport_rect, font_metrics, root_font_size);
+        return absolute_length_to_px();
+    }
+
+    ALWAYS_INLINE float absolute_length_to_px() const
+    {
         constexpr float inch_pixels = 96.0f;
         constexpr float centimeter_pixels = (inch_pixels / 2.54f);
         switch (m_type) {
-        case Type::Auto:
-            return 0;
         case Type::Cm:
             return m_value * centimeter_pixels; // 1cm = 96px/2.54
         case Type::In:
@@ -140,8 +110,6 @@ public:
             return m_value * ((1.0f / 10.0f) * centimeter_pixels); // 1mm = 1/10th of 1cm
         case Type::Q:
             return m_value * ((1.0f / 40.0f) * centimeter_pixels); // 1Q = 1/40th of 1cm
-        case Type::Undefined:
-        case Type::Percentage:
         default:
             VERIFY_NOT_REACHED();
         }
@@ -150,8 +118,8 @@ public:
     String to_string() const
     {
         if (is_auto())
-            return "[auto]";
-        return String::formatted("[{} {}]", m_value, unit_name());
+            return "auto";
+        return String::formatted("{}{}", m_value, unit_name());
     }
 
     bool operator==(const Length& other) const
@@ -164,13 +132,19 @@ public:
         return !(*this == other);
     }
 
+    void set_calculated_style(CalculatedStyleValue* value);
+
+    float relative_length_to_px(Gfx::IntRect const& viewport_rect, Gfx::FontMetrics const& font_metrics, float root_font_size) const;
+
 private:
-    float relative_length_to_px(const Layout::Node&) const;
+    float resolve_calculated_value(const Layout::Node& layout_node, float reference_for_percent) const;
 
     const char* unit_name() const;
 
     Type m_type { Type::Undefined };
     float m_value { 0 };
+
+    RefPtr<CalculatedStyleValue> m_calculated_style;
 };
 
 }

@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/URL.h>
@@ -30,13 +10,36 @@
 
 namespace Web::CSS {
 
-CSSImportRule::CSSImportRule(URL url)
+CSSImportRule::CSSImportRule(AK::URL url)
     : m_url(move(url))
 {
 }
 
 CSSImportRule::~CSSImportRule()
 {
+}
+
+// https://www.w3.org/TR/cssom/#serialize-a-css-rule
+String CSSImportRule::serialized() const
+{
+    StringBuilder builder;
+    // The result of concatenating the following:
+
+    // 1. The string "@import" followed by a single SPACE (U+0020).
+    builder.append("@import "sv);
+
+    // 2. The result of performing serialize a URL on the rule’s location.
+    // FIXME: Look into the correctness of this serialization
+    builder.append("url("sv);
+    builder.append(m_url.to_string());
+    builder.append(')');
+
+    // FIXME: 3. If the rule’s associated media list is not empty, a single SPACE (U+0020) followed by the result of performing serialize a media query list on the media list.
+
+    // 4. The string ";", i.e., SEMICOLON (U+003B).
+    builder.append(';');
+
+    return builder.to_string();
 }
 
 }

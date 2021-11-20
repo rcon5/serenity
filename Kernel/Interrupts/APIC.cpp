@@ -1,47 +1,28 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Assertions.h>
 #include <AK/Memory.h>
 #include <AK/Singleton.h>
-#include <AK/StringView.h>
 #include <AK/Types.h>
-#include <Kernel/ACPI/Parser.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/x86/IO.h>
+#include <Kernel/Arch/x86/MSR.h>
 #include <Kernel/Arch/x86/ProcessorInfo.h>
 #include <Kernel/Debug.h>
-#include <Kernel/IO.h>
+#include <Kernel/Firmware/ACPI/Parser.h>
 #include <Kernel/Interrupts/APIC.h>
 #include <Kernel/Interrupts/SpuriousInterruptHandler.h>
+#include <Kernel/Memory/AnonymousVMObject.h>
+#include <Kernel/Memory/MemoryManager.h>
+#include <Kernel/Memory/PageDirectory.h>
+#include <Kernel/Memory/TypedMapping.h>
 #include <Kernel/Panic.h>
+#include <Kernel/Sections.h>
 #include <Kernel/Thread.h>
 #include <Kernel/Time/APICTimer.h>
-#include <Kernel/VM/MemoryManager.h>
-#include <Kernel/VM/PageDirectory.h>
-#include <Kernel/VM/TypedMapping.h>
 
 #define IRQ_APIC_TIMER (0xfc - IRQ_VECTOR_BASE)
 #define IRQ_APIC_IPI (0xfd - IRQ_VECTOR_BASE)
@@ -53,7 +34,9 @@
 #define APIC_ENABLED (1 << 8)
 
 #define APIC_BASE_MSR 0x1b
+#define APIC_REGS_MSR_BASE 0x800
 
+#define APIC_REG_ID 0x20
 #define APIC_REG_EOI 0xb0
 #define APIC_REG_LD 0xd0
 #define APIC_REG_DF 0xe0
@@ -73,7 +56,7 @@
 
 namespace Kernel {
 
-static AK::Singleton<APIC> s_apic;
+static Singleton<APIC> s_apic;
 
 class APICIPIInterruptHandler final : public GenericInterruptHandler {
 public:
@@ -91,13 +74,13 @@ public:
         handler->register_interrupt_handler();
     }
 
-    virtual void handle_interrupt(const RegisterState&) override;
+    virtual bool handle_interrupt(const RegisterState&) override;
 
     virtual bool eoi() override;
 
     virtual HandlerType type() const override { return HandlerType::IRQHandler; }
-    virtual const char* purpose() const override { return "IPI Handler"; }
-    virtual const char* controller() const override { return nullptr; }
+    virtual StringView purpose() const override { return "IPI Handler"sv; }
+    virtual StringView controller() const override { return nullptr; }
 
     virtual size_t sharing_devices_count() const override { return 0; }
     virtual bool is_shared_handler() const override { return false; }
@@ -122,13 +105,13 @@ public:
         handler->register_interrupt_handler();
     }
 
-    virtual void handle_interrupt(const RegisterState&) override;
+    virtual bool handle_interrupt(const RegisterState&) override;
 
     virtual bool eoi() override;
 
     virtual HandlerType type() const override { return HandlerType::IRQHandler; }
-    virtual const char* purpose() const override { return "SMP Error Handler"; }
-    virtual const char* controller() const override { return nullptr; }
+    virtual StringView purpose() const override { return "SMP Error Handler"sv; }
+    virtual StringView controller() const override { return nullptr; }
 
     virtual size_t sharing_devices_count() const override { return 0; }
     virtual bool is_shared_handler() const override { return false; }
@@ -156,38 +139,47 @@ UNMAP_AFTER_INIT void APIC::initialize()
 
 PhysicalAddress APIC::get_base()
 {
-    u32 lo, hi;
     MSR msr(APIC_BASE_MSR);
-    msr.get(lo, hi);
-    return PhysicalAddress(lo & 0xfffff000);
+    auto base = msr.get();
+    return PhysicalAddress(base & 0xfffff000);
 }
 
 void APIC::set_base(const PhysicalAddress& base)
 {
-    u32 hi = 0;
-    u32 lo = base.get() | 0x800;
     MSR msr(APIC_BASE_MSR);
-    msr.set(lo, hi);
+    u64 flags = 1 << 11;
+    if (m_is_x2)
+        flags |= 1 << 10;
+    msr.set(base.get() | flags);
 }
 
 void APIC::write_register(u32 offset, u32 value)
 {
-    *reinterpret_cast<volatile u32*>(m_apic_base->vaddr().offset(offset).as_ptr()) = value;
+    if (m_is_x2) {
+        MSR msr(APIC_REGS_MSR_BASE + (offset >> 4));
+        msr.set(value);
+    } else {
+        *reinterpret_cast<volatile u32*>(m_apic_base->vaddr().offset(offset).as_ptr()) = value;
+    }
 }
 
 u32 APIC::read_register(u32 offset)
 {
+    if (m_is_x2) {
+        MSR msr(APIC_REGS_MSR_BASE + (offset >> 4));
+        return (u32)msr.get();
+    }
     return *reinterpret_cast<volatile u32*>(m_apic_base->vaddr().offset(offset).as_ptr());
 }
 
 void APIC::set_lvt(u32 offset, u8 interrupt)
 {
-    write_register(offset, (read_register(offset) & 0xffffffff) | interrupt);
+    write_register(offset, read_register(offset) | interrupt);
 }
 
 void APIC::set_siv(u32 offset, u8 interrupt)
 {
-    write_register(offset, (read_register(offset) & 0xffffffff) | interrupt | APIC_ENABLED);
+    write_register(offset, read_register(offset) | interrupt | APIC_ENABLED);
 }
 
 void APIC::wait_for_pending_icr()
@@ -199,8 +191,13 @@ void APIC::wait_for_pending_icr()
 
 void APIC::write_icr(const ICRReg& icr)
 {
-    write_register(APIC_REG_ICR_HIGH, icr.high());
-    write_register(APIC_REG_ICR_LOW, icr.low());
+    if (m_is_x2) {
+        MSR msr(APIC_REGS_MSR_BASE + (APIC_REG_ICR_LOW >> 4));
+        msr.set(icr.x2_value());
+    } else {
+        write_register(APIC_REG_ICR_HIGH, icr.x_high());
+        write_register(APIC_REG_ICR_LOW, icr.x_low());
+    }
 }
 
 #define APIC_LVT_TIMER_ONESHOT 0
@@ -246,15 +243,20 @@ UNMAP_AFTER_INIT bool APIC::init_bsp()
     CPUID id(1);
     if ((id.edx() & (1 << 9)) == 0)
         return false;
+    if (id.ecx() & (1 << 21))
+        m_is_x2 = true;
 
     PhysicalAddress apic_base = get_base();
-    dbgln_if(APIC_DEBUG, "Initializing APIC, base: {}", apic_base);
+    dbgln_if(APIC_DEBUG, "Initializing {}APIC, base: {}", m_is_x2 ? "x2" : "x", apic_base);
     set_base(apic_base);
 
-    m_apic_base = MM.allocate_kernel_region(apic_base.page_base(), PAGE_SIZE, {}, Region::Access::Read | Region::Access::Write);
-    if (!m_apic_base) {
-        dbgln("APIC: Failed to allocate memory for APIC base");
-        return false;
+    if (!m_is_x2) {
+        auto region_or_error = MM.allocate_kernel_region(apic_base.page_base(), PAGE_SIZE, {}, Memory::Region::Access::ReadWrite);
+        if (region_or_error.is_error()) {
+            dbgln("APIC: Failed to allocate memory for APIC base");
+            return false;
+        }
+        m_apic_base = region_or_error.release_value();
     }
 
     auto rsdp = ACPI::StaticParsing::find_rsdp();
@@ -263,12 +265,12 @@ UNMAP_AFTER_INIT bool APIC::init_bsp()
         return false;
     }
     auto madt_address = ACPI::StaticParsing::find_table(rsdp.value(), "APIC");
-    if (madt_address.is_null()) {
+    if (!madt_address.has_value()) {
         dbgln("APIC: MADT table not found");
         return false;
     }
 
-    auto madt = map_typed<ACPI::Structures::MADT>(madt_address);
+    auto madt = Memory::map_typed<ACPI::Structures::MADT>(madt_address.value());
     size_t entry_index = 0;
     size_t entries_length = madt->h.length - sizeof(ACPI::Structures::MADT);
     auto* madt_entry = madt->entries;
@@ -276,9 +278,16 @@ UNMAP_AFTER_INIT bool APIC::init_bsp()
         size_t entry_length = madt_entry->length;
         if (madt_entry->type == (u8)ACPI::Structures::MADTEntryType::LocalAPIC) {
             auto* plapic_entry = (const ACPI::Structures::MADTEntries::ProcessorLocalAPIC*)madt_entry;
-            dbgln_if(APIC_DEBUG, "APIC: AP found @ MADT entry {}, processor ID: {}, APIC ID: {}, flags: {:#08x}", entry_index, plapic_entry->acpi_processor_id, plapic_entry->apic_id, plapic_entry->flags);
+            dbgln_if(APIC_DEBUG, "APIC: AP found @ MADT entry {}, processor ID: {}, xAPIC ID: {}, flags: {:#08x}", entry_index, plapic_entry->acpi_processor_id, plapic_entry->apic_id, plapic_entry->flags);
             m_processor_cnt++;
             if ((plapic_entry->flags & 0x1) != 0)
+                m_processor_enabled_cnt++;
+        } else if (madt_entry->type == (u8)ACPI::Structures::MADTEntryType::Local_x2APIC) {
+            // Only used for APID IDs >= 255
+            auto* plx2apic_entry = (const ACPI::Structures::MADTEntries::ProcessorLocalX2APIC*)madt_entry;
+            dbgln_if(APIC_DEBUG, "APIC: AP found @ MADT entry {}, processor ID: {}, x2APIC ID: {}, flags: {:#08x}", entry_index, plx2apic_entry->acpi_processor_id, plx2apic_entry->apic_id, plx2apic_entry->flags);
+            m_processor_cnt++;
+            if ((plx2apic_entry->flags & 0x1) != 0)
                 m_processor_enabled_cnt++;
         }
         madt_entry = (ACPI::Structures::MADTEntryHeader*)(VirtualAddress(madt_entry).offset(entry_length).get());
@@ -297,6 +306,21 @@ UNMAP_AFTER_INIT bool APIC::init_bsp()
     return true;
 }
 
+UNMAP_AFTER_INIT static NonnullOwnPtr<Memory::Region> create_identity_mapped_region(PhysicalAddress paddr, size_t size)
+{
+    auto maybe_vmobject = Memory::AnonymousVMObject::try_create_for_physical_range(paddr, size);
+    // FIXME: Would be nice to be able to return a KResultOr from here.
+    VERIFY(!maybe_vmobject.is_error());
+
+    auto region_or_error = MM.allocate_kernel_region_with_vmobject(
+        Memory::VirtualRange { VirtualAddress { static_cast<FlatPtr>(paddr.get()) }, size },
+        maybe_vmobject.release_value(),
+        {},
+        Memory::Region::Access::ReadWriteExecute);
+    VERIFY(!region_or_error.is_error());
+    return region_or_error.release_value();
+}
+
 UNMAP_AFTER_INIT void APIC::do_boot_aps()
 {
     VERIFY(m_processor_enabled_cnt > 1);
@@ -306,17 +330,18 @@ UNMAP_AFTER_INIT void APIC::do_boot_aps()
     // Also account for the data appended to:
     // * aps_to_enable u32 values for ap_cpu_init_stacks
     // * aps_to_enable u32 values for ap_cpu_init_processor_info_array
-    auto apic_startup_region = MM.allocate_kernel_region_identity(PhysicalAddress(0x8000), page_round_up(apic_ap_start_size + (2 * aps_to_enable * sizeof(u32))), {}, Region::Access::Read | Region::Access::Write | Region::Access::Execute);
+    auto apic_startup_region = create_identity_mapped_region(PhysicalAddress(0x8000), Memory::page_round_up(apic_ap_start_size + (2 * aps_to_enable * sizeof(u32))));
     memcpy(apic_startup_region->vaddr().as_ptr(), reinterpret_cast<const void*>(apic_ap_start), apic_ap_start_size);
 
     // Allocate enough stacks for all APs
-    Vector<OwnPtr<Region>> apic_ap_stacks;
+    Vector<OwnPtr<Memory::Region>> apic_ap_stacks;
     for (u32 i = 0; i < aps_to_enable; i++) {
-        auto stack_region = MM.allocate_kernel_region(Thread::default_kernel_stack_size, {}, Region::Access::Read | Region::Access::Write, AllocationStrategy::AllocateNow);
-        if (!stack_region) {
+        auto stack_region_or_error = MM.allocate_kernel_region(Thread::default_kernel_stack_size, {}, Memory::Region::Access::ReadWrite, AllocationStrategy::AllocateNow);
+        if (stack_region_or_error.is_error()) {
             dbgln("APIC: Failed to allocate stack for AP #{}", i);
             return;
         }
+        auto stack_region = stack_region_or_error.release_value();
         stack_region->set_stack(true);
         apic_ap_stacks.append(move(stack_region));
     }
@@ -364,13 +389,13 @@ UNMAP_AFTER_INIT void APIC::do_boot_aps()
     dbgln_if(APIC_DEBUG, "APIC: Starting {} AP(s)", aps_to_enable);
 
     // INIT
-    write_icr(ICRReg(0, ICRReg::INIT, ICRReg::Physical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::AllExcludingSelf));
+    write_icr({ 0, 0, ICRReg::INIT, ICRReg::Physical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::AllExcludingSelf });
 
     IO::delay(10 * 1000);
 
     for (int i = 0; i < 2; i++) {
         // SIPI
-        write_icr(ICRReg(0x08, ICRReg::StartUp, ICRReg::Physical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::AllExcludingSelf)); // start execution at P8000
+        write_icr({ 0x08, 0, ICRReg::StartUp, ICRReg::Physical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::AllExcludingSelf }); // start execution at P8000
 
         IO::delay(200);
     }
@@ -385,6 +410,10 @@ UNMAP_AFTER_INIT void APIC::do_boot_aps()
     }
 
     dbgln_if(APIC_DEBUG, "APIC: {} processors are initialized and running", m_processor_enabled_cnt);
+
+    // NOTE: Since this region is identity-mapped, we have to unmap it manually to prevent the virtual
+    //       address range from leaking into the general virtual range allocator.
+    apic_startup_region->unmap(Memory::Region::ShouldDeallocateVirtualRange::No);
 }
 
 UNMAP_AFTER_INIT void APIC::boot_aps()
@@ -408,17 +437,28 @@ UNMAP_AFTER_INIT void APIC::boot_aps()
 
 UNMAP_AFTER_INIT void APIC::enable(u32 cpu)
 {
-    if (cpu >= 8) {
-        // TODO: x2apic support?
-        PANIC("SMP support is currently limited to 8 CPUs!");
+    VERIFY(m_is_x2 || cpu < 8);
+
+    u32 apic_id;
+    if (m_is_x2) {
+        dbgln_if(APIC_DEBUG, "Enable x2APIC on CPU #{}", cpu);
+
+        // We need to enable x2 mode on each core independently
+        set_base(get_base());
+
+        apic_id = read_register(APIC_REG_ID);
+    } else {
+        dbgln_if(APIC_DEBUG, "Setting logical xAPIC ID for CPU #{}", cpu);
+
+        // Use the CPU# as logical apic id
+        VERIFY(cpu <= 8);
+        write_register(APIC_REG_LD, (read_register(APIC_REG_LD) & 0x00ffffff) | (cpu << 24));
+
+        // read it back to make sure it's actually set
+        apic_id = read_register(APIC_REG_LD) >> 24;
     }
 
-    // Use the CPU# as logical apic id
-    VERIFY(cpu <= 0xff);
-    write_register(APIC_REG_LD, (read_register(APIC_REG_LD) & 0x00ffffff) | (cpu << 24)); // TODO: only if not in x2apic mode
-
-    // read it back to make sure it's actually set
-    auto apic_id = read_register(APIC_REG_LD) >> 24;
+    dbgln_if(APIC_DEBUG, "CPU #{} apic id: {}", cpu, apic_id);
     Processor::current().info().set_apic_id(apic_id);
 
     dbgln_if(APIC_DEBUG, "Enabling local APIC for CPU #{}, logical APIC ID: {}", cpu, apic_id);
@@ -426,19 +466,22 @@ UNMAP_AFTER_INIT void APIC::enable(u32 cpu)
     if (cpu == 0) {
         SpuriousInterruptHandler::initialize(IRQ_APIC_SPURIOUS);
 
-        // set error interrupt vector
-        set_lvt(APIC_REG_LVT_ERR, IRQ_APIC_ERR);
         APICErrInterruptHandler::initialize(IRQ_APIC_ERR);
 
         // register IPI interrupt vector
         APICIPIInterruptHandler::initialize(IRQ_APIC_IPI);
     }
 
+    if (!m_is_x2) {
+        // local destination mode (flat mode), not supported in x2 mode
+        write_register(APIC_REG_DF, 0xf0000000);
+    }
+
+    // set error interrupt vector
+    set_lvt(APIC_REG_LVT_ERR, IRQ_APIC_ERR);
+
     // set spurious interrupt vector
     set_siv(APIC_REG_SIV, IRQ_APIC_SPURIOUS);
-
-    // local destination mode (flat mode)
-    write_register(APIC_REG_DF, 0xf0000000);
 
     write_register(APIC_REG_LVT_TIMER, APIC_LVT(0, 0) | APIC_LVT_MASKED);
     write_register(APIC_REG_LVT_THERMAL, APIC_LVT(0, 0) | APIC_LVT_MASKED);
@@ -462,7 +505,7 @@ UNMAP_AFTER_INIT void APIC::init_finished(u32 cpu)
     VERIFY(cpu < m_processor_enabled_cnt);
     // Since we're waiting on other APs here, we shouldn't have the
     // scheduler lock
-    VERIFY(!g_scheduler_lock.own_lock());
+    VERIFY(!g_scheduler_lock.is_locked_by_current_processor());
 
     // Notify the BSP that we are done initializing. It will unmap the startup data at P8000
     m_apic_ap_count.fetch_add(1, AK::MemoryOrder::memory_order_acq_rel);
@@ -486,27 +529,27 @@ UNMAP_AFTER_INIT void APIC::init_finished(u32 cpu)
 
 void APIC::broadcast_ipi()
 {
-    dbgln_if(APIC_SMP_DEBUG, "SMP: Broadcast IPI from CPU #{}", Processor::id());
+    dbgln_if(APIC_SMP_DEBUG, "SMP: Broadcast IPI from CPU #{}", Processor::current_id());
     wait_for_pending_icr();
-    write_icr(ICRReg(IRQ_APIC_IPI + IRQ_VECTOR_BASE, ICRReg::Fixed, ICRReg::Logical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::AllExcludingSelf));
+    write_icr({ IRQ_APIC_IPI + IRQ_VECTOR_BASE, 0xffffffff, ICRReg::Fixed, ICRReg::Logical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::AllExcludingSelf });
 }
 
 void APIC::send_ipi(u32 cpu)
 {
-    dbgln_if(APIC_SMP_DEBUG, "SMP: Send IPI from CPU #{} to CPU #{}", Processor::id(), cpu);
-    VERIFY(cpu != Processor::id());
-    VERIFY(cpu < 8);
+    dbgln_if(APIC_SMP_DEBUG, "SMP: Send IPI from CPU #{} to CPU #{}", Processor::current_id(), cpu);
+    VERIFY(cpu != Processor::current_id());
+    VERIFY(cpu < Processor::count());
     wait_for_pending_icr();
-    write_icr(ICRReg(IRQ_APIC_IPI + IRQ_VECTOR_BASE, ICRReg::Fixed, ICRReg::Logical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::NoShorthand, cpu));
+    write_icr({ IRQ_APIC_IPI + IRQ_VECTOR_BASE, m_is_x2 ? Processor::by_id(cpu).info().apic_id() : cpu, ICRReg::Fixed, m_is_x2 ? ICRReg::Physical : ICRReg::Logical, ICRReg::Assert, ICRReg::TriggerMode::Edge, ICRReg::NoShorthand });
 }
 
 UNMAP_AFTER_INIT APICTimer* APIC::initialize_timers(HardwareTimerBase& calibration_timer)
 {
-    if (!m_apic_base)
+    if (!m_apic_base && !m_is_x2)
         return nullptr;
 
     // We should only initialize and calibrate the APIC timer once on the BSP!
-    VERIFY(Processor::id() == 0);
+    VERIFY(Processor::is_bootstrap_processor());
     VERIFY(!m_apic_timer);
 
     m_apic_timer = APICTimer::initialize(IRQ_APIC_TIMER, calibration_timer);
@@ -576,9 +619,10 @@ u32 APIC::get_timer_divisor()
     return 16;
 }
 
-void APICIPIInterruptHandler::handle_interrupt(const RegisterState&)
+bool APICIPIInterruptHandler::handle_interrupt(const RegisterState&)
 {
-    dbgln_if(APIC_SMP_DEBUG, "APIC IPI on CPU #{}", Processor::id());
+    dbgln_if(APIC_SMP_DEBUG, "APIC IPI on CPU #{}", Processor::current_id());
+    return true;
 }
 
 bool APICIPIInterruptHandler::eoi()
@@ -588,9 +632,10 @@ bool APICIPIInterruptHandler::eoi()
     return true;
 }
 
-void APICErrInterruptHandler::handle_interrupt(const RegisterState&)
+bool APICErrInterruptHandler::handle_interrupt(const RegisterState&)
 {
-    dbgln("APIC: SMP error on CPU #{}", Processor::id());
+    dbgln("APIC: SMP error on CPU #{}", Processor::current_id());
+    return true;
 }
 
 bool APICErrInterruptHandler::eoi()

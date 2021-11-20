@@ -1,59 +1,61 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include "TextEditorWidget.h"
+#include "FileArgument.h"
+#include "MainWidget.h"
+#include <LibConfig/Client.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/File.h>
+#include <LibCore/StandardPaths.h>
+#include <LibFileSystemAccessClient/Client.h>
 #include <LibGUI/Menubar.h>
-#include <LibGfx/Bitmap.h>
-#include <stdio.h>
-#include <unistd.h>
+#include <LibGUI/MessageBox.h>
+
+using namespace TextEditor;
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio recvfd sendfd thread rpath accept cpath wpath unix fattr", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd thread rpath cpath wpath unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
     auto app = GUI::Application::construct(argc, argv);
 
-    if (pledge("stdio recvfd sendfd thread rpath accept cpath wpath unix", nullptr) < 0) {
-        perror("pledge");
+    Config::pledge_domains("TextEditor");
+
+    char const* preview_mode = "auto";
+    char const* file_to_edit = nullptr;
+    Core::ArgsParser parser;
+    parser.add_option(preview_mode, "Preview mode, one of 'none', 'html', 'markdown', 'auto'", "preview-mode", '\0', "mode");
+    parser.add_positional_argument(file_to_edit, "File to edit, with optional starting line and column number", "file[:line[:column]]", Core::ArgsParser::Required::No);
+
+    parser.parse(argc, argv);
+
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
         return 1;
     }
 
-    const char* preview_mode = "auto";
-    int initial_line_number = 0;
-    const char* file_to_edit = nullptr;
-    Core::ArgsParser parser;
-    parser.add_option(preview_mode, "Preview mode, one of 'none', 'html', 'markdown', 'auto'", "preview-mode", '\0', "mode");
-    parser.add_option(initial_line_number, "Start at line number", "line-number", 'l', "line");
-    parser.add_positional_argument(file_to_edit, "File to edit", "file", Core::ArgsParser::Required::No);
+    if (unveil("/tmp/portal/launch", "rw") < 0) {
+        perror("unveil");
+        return 1;
+    }
 
-    parser.parse(argc, argv);
+    if (unveil("/tmp/portal/webcontent", "rw") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    if (unveil("/tmp/portal/filesystemaccess", "rw") < 0) {
+        perror("unveil");
+        return 1;
+    }
+
+    unveil(nullptr, nullptr);
 
     StringView preview_mode_view = preview_mode;
 
@@ -62,7 +64,7 @@ int main(int argc, char** argv)
     auto window = GUI::Window::construct();
     window->resize(640, 400);
 
-    auto& text_widget = window->set_main_widget<TextEditorWidget>();
+    auto& text_widget = window->set_main_widget<MainWidget>();
 
     text_widget.editor().set_focus(true);
 
@@ -75,33 +77,34 @@ int main(int argc, char** argv)
     if (preview_mode_view == "auto") {
         text_widget.set_auto_detect_preview_mode(true);
     } else if (preview_mode_view == "markdown") {
-        text_widget.set_preview_mode(TextEditorWidget::PreviewMode::Markdown);
+        text_widget.set_preview_mode(MainWidget::PreviewMode::Markdown);
     } else if (preview_mode_view == "html") {
-        text_widget.set_preview_mode(TextEditorWidget::PreviewMode::HTML);
+        text_widget.set_preview_mode(MainWidget::PreviewMode::HTML);
     } else if (preview_mode_view == "none") {
-        text_widget.set_preview_mode(TextEditorWidget::PreviewMode::None);
+        text_widget.set_preview_mode(MainWidget::PreviewMode::None);
     } else {
         warnln("Invalid mode '{}'", preview_mode);
         return 1;
     }
 
-    auto menubar = GUI::Menubar::construct();
-    text_widget.initialize_menubar(menubar);
-    window->set_menubar(menubar);
-
-    if (file_to_edit)
-        if (!text_widget.open_file(file_to_edit))
-            return 1;
-
-    text_widget.update_title();
-
-    if (initial_line_number != 0)
-        text_widget.editor().set_cursor_and_focus_line(initial_line_number - 1, 0);
+    text_widget.initialize_menubar(*window);
 
     window->show();
     window->set_icon(app_icon.bitmap_for_size(16));
 
-    window->set_menubar(menubar);
+    if (file_to_edit) {
+        FileArgument parsed_argument(file_to_edit);
+        auto response = FileSystemAccessClient::Client::the().request_file_read_only_approved(window->window_id(), parsed_argument.filename());
+
+        if (response.error == 0) {
+            if (!text_widget.read_file_and_close(*response.fd, *response.chosen_file))
+                return 1;
+            text_widget.editor().set_cursor_and_focus_line(parsed_argument.line().value_or(1) - 1, parsed_argument.column().value_or(0));
+        } else {
+            text_widget.open_nonexistent_file(parsed_argument.filename());
+        }
+    }
+    text_widget.update_title();
 
     return app->exec();
 }

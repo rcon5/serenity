@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -40,7 +20,10 @@ public:
     void ref()
     {
         VERIFY(!m_in_removed_last_ref);
-        VERIFY(m_ref_count);
+        if constexpr (!IsBaseOf<DOM::Node, T>) {
+            // NOTE: DOM::Document is allowed to survive with 0 ref count, if one of its descendant nodes are alive.
+            VERIFY(m_ref_count);
+        }
         ++m_ref_count;
     }
 
@@ -97,6 +80,39 @@ public:
         return const_cast<TreeNode*>(this)->child_at_index(index);
     }
 
+    Optional<size_t> index_of_child(const T& search_child)
+    {
+        VERIFY(search_child.parent() == this);
+        size_t index = 0;
+        auto* child = first_child();
+        VERIFY(child);
+
+        do {
+            if (child == &search_child)
+                return index;
+            index++;
+        } while (child && (child = child->next_sibling()));
+        return {};
+    }
+
+    template<typename ChildType>
+    Optional<size_t> index_of_child(const T& search_child)
+    {
+        VERIFY(search_child.parent() == this);
+        size_t index = 0;
+        auto* child = first_child();
+        VERIFY(child);
+
+        do {
+            if (!is<ChildType>(child))
+                continue;
+            if (child == &search_child)
+                return index;
+            index++;
+        } while (child && (child = child->next_sibling()));
+        return {};
+    }
+
     bool is_ancestor_of(const TreeNode&) const;
     bool is_inclusive_ancestor_of(const TreeNode&) const;
     bool is_descendant_of(const TreeNode&) const;
@@ -124,17 +140,56 @@ public:
         return node;
     }
 
-    const T* next_in_pre_order() const
+    T const* next_in_pre_order() const
     {
         return const_cast<TreeNode*>(this)->next_in_pre_order();
     }
 
-    bool is_before(const T& other) const
+    T* previous_in_pre_order()
+    {
+        if (auto* node = previous_sibling()) {
+            while (node->last_child())
+                node = node->last_child();
+
+            return node;
+        }
+
+        return parent();
+    }
+
+    T const* previous_in_pre_order() const
+    {
+        return const_cast<TreeNode*>(this)->previous_in_pre_order();
+    }
+
+    bool is_before(T const& other) const
     {
         if (this == &other)
             return false;
         for (auto* node = this; node; node = node->next_in_pre_order()) {
             if (node == &other)
+                return true;
+        }
+        return false;
+    }
+
+    // https://dom.spec.whatwg.org/#concept-tree-preceding (Object A is 'typename U' and Object B is 'this')
+    template<typename U>
+    bool has_preceding_node_of_type_in_tree_order() const
+    {
+        for (auto* node = previous_in_pre_order(); node; node = node->previous_in_pre_order()) {
+            if (is<U>(node))
+                return true;
+        }
+        return false;
+    }
+
+    // https://dom.spec.whatwg.org/#concept-tree-following (Object A is 'typename U' and Object B is 'this')
+    template<typename U>
+    bool has_following_node_of_type_in_tree_order() const
+    {
+        for (auto* node = next_in_pre_order(); node; node = node->next_in_pre_order()) {
+            if (is<U>(node))
                 return true;
         }
         return false;
@@ -250,7 +305,7 @@ public:
     {
         for (auto* node = first_child(); node; node = node->next_sibling()) {
             if (is<U>(node))
-                callback(downcast<U>(*node));
+                callback(verify_cast<U>(*node));
         }
     }
 
@@ -271,7 +326,7 @@ public:
     {
         for (auto* sibling = next_sibling(); sibling; sibling = sibling->next_sibling()) {
             if (is<U>(*sibling))
-                return &downcast<U>(*sibling);
+                return &verify_cast<U>(*sibling);
         }
         return nullptr;
     }
@@ -287,7 +342,7 @@ public:
     {
         for (auto* sibling = previous_sibling(); sibling; sibling = sibling->previous_sibling()) {
             if (is<U>(*sibling))
-                return &downcast<U>(*sibling);
+                return &verify_cast<U>(*sibling);
         }
         return nullptr;
     }
@@ -309,7 +364,7 @@ public:
     {
         for (auto* child = first_child(); child; child = child->next_sibling()) {
             if (is<U>(*child))
-                return &downcast<U>(*child);
+                return &verify_cast<U>(*child);
         }
         return nullptr;
     }
@@ -319,7 +374,7 @@ public:
     {
         for (auto* child = last_child(); child; child = child->previous_sibling()) {
             if (is<U>(*child))
-                return &downcast<U>(*child);
+                return &verify_cast<U>(*child);
         }
         return nullptr;
     }
@@ -341,9 +396,18 @@ public:
     {
         for (auto* ancestor = parent(); ancestor; ancestor = ancestor->parent()) {
             if (is<U>(*ancestor))
-                return &downcast<U>(*ancestor);
+                return &verify_cast<U>(*ancestor);
         }
         return nullptr;
+    }
+
+    bool is_parent_of(T const& other) const
+    {
+        for (auto* child = first_child(); child; child = child->next_sibling()) {
+            if (&other == child)
+                return true;
+        }
+        return false;
     }
 
     ~TreeNode()
@@ -358,7 +422,7 @@ public:
     }
 
 protected:
-    TreeNode() { }
+    TreeNode() = default;
 
     bool m_deletion_has_begun { false };
     bool m_in_removed_last_ref { false };

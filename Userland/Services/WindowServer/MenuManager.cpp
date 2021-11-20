@@ -1,28 +1,8 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2020, Shannon Booth <shannon.ml.booth@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Badge.h>
@@ -90,11 +70,11 @@ void MenuManager::event(Core::Event& event)
             && ((key_event.key() >= Key_A && key_event.key() <= Key_Z)
                 || (key_event.key() >= Key_0 && key_event.key() <= Key_9))) {
 
-            if (auto* shortcut_item_indexes = m_current_menu->items_with_alt_shortcut(key_event.code_point())) {
-                VERIFY(!shortcut_item_indexes->is_empty());
+            if (auto* shortcut_item_indices = m_current_menu->items_with_alt_shortcut(key_event.code_point())) {
+                VERIFY(!shortcut_item_indices->is_empty());
                 // FIXME: If there are multiple items with the same Alt shortcut, we should cycle through them
                 //        with each keypress instead of activating immediately.
-                auto index = shortcut_item_indexes->at(0);
+                auto index = shortcut_item_indices->at(0);
                 auto& item = m_current_menu->item(index);
                 m_current_menu->set_hovered_index(index);
                 if (item.is_submenu())
@@ -121,7 +101,7 @@ void MenuManager::event(Core::Event& event)
                     else {
                         auto* target_menu = previous_menu(m_current_menu);
                         if (target_menu) {
-                            target_menu->ensure_menu_window().move_to(target_menu->rect_in_window_menubar().bottom_left().translated(wm.window_with_active_menu()->frame().rect().location()).translated(wm.window_with_active_menu()->frame().menubar_rect().location()));
+                            target_menu->ensure_menu_window(target_menu->rect_in_window_menubar().bottom_left().translated(wm.window_with_active_menu()->frame().rect().location()).translated(wm.window_with_active_menu()->frame().menubar_rect().location()));
                             open_menu(*target_menu);
                             wm.window_with_active_menu()->invalidate_menubar();
                         }
@@ -138,7 +118,7 @@ void MenuManager::event(Core::Event& event)
                 else if (m_open_menu_stack.size() <= 1 && wm.window_with_active_menu()) {
                     auto* target_menu = next_menu(m_current_menu);
                     if (target_menu) {
-                        target_menu->ensure_menu_window().move_to(target_menu->rect_in_window_menubar().bottom_left().translated(wm.window_with_active_menu()->frame().rect().location()).translated(wm.window_with_active_menu()->frame().menubar_rect().location()));
+                        target_menu->ensure_menu_window(target_menu->rect_in_window_menubar().bottom_left().translated(wm.window_with_active_menu()->frame().rect().location()).translated(wm.window_with_active_menu()->frame().menubar_rect().location()));
                         open_menu(*target_menu);
                         wm.window_with_active_menu()->invalidate_menubar();
                         close_everyone_not_in_lineage(*target_menu);
@@ -180,8 +160,7 @@ void MenuManager::handle_mouse_event(MouseEvent& mouse_event)
     bool event_is_inside_current_menu = window->rect().contains(mouse_event.position());
     if (event_is_inside_current_menu) {
         WindowManager::the().set_hovered_window(window);
-        auto translated_event = mouse_event.translated(-window->position());
-        WindowManager::the().deliver_mouse_event(*window, translated_event, true);
+        WindowManager::the().deliver_mouse_event(*window, mouse_event, true);
         return;
     }
 
@@ -217,8 +196,7 @@ void MenuManager::handle_mouse_event(MouseEvent& mouse_event)
             if (!menu->menu_window()->rect().contains(mouse_event.position()))
                 continue;
             WindowManager::the().set_hovered_window(menu->menu_window());
-            auto translated_event = mouse_event.translated(-menu->menu_window()->position());
-            WindowManager::the().deliver_mouse_event(*menu->menu_window(), translated_event, true);
+            WindowManager::the().deliver_mouse_event(*menu->menu_window(), mouse_event, true);
             break;
         }
     }
@@ -242,40 +220,38 @@ void MenuManager::close_everyone()
     }
     m_open_menu_stack.clear();
     clear_current_menu();
-    refresh();
 }
 
 void MenuManager::close_everyone_not_in_lineage(Menu& menu)
 {
-    Vector<Menu*> menus_to_close;
+    Vector<Menu&> menus_to_close;
     for (auto& open_menu : m_open_menu_stack) {
         if (!open_menu)
             continue;
         if (&menu == open_menu.ptr() || open_menu->is_menu_ancestor_of(menu))
             continue;
-        menus_to_close.append(open_menu);
+        menus_to_close.append(*open_menu);
     }
     close_menus(menus_to_close);
 }
 
-void MenuManager::close_menus(const Vector<Menu*>& menus)
+void MenuManager::close_menus(const Vector<Menu&>& menus)
 {
     for (auto& menu : menus) {
-        if (menu == m_current_menu)
+        if (&menu == m_current_menu)
             clear_current_menu();
-        menu->set_visible(false);
-        menu->clear_hovered_item();
+        menu.set_visible(false);
+        menu.clear_hovered_item();
         m_open_menu_stack.remove_first_matching([&](auto& entry) {
-            return entry == menu;
+            return entry == &menu;
         });
     }
-    refresh();
 }
 
-static void collect_menu_subtree(Menu& menu, Vector<Menu*>& menus)
+static void collect_menu_subtree(Menu& menu, Vector<Menu&>& menus)
 {
-    menus.append(&menu);
-    for (int i = 0; i < menu.item_count(); ++i) {
+    menus.append(menu);
+    for (size_t i = 0; i < menu.item_count(); ++i) {
         auto& item = menu.item(i);
         if (!item.is_submenu())
             continue;
@@ -285,7 +261,7 @@ static void collect_menu_subtree(Menu& menu, Vector<Menu*>& menus)
 
 void MenuManager::close_menu_and_descendants(Menu& menu)
 {
-    Vector<Menu*> menus_to_close;
+    Vector<Menu&> menus_to_close;
     collect_menu_subtree(menu, menus_to_close);
     close_menus(menus_to_close);
 }
@@ -311,7 +287,7 @@ void MenuManager::set_hovered_menu(Menu* menu)
 
 void MenuManager::open_menu(Menu& menu, bool as_current_menu)
 {
-    if (is_open(menu)) {
+    if (menu.is_open()) {
         if (as_current_menu || current_menu() != &menu) {
             // This menu is already open. If requested, or if the current
             // window doesn't match this one, then set it to this
@@ -322,9 +298,9 @@ void MenuManager::open_menu(Menu& menu, bool as_current_menu)
 
     if (!menu.is_empty()) {
         menu.redraw_if_theme_changed();
-        if (!menu.menu_window())
-            menu.ensure_menu_window();
-        menu.set_visible(true);
+        auto* window = menu.menu_window();
+        VERIFY(window);
+        window->set_visible(true);
     }
 
     if (m_open_menu_stack.find_if([&menu](auto& other) { return &menu == other.ptr(); }).is_end())
@@ -335,8 +311,6 @@ void MenuManager::open_menu(Menu& menu, bool as_current_menu)
         // other menu is current
         set_current_menu(&menu);
     }
-
-    refresh();
 }
 
 void MenuManager::clear_current_menu()
@@ -388,7 +362,7 @@ Menu* MenuManager::previous_menu(Menu* current)
         return nullptr;
     Menu* found = nullptr;
     Menu* previous = nullptr;
-    wm.window_with_active_menu()->menubar()->for_each_menu([&](Menu& menu) {
+    wm.window_with_active_menu()->menubar().for_each_menu([&](Menu& menu) {
         if (current == &menu) {
             found = previous;
             return IterationDecision::Break;
@@ -406,7 +380,7 @@ Menu* MenuManager::next_menu(Menu* current)
     auto& wm = WindowManager::the();
     if (!wm.window_with_active_menu())
         return nullptr;
-    wm.window_with_active_menu()->menubar()->for_each_menu([&](Menu& menu) {
+    wm.window_with_active_menu()->menubar().for_each_menu([&](Menu& menu) {
         if (is_next) {
             found = &menu;
             return IterationDecision::Break;

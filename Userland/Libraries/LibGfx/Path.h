@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -44,6 +24,7 @@ public:
         MoveTo,
         LineTo,
         QuadraticBezierCurveTo,
+        CubicBezierCurveTo,
         EllipticalArcTo,
     };
 
@@ -103,6 +84,27 @@ private:
     FloatPoint m_through;
 };
 
+class CubicBezierCurveSegment final : public Segment {
+public:
+    CubicBezierCurveSegment(const FloatPoint& point, const FloatPoint& through_0, const FloatPoint& through_1)
+        : Segment(point)
+        , m_through_0(through_0)
+        , m_through_1(through_1)
+    {
+    }
+
+    virtual ~CubicBezierCurveSegment() override = default;
+
+    const FloatPoint& through_0() const { return m_through_0; }
+    const FloatPoint& through_1() const { return m_through_1; }
+
+private:
+    virtual Type type() const override { return Segment::Type::CubicBezierCurveTo; }
+
+    FloatPoint m_through_0;
+    FloatPoint m_through_1;
+};
+
 class EllipticalArcSegment final : public Segment {
 public:
     EllipticalArcSegment(const FloatPoint& point, const FloatPoint& center, const FloatPoint radii, float x_axis_rotation, float theta_1, float theta_delta)
@@ -154,6 +156,12 @@ public:
         invalidate_split_lines();
     }
 
+    void cubic_bezier_curve_to(FloatPoint const& c1, FloatPoint const& c2, FloatPoint const& p2)
+    {
+        append_segment<CubicBezierCurveSegment>(p2, c1, c2);
+        invalidate_split_lines();
+    }
+
     void elliptical_arc_to(const FloatPoint& point, const FloatPoint& radii, double x_axis_rotation, bool large_arc, bool sweep);
     void arc_to(const FloatPoint& point, float radius, bool large_arc, bool sweep)
     {
@@ -187,19 +195,25 @@ public:
     };
 
     const NonnullRefPtrVector<Segment>& segments() const { return m_segments; }
-    const auto& split_lines()
+    auto& split_lines() const
     {
         if (!m_split_lines.has_value()) {
-            segmentize_path();
+            const_cast<Path*>(this)->segmentize_path();
             VERIFY(m_split_lines.has_value());
         }
         return m_split_lines.value();
     }
 
-    const Gfx::FloatRect& bounding_box()
+    void clear()
+    {
+        m_segments.clear();
+        m_split_lines.clear();
+    }
+
+    Gfx::FloatRect const& bounding_box() const
     {
         if (!m_bounding_box.has_value()) {
-            segmentize_path();
+            const_cast<Path*>(this)->segmentize_path();
             VERIFY(m_bounding_box.has_value());
         }
         return m_bounding_box.value();
@@ -217,7 +231,7 @@ private:
     template<typename T, typename... Args>
     void append_segment(Args&&... args)
     {
-        m_segments.append(adopt(*new T(forward<Args>(args)...)));
+        m_segments.append(adopt_ref(*new T(forward<Args>(args)...)));
     }
 
     NonnullRefPtrVector<Segment> m_segments {};

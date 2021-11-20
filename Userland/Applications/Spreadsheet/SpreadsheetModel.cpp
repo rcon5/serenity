@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "SpreadsheetModel.h"
@@ -55,12 +35,12 @@ GUI::Variant SheetModel::data(const GUI::ModelIndex& index, GUI::ModelRole role)
                 if (value.is_object()) {
                     auto& object = value.as_object();
                     if (is<JS::Error>(object)) {
-                        auto error = object.get("message").to_string_without_side_effects();
+                        auto error = object.get_without_side_effects("message").to_string_without_side_effects();
                         builder.append(error);
                         return builder.to_string();
                     }
                 }
-                auto error = value.to_string(cell->sheet().global_object());
+                auto error = value.to_string_without_side_effects();
                 // This is annoying, but whatever.
                 cell->sheet().interpreter().vm().clear_exception();
 
@@ -135,9 +115,10 @@ RefPtr<Core::MimeData> SheetModel::mime_data(const GUI::ModelSelection& selectio
     VERIFY(cursor);
 
     Position cursor_position { (size_t)cursor->column(), (size_t)cursor->row() };
+    auto mime_data_buffer = mime_data->data("text/x-spreadsheet-data");
     auto new_data = String::formatted("{}\n{}",
         cursor_position.to_url(m_sheet).to_string(),
-        StringView(mime_data->data("text/x-spreadsheet-data")));
+        StringView(mime_data_buffer));
     mime_data->set_data("text/x-spreadsheet-data", new_data.to_byte_buffer());
 
     return mime_data;
@@ -166,13 +147,13 @@ void SheetModel::set_data(const GUI::ModelIndex& index, const GUI::Variant& valu
 
     auto& cell = m_sheet->ensure({ (size_t)index.column(), (size_t)index.row() });
     cell.set_data(value.to_string());
-    update();
+    did_update(UpdateFlag::DontInvalidateIndices);
 }
 
 void SheetModel::update()
 {
     m_sheet->update();
-    did_update(UpdateFlag::DontInvalidateIndexes);
+    did_update(UpdateFlag::DontInvalidateIndices);
 }
 
 }

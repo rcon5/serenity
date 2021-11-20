@@ -1,38 +1,20 @@
 /*
  * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "LineProgram.h"
 #include <AK/Debug.h>
+#include <AK/Function.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
 
 namespace Debug::Dwarf {
 
-LineProgram::LineProgram(InputMemoryStream& stream)
-    : m_stream(stream)
+LineProgram::LineProgram(DwarfInfo& dwarf_info, InputMemoryStream& stream)
+    : m_dwarf_info(dwarf_info)
+    , m_stream(stream)
 {
     m_unit_offset = m_stream.offset();
     parse_unit_header();
@@ -43,45 +25,100 @@ LineProgram::LineProgram(InputMemoryStream& stream)
 
 void LineProgram::parse_unit_header()
 {
-    m_stream >> Bytes { &m_unit_header, sizeof(m_unit_header) };
+    m_stream >> m_unit_header;
 
-    VERIFY(m_unit_header.version == DWARF_VERSION);
-    VERIFY(m_unit_header.opcode_base == SPECIAL_OPCODES_BASE);
+    VERIFY(m_unit_header.version() >= MIN_DWARF_VERSION && m_unit_header.version() <= MAX_DWARF_VERSION);
+    VERIFY(m_unit_header.opcode_base() <= sizeof(m_unit_header.std_opcode_lengths) / sizeof(m_unit_header.std_opcode_lengths[0]) + 1);
 
-    dbgln_if(DWARF_DEBUG, "unit length: {}", m_unit_header.length);
+    dbgln_if(DWARF_DEBUG, "unit length: {}", m_unit_header.length());
+}
+
+void LineProgram::parse_path_entries(Function<void(PathEntry& entry)> callback, PathListType list_type)
+{
+    if (m_unit_header.version() >= 5) {
+        u8 path_entry_format_count = 0;
+        m_stream >> path_entry_format_count;
+
+        Vector<PathEntryFormat> format_descriptions;
+
+        for (u8 i = 0; i < path_entry_format_count; i++) {
+            size_t content_type = 0;
+            m_stream.read_LEB128_unsigned(content_type);
+
+            size_t data_form = 0;
+            m_stream.read_LEB128_unsigned(data_form);
+
+            format_descriptions.empend((ContentType)content_type, (AttributeDataForm)data_form);
+        }
+
+        size_t paths_count = 0;
+        m_stream.read_LEB128_unsigned(paths_count);
+
+        for (size_t i = 0; i < paths_count; i++) {
+            PathEntry entry;
+            for (auto& format_description : format_descriptions) {
+                auto value = m_dwarf_info.get_attribute_value(format_description.form, 0, m_stream);
+                switch (format_description.type) {
+                case ContentType::Path:
+                    entry.path = value.as_string();
+                    break;
+                case ContentType::DirectoryIndex:
+                    entry.directory_index = value.as_unsigned();
+                    break;
+                default:
+                    dbgln_if(DWARF_DEBUG, "Unhandled path list attribute: {}", (int)format_description.type);
+                }
+            }
+            callback(entry);
+        }
+    } else {
+        while (m_stream.peek_or_error()) {
+            String path;
+            m_stream >> path;
+            dbgln_if(DWARF_DEBUG, "path: {}", path);
+            PathEntry entry;
+            entry.path = path;
+            if (list_type == PathListType::Filenames) {
+                size_t directory_index = 0;
+                m_stream.read_LEB128_unsigned(directory_index);
+                size_t _unused = 0;
+                m_stream.read_LEB128_unsigned(_unused); // skip modification time
+                m_stream.read_LEB128_unsigned(_unused); // skip file size
+                entry.directory_index = directory_index;
+                dbgln_if(DWARF_DEBUG, "file: {}, directory index: {}", path, directory_index);
+            }
+            callback(entry);
+        }
+
+        m_stream.handle_recoverable_error();
+        m_stream.discard_or_error(1);
+    }
+
+    VERIFY(!m_stream.has_any_error());
 }
 
 void LineProgram::parse_source_directories()
 {
-    m_source_directories.append(".");
-
-    while (m_stream.peek_or_error()) {
-        String directory;
-        m_stream >> directory;
-        dbgln_if(DWARF_DEBUG, "directory: {}", directory);
-        m_source_directories.append(move(directory));
+    if (m_unit_header.version() < 5) {
+        m_source_directories.append(".");
     }
-    m_stream.handle_recoverable_error();
-    m_stream.discard_or_error(1);
-    VERIFY(!m_stream.has_any_error());
+
+    parse_path_entries([this](PathEntry& entry) {
+        m_source_directories.append(entry.path);
+    },
+        PathListType::Directories);
 }
 
 void LineProgram::parse_source_files()
 {
-    m_source_files.append({ ".", 0 });
-    while (!m_stream.eof() && m_stream.peek_or_error()) {
-        String file_name;
-        m_stream >> file_name;
-        size_t directory_index = 0;
-        m_stream.read_LEB128_unsigned(directory_index);
-        size_t _unused = 0;
-        m_stream.read_LEB128_unsigned(_unused); // skip modification time
-        m_stream.read_LEB128_unsigned(_unused); // skip file size
-        dbgln_if(DWARF_DEBUG, "file: {}, directory index: {}", file_name, directory_index);
-        m_source_files.append({ file_name, directory_index });
+    if (m_unit_header.version() < 5) {
+        m_source_files.append({ ".", 0 });
     }
-    m_stream.discard_or_error(1);
-    VERIFY(!m_stream.has_any_error());
+
+    parse_path_entries([this](PathEntry& entry) {
+        m_source_files.append({ entry.path, entry.directory_index });
+    },
+        PathListType::Filenames);
 }
 
 void LineProgram::append_to_line_info()
@@ -93,14 +130,14 @@ void LineProgram::append_to_line_info()
     if (m_file_index >= m_source_files.size())
         return;
 
-    String directory = m_source_directories[m_source_files[m_file_index].directory_index];
+    auto const& directory = m_source_directories[m_source_files[m_file_index].directory_index];
 
     StringBuilder full_path(directory.length() + m_source_files[m_file_index].name.length() + 1);
     full_path.append(directory);
     full_path.append('/');
     full_path.append(m_source_files[m_file_index].name);
 
-    m_lines.append({ m_address, full_path.to_string(), m_line });
+    m_lines.append({ m_address, FlyString { full_path.string_view() }, m_line });
 }
 
 void LineProgram::reset_registers()
@@ -108,7 +145,7 @@ void LineProgram::reset_registers()
     m_address = 0;
     m_line = 1;
     m_file_index = 1;
-    m_is_statement = m_unit_header.default_is_stmt == 1;
+    m_is_statement = m_unit_header.default_is_stmt() == 1;
 }
 
 void LineProgram::handle_extended_opcode()
@@ -137,7 +174,7 @@ void LineProgram::handle_extended_opcode()
         break;
     }
     default:
-        dbgln_if(DWARF_DEBUG, "offset: {:p}", m_stream.offset());
+        dbgln("Encountered unknown sub opcode {} at stream offset {:p}", sub_opcode, m_stream.offset());
         VERIFY_NOT_REACHED();
     }
 }
@@ -151,7 +188,7 @@ void LineProgram::handle_standard_opcode(u8 opcode)
     case StandardOpcodes::AdvancePc: {
         size_t operand = 0;
         m_stream.read_LEB128_unsigned(operand);
-        size_t delta = operand * m_unit_header.min_instruction_length;
+        size_t delta = operand * m_unit_header.min_instruction_length();
         dbgln_if(DWARF_DEBUG, "AdvancePC by: {} to: {:p}", delta, m_address + delta);
         m_address += delta;
         break;
@@ -185,9 +222,9 @@ void LineProgram::handle_standard_opcode(u8 opcode)
         break;
     }
     case StandardOpcodes::ConstAddPc: {
-        u8 adjusted_opcode = 255 - SPECIAL_OPCODES_BASE;
-        ssize_t address_increment = (adjusted_opcode / m_unit_header.line_range) * m_unit_header.min_instruction_length;
-        address_increment *= m_unit_header.min_instruction_length;
+        u8 adjusted_opcode = 255 - m_unit_header.opcode_base();
+        ssize_t address_increment = (adjusted_opcode / m_unit_header.line_range()) * m_unit_header.min_instruction_length();
+        address_increment *= m_unit_header.min_instruction_length();
         dbgln_if(DWARF_DEBUG, "ConstAddPc: advance pc by: {} to: {}", address_increment, (m_address + address_increment));
         m_address += address_increment;
         break;
@@ -205,6 +242,14 @@ void LineProgram::handle_standard_opcode(u8 opcode)
         m_address += delta;
         break;
     }
+    case StandardOpcodes::SetBasicBlock: {
+        m_basic_block = true;
+        break;
+    }
+    case StandardOpcodes::SetProlougeEnd: {
+        m_prologue_end = true;
+        break;
+    }
     default:
         dbgln("Unhandled LineProgram opcode {}", opcode);
         VERIFY_NOT_REACHED();
@@ -212,9 +257,9 @@ void LineProgram::handle_standard_opcode(u8 opcode)
 }
 void LineProgram::handle_special_opcode(u8 opcode)
 {
-    u8 adjusted_opcode = opcode - SPECIAL_OPCODES_BASE;
-    ssize_t address_increment = (adjusted_opcode / m_unit_header.line_range) * m_unit_header.min_instruction_length;
-    ssize_t line_increment = m_unit_header.line_base + (adjusted_opcode % m_unit_header.line_range);
+    u8 adjusted_opcode = opcode - m_unit_header.opcode_base();
+    ssize_t address_increment = (adjusted_opcode / m_unit_header.line_range()) * m_unit_header.min_instruction_length();
+    ssize_t line_increment = m_unit_header.line_base() + (adjusted_opcode % m_unit_header.line_range());
 
     m_address += address_increment;
     m_line += line_increment;
@@ -225,13 +270,16 @@ void LineProgram::handle_special_opcode(u8 opcode)
     }
 
     append_to_line_info();
+
+    m_basic_block = false;
+    m_prologue_end = false;
 }
 
 void LineProgram::run_program()
 {
     reset_registers();
 
-    while ((size_t)m_stream.offset() < m_unit_offset + sizeof(u32) + m_unit_header.length) {
+    while ((size_t)m_stream.offset() < m_unit_offset + sizeof(u32) + m_unit_header.length()) {
         u8 opcode = 0;
         m_stream >> opcode;
 
@@ -245,6 +293,15 @@ void LineProgram::run_program()
             handle_special_opcode(opcode);
         }
     }
+}
+
+LineProgram::DirectoryAndFile LineProgram::get_directory_and_file(size_t file_index) const
+{
+    VERIFY(file_index < m_source_files.size());
+    auto file_entry = m_source_files[file_index];
+    VERIFY(file_entry.directory_index < m_source_directories.size());
+    auto directory_entry = m_source_directories[file_entry.directory_index];
+    return { directory_entry, file_entry.name };
 }
 
 }

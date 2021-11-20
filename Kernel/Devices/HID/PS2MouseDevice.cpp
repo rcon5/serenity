@@ -1,50 +1,20 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Memory.h>
-#include <AK/Singleton.h>
+#include <Kernel/Arch/x86/IO.h>
 #include <Kernel/Debug.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/Devices/HID/PS2MouseDevice.h>
 #include <Kernel/Devices/VMWareBackdoor.h>
-#include <Kernel/IO.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
 #define IRQ_MOUSE 12
-
-#define PS2MOUSE_SET_RESOLUTION 0xE8
-#define PS2MOUSE_STATUS_REQUEST 0xE9
-#define PS2MOUSE_REQUEST_SINGLE_PACKET 0xEB
-#define PS2MOUSE_GET_DEVICE_ID 0xF2
-#define PS2MOUSE_SET_SAMPLE_RATE 0xF3
-#define PS2MOUSE_ENABLE_PACKET_STREAMING 0xF4
-#define PS2MOUSE_DISABLE_PACKET_STREAMING 0xF5
-#define PS2MOUSE_SET_DEFAULTS 0xF6
-#define PS2MOUSE_RESEND 0xFE
-#define PS2MOUSE_RESET 0xFF
 
 #define PS2MOUSE_INTELLIMOUSE_ID 0x03
 #define PS2MOUSE_INTELLIMOUSE_EXPLORER_ID 0x04
@@ -60,11 +30,11 @@ UNMAP_AFTER_INIT PS2MouseDevice::~PS2MouseDevice()
 {
 }
 
-void PS2MouseDevice::handle_irq(const RegisterState&)
+bool PS2MouseDevice::handle_irq(const RegisterState&)
 {
     // The controller will read the data and call irq_handle_byte_read
     // for the appropriate device
-    m_i8042_controller->irq_process_input_buffer(instrument_type());
+    return m_i8042_controller->irq_process_input_buffer(instrument_type());
 }
 
 void PS2MouseDevice::irq_handle_byte_read(u8 byte)
@@ -80,7 +50,7 @@ void PS2MouseDevice::irq_handle_byte_read(u8 byte)
         m_entropy_source.add_random_event(m_data.dword);
 
         {
-            ScopedSpinLock lock(m_queue_lock);
+            SpinlockLocker lock(m_queue_lock);
             m_queue.enqueue(parse_data_packet(m_data));
         }
         evaluate_block_conditions();
@@ -148,22 +118,20 @@ MousePacket PS2MouseDevice::parse_data_packet(const RawPacket& raw_packet)
 
     if (m_has_five_buttons) {
         if (raw_packet.bytes[3] & 0x10)
-            packet.buttons |= MousePacket::BackButton;
+            packet.buttons |= MousePacket::BackwardButton;
         if (raw_packet.bytes[3] & 0x20)
             packet.buttons |= MousePacket::ForwardButton;
     }
 
     packet.is_relative = true;
-#if PS2MOUSE_DEBUG
-    dbgln("PS2 Relative Mouse: Buttons {:x}", packet.buttons);
-    dbgln("Mouse: X {}, Y {}, Z {}", packet.x, packet.y, packet.z);
-#endif
+    dbgln_if(PS2MOUSE_DEBUG, "PS2 Relative Mouse: Buttons {:x}", packet.buttons);
+    dbgln_if(PS2MOUSE_DEBUG, "Mouse: X {}, Y {}, Z {}", packet.x, packet.y, packet.z);
     return packet;
 }
 
 u8 PS2MouseDevice::get_device_id()
 {
-    if (send_command(PS2MOUSE_GET_DEVICE_ID) != I8042_ACK)
+    if (send_command(I8042Command::GetDeviceID) != I8042Response::Acknowledge)
         return 0;
     return read_from_device();
 }
@@ -176,29 +144,31 @@ u8 PS2MouseDevice::read_from_device()
 u8 PS2MouseDevice::send_command(u8 command)
 {
     u8 response = m_i8042_controller->send_command(instrument_type(), command);
-    if (response != I8042_ACK)
-        dbgln("PS2MouseDevice: Command {} got {} but expected ack: {}", command, response, I8042_ACK);
+    if (response != I8042Response::Acknowledge)
+        dbgln("PS2MouseDevice: Command {} got {} but expected ack: {}", command, response, static_cast<u8>(I8042Response::Acknowledge));
     return response;
 }
 
 u8 PS2MouseDevice::send_command(u8 command, u8 data)
 {
     u8 response = m_i8042_controller->send_command(instrument_type(), command, data);
-    if (response != I8042_ACK)
-        dbgln("PS2MouseDevice: Command {} got {} but expected ack: {}", command, response, I8042_ACK);
+    if (response != I8042Response::Acknowledge)
+        dbgln("PS2MouseDevice: Command {} got {} but expected ack: {}", command, response, static_cast<u8>(I8042Response::Acknowledge));
     return response;
 }
 
 void PS2MouseDevice::set_sample_rate(u8 rate)
 {
-    send_command(PS2MOUSE_SET_SAMPLE_RATE, rate);
+    send_command(I8042Command::SetSampleRate, rate);
 }
 
 UNMAP_AFTER_INIT RefPtr<PS2MouseDevice> PS2MouseDevice::try_to_initialize(const I8042Controller& ps2_controller)
 {
-    auto device = adopt(*new PS2MouseDevice(ps2_controller));
-    if (device->initialize())
-        return device;
+    auto mouse_device_or_error = DeviceManagement::try_create_device<PS2MouseDevice>(ps2_controller);
+    // FIXME: Find a way to propagate errors
+    VERIFY(!mouse_device_or_error.is_error());
+    if (mouse_device_or_error.value()->initialize())
+        return mouse_device_or_error.release_value();
     return nullptr;
 }
 
@@ -211,11 +181,10 @@ UNMAP_AFTER_INIT bool PS2MouseDevice::initialize()
 
     u8 device_id = read_from_device();
 
-    // Set default settings.
-    if (send_command(PS2MOUSE_SET_DEFAULTS) != I8042_ACK)
+    if (send_command(I8042Command::SetDefaults) != I8042Response::Acknowledge)
         return false;
 
-    if (send_command(PS2MOUSE_ENABLE_PACKET_STREAMING) != I8042_ACK)
+    if (send_command(I8042Command::EnablePacketStreaming) != I8042Response::Acknowledge)
         return false;
 
     if (device_id != PS2MOUSE_INTELLIMOUSE_ID) {

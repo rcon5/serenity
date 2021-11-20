@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGUI/BoxLayout.h>
@@ -33,6 +13,7 @@
 #include <LibGUI/SpinBox.h>
 #include <LibGUI/TabWidget.h>
 #include <LibGUI/TextBox.h>
+#include <LibGUI/WindowServerConnection.h>
 #include <LibGfx/Palette.h>
 
 namespace GUI {
@@ -145,11 +126,65 @@ private:
     RefPtr<ColorSlider> m_color_slider;
 };
 
+class ColorSelectOverlay final : public Widget {
+    C_OBJECT(ColorSelectOverlay)
+public:
+    Optional<Color> exec()
+    {
+        m_event_loop = make<Core::EventLoop>();
+
+        // FIXME: Allow creation of fully transparent windows without a backing store.
+        auto window = Window::construct();
+        window->set_main_widget(this);
+        window->set_has_alpha_channel(true);
+        window->set_background_color(Color::Transparent);
+        window->set_fullscreen(true);
+        window->set_frameless(true);
+        window->show();
+
+        if (!m_event_loop->exec())
+            return {};
+        return m_col;
+    }
+
+    virtual ~ColorSelectOverlay() override { }
+    Function<void(Color)> on_color_changed;
+
+private:
+    ColorSelectOverlay()
+    {
+        set_override_cursor(Gfx::StandardCursor::Eyedropper);
+    }
+
+    virtual void mousedown_event(GUI::MouseEvent&) override { m_event_loop->quit(1); }
+    virtual void mousemove_event(GUI::MouseEvent&) override
+    {
+        auto new_col = WindowServerConnection::the().get_color_under_cursor();
+        if (new_col == m_col)
+            return;
+        m_col = new_col;
+        if (on_color_changed)
+            on_color_changed(m_col);
+    }
+
+    virtual void keydown_event(GUI::KeyEvent& event) override
+    {
+        if (event.key() == KeyCode::Key_Escape) {
+            event.accept();
+            m_event_loop->quit(0);
+            return;
+        }
+    }
+
+    OwnPtr<Core::EventLoop> m_event_loop;
+    Color m_col;
+};
+
 ColorPicker::ColorPicker(Color color, Window* parent_window, String title)
     : Dialog(parent_window)
     , m_color(color)
 {
-    set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/color-chooser.png"));
+    set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/color-chooser.png"));
     set_title(title);
     set_resizable(false);
     resize(458, 326);
@@ -174,21 +209,21 @@ void ColorPicker::build_ui()
 {
     auto& root_container = set_main_widget<Widget>();
     root_container.set_layout<VerticalBoxLayout>();
-    root_container.layout()->set_margins({ 4, 4, 4, 4 });
+    root_container.layout()->set_margins(4);
     root_container.set_fill_with_background_color(true);
 
     auto& tab_widget = root_container.add<GUI::TabWidget>();
 
     auto& tab_palette = tab_widget.add_tab<Widget>("Palette");
     tab_palette.set_layout<VerticalBoxLayout>();
-    tab_palette.layout()->set_margins({ 4, 4, 4, 4 });
+    tab_palette.layout()->set_margins(4);
     tab_palette.layout()->set_spacing(4);
 
     build_ui_palette(tab_palette);
 
     auto& tab_custom_color = tab_widget.add_tab<Widget>("Custom Color");
     tab_custom_color.set_layout<VerticalBoxLayout>();
-    tab_custom_color.layout()->set_margins({ 4, 4, 4, 4 });
+    tab_custom_color.layout()->set_margins(4);
     tab_custom_color.layout()->set_spacing(4);
 
     build_ui_custom(tab_custom_color);
@@ -260,14 +295,14 @@ void ColorPicker::build_ui_custom(Widget& root_container)
     // Right Side
     auto& vertical_container = horizontal_container.add<Widget>();
     vertical_container.set_layout<VerticalBoxLayout>();
-    vertical_container.layout()->set_margins({ 8, 0, 0, 0 });
+    vertical_container.layout()->set_margins({ 0, 0, 0, 8 });
     vertical_container.set_fixed_width(128);
 
     auto& preview_container = vertical_container.add<Frame>();
     preview_container.set_layout<VerticalBoxLayout>();
-    preview_container.layout()->set_margins({ 2, 2, 2, 2 });
+    preview_container.layout()->set_margins(2);
     preview_container.layout()->set_spacing(0);
-    preview_container.set_fixed_height(128);
+    preview_container.set_fixed_height(100);
 
     // Current color
     preview_container.add<ColorPreview>(m_color);
@@ -360,6 +395,24 @@ void ColorPicker::build_ui_custom(Widget& root_container)
     make_spinbox(Green, m_color.green());
     make_spinbox(Blue, m_color.blue());
     make_spinbox(Alpha, m_color.alpha());
+
+    m_selector_button = vertical_container.add<GUI::Button>("Select on screen");
+    m_selector_button->on_click = [this](auto) {
+        auto selector = ColorSelectOverlay::construct();
+        auto original_color = m_color;
+        // This allows us to use the color preview widget as a live-preview for
+        // the color currently under the cursor, which is helpful.
+        selector->on_color_changed = [this](auto color) {
+            m_color = color;
+            update_color_widgets();
+        };
+
+        // Set the final color
+        auto maybe_color = selector->exec();
+        m_color = maybe_color.value_or(original_color);
+        m_custom_color->set_color(m_color);
+        update_color_widgets();
+    };
 }
 
 void ColorPicker::update_color_widgets()
@@ -382,8 +435,8 @@ void ColorPicker::create_color_button(Widget& container, unsigned rgb)
     auto& widget = container.add<ColorButton>(*this, color);
     widget.on_click = [this](Color color) {
         for (auto& value : m_color_widgets) {
-            value->set_selected(false);
-            value->update();
+            value.set_selected(false);
+            value.update();
         }
 
         m_color = color;
@@ -395,7 +448,7 @@ void ColorPicker::create_color_button(Widget& container, unsigned rgb)
         widget.set_selected(true);
     }
 
-    m_color_widgets.append(&widget);
+    m_color_widgets.append(widget);
 }
 
 ColorButton::ColorButton(ColorPicker& picker, Color color)
@@ -479,15 +532,15 @@ ColorField::ColorField(Color color)
 
 void ColorField::create_color_bitmap()
 {
-    m_color_bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, { 256, 256 });
+    m_color_bitmap = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRx8888, { 256, 256 });
     auto painter = Gfx::Painter(*m_color_bitmap);
 
     Gfx::HSV hsv;
     hsv.hue = m_hue;
     for (int x = 0; x < 256; x++) {
-        hsv.saturation = x / 255.0f;
+        hsv.saturation = x / 255.0;
         for (int y = 0; y < 256; y++) {
-            hsv.value = (255 - y) / 255.0f;
+            hsv.value = (255 - y) / 255.0;
             Color color = Color::from_hsv(hsv);
             painter.set_pixel({ x, y }, color);
         }
@@ -558,7 +611,7 @@ void ColorField::pick_color_at_position(GUI::MouseEvent& event)
 
 void ColorField::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() == GUI::MouseButton::Left) {
+    if (event.button() == GUI::MouseButton::Primary) {
         m_being_pressed = true;
         pick_color_at_position(event);
     }
@@ -566,7 +619,7 @@ void ColorField::mousedown_event(GUI::MouseEvent& event)
 
 void ColorField::mouseup_event(GUI::MouseEvent& event)
 {
-    if (event.button() == GUI::MouseButton::Left) {
+    if (event.button() == GUI::MouseButton::Primary) {
         m_being_pressed = false;
         pick_color_at_position(event);
     }
@@ -574,7 +627,7 @@ void ColorField::mouseup_event(GUI::MouseEvent& event)
 
 void ColorField::mousemove_event(GUI::MouseEvent& event)
 {
-    if (event.buttons() & GUI::MouseButton::Left)
+    if (event.buttons() & GUI::MouseButton::Primary)
         pick_color_at_position(event);
 }
 
@@ -605,7 +658,7 @@ void ColorField::resize_event(ResizeEvent&)
 ColorSlider::ColorSlider(double value)
     : m_value(value)
 {
-    m_color_bitmap = Gfx::Bitmap::create(Gfx::BitmapFormat::BGRx8888, { 32, 360 });
+    m_color_bitmap = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRx8888, { 32, 360 });
     auto painter = Gfx::Painter(*m_color_bitmap);
 
     for (int h = 0; h < 360; h++) {
@@ -652,7 +705,7 @@ void ColorSlider::pick_value_at_position(GUI::MouseEvent& event)
 
 void ColorSlider::mousedown_event(GUI::MouseEvent& event)
 {
-    if (event.button() == GUI::MouseButton::Left) {
+    if (event.button() == GUI::MouseButton::Primary) {
         m_being_pressed = true;
         pick_value_at_position(event);
     }
@@ -660,7 +713,7 @@ void ColorSlider::mousedown_event(GUI::MouseEvent& event)
 
 void ColorSlider::mouseup_event(GUI::MouseEvent& event)
 {
-    if (event.button() == GUI::MouseButton::Left) {
+    if (event.button() == GUI::MouseButton::Primary) {
         m_being_pressed = false;
         pick_value_at_position(event);
     }
@@ -668,7 +721,7 @@ void ColorSlider::mouseup_event(GUI::MouseEvent& event)
 
 void ColorSlider::mousemove_event(GUI::MouseEvent& event)
 {
-    if (event.buttons() & GUI::MouseButton::Left)
+    if (event.buttons() & GUI::MouseButton::Primary)
         pick_value_at_position(event);
 }
 

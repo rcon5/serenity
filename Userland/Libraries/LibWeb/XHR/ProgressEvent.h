@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -33,13 +13,23 @@ namespace Web::XHR {
 // FIXME: All the "u32"s should be "u64"s, however LibJS doesn't currently support constructing values with u64,
 //        and the IDL parser doesn't properly parse "unsigned long long".
 
+struct ProgressEventInit : public DOM::EventInit {
+    bool length_computable { false };
+    u32 loaded { 0 };
+    u32 total { 0 };
+};
+
 class ProgressEvent : public DOM::Event {
 public:
     using WrapperType = Bindings::ProgressEventWrapper;
 
-    static NonnullRefPtr<ProgressEvent> create(const FlyString& event_name, u32 transmitted, u32 length)
+    static NonnullRefPtr<ProgressEvent> create(FlyString const& event_name, ProgressEventInit const& event_init)
     {
-        return adopt(*new ProgressEvent(event_name, transmitted, length));
+        return adopt_ref(*new ProgressEvent(event_name, event_init));
+    }
+    static NonnullRefPtr<ProgressEvent> create_with_global_object(Bindings::WindowObject&, FlyString const& event_name, ProgressEventInit const& event_init)
+    {
+        return ProgressEvent::create(event_name, event_init);
     }
 
     virtual ~ProgressEvent() override { }
@@ -49,11 +39,11 @@ public:
     u32 total() const { return m_total; }
 
 protected:
-    ProgressEvent(const FlyString& event_name, u32 transmitted, u32 length)
-        : Event(event_name)
-        , m_length_computable(length != 0)
-        , m_loaded(transmitted)
-        , m_total(length)
+    ProgressEvent(FlyString const& event_name, ProgressEventInit const& event_init)
+        : Event(event_name, event_init)
+        , m_length_computable(event_init.length_computable)
+        , m_loaded(event_init.loaded)
+        , m_total(event_init.total)
     {
     }
 

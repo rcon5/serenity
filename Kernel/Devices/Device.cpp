@@ -1,88 +1,153 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Singleton.h>
 #include <Kernel/Devices/Device.h>
+#include <Kernel/Devices/DeviceManagement.h>
 #include <Kernel/FileSystem/InodeMetadata.h>
-#include <LibC/errno_numbers.h>
+#include <Kernel/FileSystem/SysFS.h>
+#include <Kernel/Sections.h>
 
 namespace Kernel {
 
-static AK::Singleton<HashMap<u32, Device*>> s_all_devices;
-
-HashMap<u32, Device*>& Device::all_devices()
+NonnullRefPtr<SysFSDeviceComponent> SysFSDeviceComponent::must_create(Device const& device)
 {
-    return *s_all_devices;
+    return adopt_ref_if_nonnull(new SysFSDeviceComponent(device)).release_nonnull();
+}
+SysFSDeviceComponent::SysFSDeviceComponent(Device const& device)
+    : SysFSComponent(String::formatted("{}:{}", device.major(), device.minor()))
+    , m_block_device(device.is_block_device())
+{
+    VERIFY(device.is_block_device() || device.is_character_device());
 }
 
-void Device::for_each(Function<void(Device&)> callback)
+UNMAP_AFTER_INIT NonnullRefPtr<SysFSDevicesDirectory> SysFSDevicesDirectory::must_create(SysFSRootDirectory const& root_directory)
 {
-    for (auto& entry : all_devices())
-        callback(*entry.value);
+    auto devices_directory = adopt_ref_if_nonnull(new SysFSDevicesDirectory(root_directory)).release_nonnull();
+    devices_directory->m_components.append(SysFSBlockDevicesDirectory::must_create(*devices_directory));
+    devices_directory->m_components.append(SysFSCharacterDevicesDirectory::must_create(*devices_directory));
+    return devices_directory;
+}
+SysFSDevicesDirectory::SysFSDevicesDirectory(SysFSRootDirectory const& root_directory)
+    : SysFSDirectory("dev"sv, root_directory)
+{
 }
 
-Device* Device::get_device(unsigned major, unsigned minor)
+NonnullRefPtr<SysFSBlockDevicesDirectory> SysFSBlockDevicesDirectory::must_create(SysFSDevicesDirectory const& devices_directory)
 {
-    auto it = all_devices().find(encoded_device(major, minor));
-    if (it == all_devices().end())
+    return adopt_ref_if_nonnull(new SysFSBlockDevicesDirectory(devices_directory)).release_nonnull();
+}
+SysFSBlockDevicesDirectory::SysFSBlockDevicesDirectory(SysFSDevicesDirectory const& devices_directory)
+    : SysFSDirectory("block"sv, devices_directory)
+{
+}
+KResult SysFSBlockDevicesDirectory::traverse_as_directory(unsigned fsid, Function<bool(FileSystem::DirectoryEntryView const&)> callback) const
+{
+    VERIFY(m_parent_directory);
+    callback({ ".", { fsid, component_index() }, 0 });
+    callback({ "..", { fsid, m_parent_directory->component_index() }, 0 });
+
+    SysFSComponentRegistry::the().devices_list().with_exclusive([&](auto& list) -> void {
+        for (auto& exposed_device : list) {
+            if (!exposed_device.is_block_device())
+                continue;
+            callback({ exposed_device.name(), { fsid, exposed_device.component_index() }, 0 });
+        }
+    });
+    return KSuccess;
+}
+RefPtr<SysFSComponent> SysFSBlockDevicesDirectory::lookup(StringView name)
+{
+    return SysFSComponentRegistry::the().devices_list().with_exclusive([&](auto& list) -> RefPtr<SysFSComponent> {
+        for (auto& exposed_device : list) {
+            if (!exposed_device.is_block_device())
+                continue;
+            if (exposed_device.name() == name)
+                return exposed_device;
+        }
         return nullptr;
-    return it->value;
+    });
+}
+
+NonnullRefPtr<SysFSCharacterDevicesDirectory> SysFSCharacterDevicesDirectory::must_create(SysFSDevicesDirectory const& devices_directory)
+{
+    return adopt_ref_if_nonnull(new SysFSCharacterDevicesDirectory(devices_directory)).release_nonnull();
+}
+SysFSCharacterDevicesDirectory::SysFSCharacterDevicesDirectory(SysFSDevicesDirectory const& devices_directory)
+    : SysFSDirectory("char"sv, devices_directory)
+{
+}
+KResult SysFSCharacterDevicesDirectory::traverse_as_directory(unsigned fsid, Function<bool(FileSystem::DirectoryEntryView const&)> callback) const
+{
+    VERIFY(m_parent_directory);
+    callback({ ".", { fsid, component_index() }, 0 });
+    callback({ "..", { fsid, m_parent_directory->component_index() }, 0 });
+
+    SysFSComponentRegistry::the().devices_list().with_exclusive([&](auto& list) -> void {
+        for (auto& exposed_device : list) {
+            if (exposed_device.is_block_device())
+                continue;
+            callback({ exposed_device.name(), { fsid, exposed_device.component_index() }, 0 });
+        }
+    });
+    return KSuccess;
+}
+RefPtr<SysFSComponent> SysFSCharacterDevicesDirectory::lookup(StringView name)
+{
+    return SysFSComponentRegistry::the().devices_list().with_exclusive([&](auto& list) -> RefPtr<SysFSComponent> {
+        for (auto& exposed_device : list) {
+            if (exposed_device.is_block_device())
+                continue;
+            if (exposed_device.name() == name)
+                return exposed_device;
+        }
+        return nullptr;
+    });
 }
 
 Device::Device(unsigned major, unsigned minor)
     : m_major(major)
     , m_minor(minor)
 {
-    u32 device_id = encoded_device(major, minor);
-    auto it = all_devices().find(device_id);
-    if (it != all_devices().end()) {
-        dbgln("Already registered {},{}: {}", major, minor, it->value->class_name());
-    }
-    VERIFY(!all_devices().contains(device_id));
-    all_devices().set(device_id, this);
+}
+
+void Device::after_inserting()
+{
+    DeviceManagement::the().after_inserting_device({}, *this);
+    VERIFY(!m_sysfs_component);
+    auto sys_fs_component = SysFSDeviceComponent::must_create(*this);
+    m_sysfs_component = sys_fs_component;
+    SysFSComponentRegistry::the().devices_list().with_exclusive([&](auto& list) -> void {
+        list.append(sys_fs_component);
+    });
+}
+
+void Device::before_removing()
+{
+    VERIFY(m_sysfs_component);
+    SysFSComponentRegistry::the().devices_list().with_exclusive([&](auto& list) -> void {
+        list.remove(*m_sysfs_component);
+    });
+    DeviceManagement::the().before_device_removal({}, *this);
+    m_state = State::BeingRemoved;
 }
 
 Device::~Device()
 {
-    all_devices().remove(encoded_device(m_major, m_minor));
+    VERIFY(m_state == State::BeingRemoved);
 }
 
-String Device::absolute_path() const
+KResultOr<NonnullOwnPtr<KString>> Device::pseudo_path(const OpenFileDescription&) const
 {
-    return String::formatted("device:{},{} ({})", m_major, m_minor, class_name());
-}
-
-String Device::absolute_path(const FileDescription&) const
-{
-    return absolute_path();
+    return KString::try_create(String::formatted("device:{},{}", major(), minor()));
 }
 
 void Device::process_next_queued_request(Badge<AsyncDeviceRequest>, const AsyncDeviceRequest& completed_request)
 {
-    ScopedSpinLock lock(m_requests_lock);
+    SpinlockLocker lock(m_requests_lock);
     VERIFY(!m_requests.is_empty());
     VERIFY(m_requests.first().ptr() == &completed_request);
     m_requests.remove(m_requests.begin());

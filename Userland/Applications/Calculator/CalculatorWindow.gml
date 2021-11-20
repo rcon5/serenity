@@ -1,5 +1,5 @@
 @GUI::Widget {
-    fixed_width: 254
+    fixed_width: 250
     fixed_height: 215
     fill_with_background_color: true
     layout: @GUI::VerticalBoxLayout
@@ -13,7 +13,7 @@
 
         @GUI::Widget {
             layout: @GUI::VerticalBoxLayout {
-                margins: [10, 2, 10, 0]
+                margins: [8]
             }
 
             @GUI::TextBox {
@@ -45,7 +45,7 @@
                 @GUI::Button {
                     name: "clear_error_button"
                     text: "CE"
-                    fixed_width: 55
+                    fixed_width: 56
                     fixed_height: 28
                     foreground_color: "brown"
                 }

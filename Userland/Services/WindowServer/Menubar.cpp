@@ -1,47 +1,26 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, sin-ack <sin-ack@protonmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Menubar.h"
-#include "Menu.h"
+#include "WindowManager.h"
 
 namespace WindowServer {
 
-Menubar::Menubar(ClientConnection& client, int menubar_id)
-    : m_client(client)
-    , m_menubar_id(menubar_id)
+void Menubar::layout_menu(Menu& menu, Gfx::IntRect window_rect)
 {
-}
+    // FIXME: Maybe move this to the theming system?
+    static constexpr auto menubar_menu_margin = 14;
 
-Menubar::~Menubar()
-{
-}
+    auto& wm = WindowManager::the();
+    auto menubar_rect = Gfx::WindowTheme::current().menubar_rect(Gfx::WindowTheme::WindowType::Normal, window_rect, wm.palette(), 1);
 
-void Menubar::add_menu(Menu& menu)
-{
-    m_menus.append(&menu);
+    int text_width = wm.font().width(Gfx::parse_ampersand_string(menu.name()));
+    menu.set_rect_in_window_menubar({ m_next_menu_location.x(), 0, text_width + menubar_menu_margin, menubar_rect.height() });
+    m_next_menu_location.translate_by(menu.rect_in_window_menubar().width(), 0);
 }
 
 }

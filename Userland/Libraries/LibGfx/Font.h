@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@gmx.de>
- * All rights reserved.
+ * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -101,10 +81,19 @@ private:
     int m_ascent;
 };
 
+struct FontMetrics {
+    float size { 0 };
+    float x_height { 0 };
+    float glyph_width { 0 };
+    float glyph_spacing { 0 };
+};
+
 class Font : public RefCounted<Font> {
 public:
     virtual NonnullRefPtr<Font> clone() const = 0;
     virtual ~Font() {};
+
+    FontMetrics metrics(u32 code_point) const;
 
     virtual u8 presentation_size() const = 0;
 
@@ -112,7 +101,7 @@ public:
     virtual Glyph glyph(u32 code_point) const = 0;
     virtual bool contains_glyph(u32 code_point) const = 0;
 
-    virtual u8 glyph_width(size_t ch) const = 0;
+    virtual u8 glyph_width(u32 code_point) const = 0;
     virtual int glyph_or_emoji_width(u32 code_point) const = 0;
     virtual u8 glyph_height() const = 0;
     virtual int x_height() const = 0;
@@ -141,7 +130,10 @@ public:
 
     virtual String qualified_name() const = 0;
 
-    virtual const Font& bold_variant() const = 0;
+    Font const& bold_variant() const;
+
+private:
+    mutable RefPtr<Gfx::Font> m_bold_variant;
 };
 
 }

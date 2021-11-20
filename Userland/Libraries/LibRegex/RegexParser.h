@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Emanuel Sprung <emanuel.sprung@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -35,10 +15,12 @@
 #include <AK/StringBuilder.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
+#include <LibUnicode/Forward.h>
 
 namespace regex {
 
 class PosixExtendedParser;
+class PosixBasicParser;
 class ECMA262Parser;
 
 template<typename T>
@@ -55,6 +37,10 @@ struct ParserTraits<PosixExtendedParser> : public GenericParserTraits<PosixOptio
 };
 
 template<>
+struct ParserTraits<PosixBasicParser> : public GenericParserTraits<PosixOptions> {
+};
+
+template<>
 struct ParserTraits<ECMA262Parser> : public GenericParserTraits<ECMAScriptOptions> {
 };
 
@@ -67,6 +53,7 @@ public:
         size_t match_length_minimum;
         Error error;
         Token error_token;
+        Vector<FlyString> capture_groups;
     };
 
     explicit Parser(Lexer& lexer)
@@ -93,14 +80,20 @@ protected:
     ALWAYS_INLINE bool match_ordinary_characters();
     ALWAYS_INLINE Token consume();
     ALWAYS_INLINE Token consume(TokenType type, Error error);
-    ALWAYS_INLINE bool consume(const String&);
+    ALWAYS_INLINE bool consume(String const&);
+    ALWAYS_INLINE Optional<u32> consume_escaped_code_point(bool unicode);
     ALWAYS_INLINE bool try_skip(StringView);
     ALWAYS_INLINE bool lookahead_any(StringView);
-    ALWAYS_INLINE char skip();
+    ALWAYS_INLINE unsigned char skip();
     ALWAYS_INLINE void back(size_t = 1);
     ALWAYS_INLINE void reset();
     ALWAYS_INLINE bool done() const;
     ALWAYS_INLINE bool set_error(Error error);
+
+    struct NamedCaptureGroup {
+        size_t group_index { 0 };
+        size_t minimum_length { 0 };
+    };
 
     struct ParserState {
         Lexer& lexer;
@@ -111,10 +104,10 @@ protected:
         size_t capture_groups_count { 0 };
         size_t named_capture_groups_count { 0 };
         size_t match_length_minimum { 0 };
+        size_t repetition_mark_count { 0 };
         AllOptions regex_options;
         HashMap<int, size_t> capture_group_minimum_lengths;
-        HashMap<FlyString, size_t> named_capture_group_minimum_lengths;
-        HashMap<size_t, FlyString> named_capture_groups;
+        HashMap<FlyString, NamedCaptureGroup> named_capture_groups;
 
         explicit ParserState(Lexer& lexer)
             : lexer(lexer)
@@ -132,15 +125,59 @@ protected:
     ParserState m_parser_state;
 };
 
-class PosixExtendedParser final : public Parser {
-public:
-    explicit PosixExtendedParser(Lexer& lexer)
+class AbstractPosixParser : public Parser {
+protected:
+    explicit AbstractPosixParser(Lexer& lexer)
         : Parser(lexer)
     {
     }
 
-    PosixExtendedParser(Lexer& lexer, Optional<typename ParserTraits<PosixExtendedParser>::OptionsType> regex_options)
+    AbstractPosixParser(Lexer& lexer, Optional<typename ParserTraits<PosixExtendedParser>::OptionsType> regex_options)
         : Parser(lexer, regex_options.value_or({}))
+    {
+    }
+
+    ALWAYS_INLINE bool parse_bracket_expression(Vector<CompareTypeAndValuePair>&, size_t&);
+};
+
+class PosixBasicParser final : public AbstractPosixParser {
+public:
+    explicit PosixBasicParser(Lexer& lexer)
+        : AbstractPosixParser(lexer)
+    {
+    }
+
+    PosixBasicParser(Lexer& lexer, Optional<typename ParserTraits<PosixBasicParser>::OptionsType> regex_options)
+        : AbstractPosixParser(lexer, regex_options.value_or({}))
+    {
+    }
+
+    ~PosixBasicParser() = default;
+
+private:
+    bool parse_internal(ByteCode&, size_t&) override;
+
+    bool parse_root(ByteCode&, size_t&);
+    bool parse_re_expression(ByteCode&, size_t&);
+    bool parse_simple_re(ByteCode&, size_t&);
+    bool parse_nonduplicating_re(ByteCode&, size_t&);
+    bool parse_one_char_or_collation_element(ByteCode&, size_t&);
+
+    constexpr static size_t number_of_addressable_capture_groups = 9;
+    size_t m_capture_group_minimum_lengths[number_of_addressable_capture_groups] { 0 };
+    bool m_capture_group_seen[number_of_addressable_capture_groups] { false };
+    size_t m_current_capture_group_depth { 0 };
+};
+
+class PosixExtendedParser final : public AbstractPosixParser {
+public:
+    explicit PosixExtendedParser(Lexer& lexer)
+        : AbstractPosixParser(lexer)
+    {
+    }
+
+    PosixExtendedParser(Lexer& lexer, Optional<typename ParserTraits<PosixExtendedParser>::OptionsType> regex_options)
+        : AbstractPosixParser(lexer, regex_options.value_or({}))
     {
     }
 
@@ -162,12 +199,14 @@ public:
     explicit ECMA262Parser(Lexer& lexer)
         : Parser(lexer)
     {
+        m_capture_groups_in_scope.empend();
     }
 
     ECMA262Parser(Lexer& lexer, Optional<typename ParserTraits<ECMA262Parser>::OptionsType> regex_options)
         : Parser(lexer, regex_options.value_or({}))
     {
         m_should_use_browser_extended_grammar = regex_options.has_value() && regex_options->has_flag_set(ECMAScriptFlags::BrowserExtended);
+        m_capture_groups_in_scope.empend();
     }
 
     ~ECMA262Parser() = default;
@@ -179,9 +218,16 @@ private:
         Allow,
         Disallow,
     };
-    StringView read_digits_as_string(ReadDigitsInitialZeroState initial_zero = ReadDigitsInitialZeroState::Allow, bool hex = false, int max_count = -1);
-    Optional<unsigned> read_digits(ReadDigitsInitialZeroState initial_zero = ReadDigitsInitialZeroState::Allow, bool hex = false, int max_count = -1);
-    StringView read_capture_group_specifier(bool take_starting_angle_bracket = false);
+    StringView read_digits_as_string(ReadDigitsInitialZeroState initial_zero = ReadDigitsInitialZeroState::Allow, bool hex = false, int max_count = -1, int min_count = -1);
+    Optional<unsigned> read_digits(ReadDigitsInitialZeroState initial_zero = ReadDigitsInitialZeroState::Allow, bool hex = false, int max_count = -1, int min_count = -1);
+    FlyString read_capture_group_specifier(bool take_starting_angle_bracket = false);
+
+    struct Script {
+        Unicode::Script script {};
+        bool is_extension { false };
+    };
+    using PropertyEscape = Variant<Unicode::Property, Unicode::GeneralCategory, Script, Empty>;
+    Optional<PropertyEscape> read_unicode_property_escape();
 
     bool parse_pattern(ByteCode&, size_t&, bool unicode, bool named);
     bool parse_disjunction(ByteCode&, size_t&, bool unicode, bool named);
@@ -190,11 +236,13 @@ private:
     bool parse_assertion(ByteCode&, size_t&, bool unicode, bool named);
     bool parse_atom(ByteCode&, size_t&, bool unicode, bool named);
     bool parse_quantifier(ByteCode&, size_t&, bool unicode, bool named);
+    bool parse_interval_quantifier(Optional<u64>& repeat_min, Optional<u64>& repeat_max);
     bool parse_atom_escape(ByteCode&, size_t&, bool unicode, bool named);
     bool parse_character_class(ByteCode&, size_t&, bool unicode, bool named);
     bool parse_capture_group(ByteCode&, size_t&, bool unicode, bool named);
     Optional<CharClass> parse_character_class_escape(bool& out_inverse, bool expect_backslash = false);
     bool parse_nonempty_class_ranges(Vector<CompareTypeAndValuePair>&, bool unicode);
+    bool parse_unicode_property_escape(PropertyEscape& property, bool& negated);
 
     // Used only by B.1.4, Regular Expression Patterns (Extended for use in browsers)
     bool parse_quantifiable_assertion(ByteCode&, size_t&, bool named);
@@ -212,14 +260,21 @@ private:
     // Most patterns should have no need to ever populate this field.
     Optional<size_t> m_total_number_of_capturing_parenthesis;
 
-    // Keep the Annex B. behaviour behind a flag, the users can enable it by passing the `ECMAScriptFlags::BrowserExtended` flag.
+    // Keep the Annex B. behavior behind a flag, the users can enable it by passing the `ECMAScriptFlags::BrowserExtended` flag.
     bool m_should_use_browser_extended_grammar { false };
+
+    // ECMA-262 basically requires that we clear the inner captures of a capture group before trying to match it,
+    // by requiring that (...)+ only contain the matches for the last iteration.
+    // To do that, we have to keep track of which capture groups are "in scope", so we can clear them as needed.
+    Vector<Vector<size_t>> m_capture_groups_in_scope;
 };
 
 using PosixExtended = PosixExtendedParser;
+using PosixBasic = PosixBasicParser;
 using ECMA262 = ECMA262Parser;
 
 }
 
 using regex::ECMA262;
+using regex::PosixBasic;
 using regex::PosixExtended;

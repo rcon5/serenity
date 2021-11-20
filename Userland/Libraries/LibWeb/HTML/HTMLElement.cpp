@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/StringBuilder.h>
@@ -35,6 +15,7 @@
 #include <LibWeb/HTML/HTMLAnchorElement.h>
 #include <LibWeb/HTML/HTMLBodyElement.h>
 #include <LibWeb/HTML/HTMLElement.h>
+#include <LibWeb/Layout/Box.h>
 #include <LibWeb/Layout/BreakNode.h>
 #include <LibWeb/Layout/TextNode.h>
 #include <LibWeb/UIEvents/EventNames.h>
@@ -43,6 +24,7 @@ namespace Web::HTML {
 
 HTMLElement::HTMLElement(DOM::Document& document, QualifiedName qualified_name)
     : Element(document, move(qualified_name))
+    , m_dataset(DOMStringMap::create(*this))
 {
 }
 
@@ -53,13 +35,13 @@ HTMLElement::~HTMLElement()
 HTMLElement::ContentEditableState HTMLElement::content_editable_state() const
 {
     auto contenteditable = attribute(HTML::AttributeNames::contenteditable);
-    // "true" and the empty string map to the "true" state.
+    // "true", an empty string or a missing value map to the "true" state.
     if ((!contenteditable.is_null() && contenteditable.is_empty()) || contenteditable.equals_ignoring_case("true"))
         return ContentEditableState::True;
     // "false" maps to the "false" state.
     if (contenteditable.equals_ignoring_case("false"))
         return ContentEditableState::False;
-    // "inherit", an invalid value, and a missing value all map to the "inherit" state.
+    // Having no such attribute or an invalid value maps to the "inherit" state.
     return ContentEditableState::Inherit;
 }
 
@@ -115,7 +97,6 @@ void HTMLElement::set_inner_text(StringView text)
     append_child(document().create_text_node(text));
 
     set_needs_style_update(true);
-    document().invalidate_layout();
 }
 
 String HTMLElement::inner_text()
@@ -130,7 +111,7 @@ String HTMLElement::inner_text()
     Function<void(const Layout::Node&)> recurse = [&](auto& node) {
         for (auto* child = node.first_child(); child; child = child->next_sibling()) {
             if (is<Layout::TextNode>(child))
-                builder.append(downcast<Layout::TextNode>(*child).text_for_rendering());
+                builder.append(verify_cast<Layout::TextNode>(*child).text_for_rendering());
             if (is<Layout::BreakNode>(child))
                 builder.append('\n');
             recurse(*child);
@@ -141,7 +122,8 @@ String HTMLElement::inner_text()
     return builder.to_string();
 }
 
-unsigned HTMLElement::offset_top() const
+// // https://drafts.csswg.org/cssom-view/#dom-htmlelement-offsettop
+int HTMLElement::offset_top() const
 {
     if (is<HTML::HTMLBodyElement>(this) || !layout_node() || !parent_element() || !parent_element()->layout_node())
         return 0;
@@ -150,13 +132,30 @@ unsigned HTMLElement::offset_top() const
     return position.y() - parent_position.y();
 }
 
-unsigned HTMLElement::offset_left() const
+// https://drafts.csswg.org/cssom-view/#dom-htmlelement-offsetleft
+int HTMLElement::offset_left() const
 {
     if (is<HTML::HTMLBodyElement>(this) || !layout_node() || !parent_element() || !parent_element()->layout_node())
         return 0;
     auto position = layout_node()->box_type_agnostic_position();
     auto parent_position = parent_element()->layout_node()->box_type_agnostic_position();
     return position.x() - parent_position.x();
+}
+
+// https://drafts.csswg.org/cssom-view/#dom-htmlelement-offsetwidth
+int HTMLElement::offset_width() const
+{
+    if (!layout_node() || !layout_node()->is_box())
+        return 0;
+    return static_cast<Layout::Box const&>(*layout_node()).border_box_width();
+}
+
+// https://drafts.csswg.org/cssom-view/#dom-htmlelement-offsetheight
+int HTMLElement::offset_height() const
+{
+    if (!layout_node() || !layout_node()->is_box())
+        return 0;
+    return static_cast<Layout::Box const&>(*layout_node()).border_box_height();
 }
 
 bool HTMLElement::cannot_navigate() const

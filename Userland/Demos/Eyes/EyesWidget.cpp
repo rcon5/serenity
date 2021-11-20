@@ -1,53 +1,22 @@
 /*
  * Copyright (c) 2020, Sergey Bugaev <bugaevc@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "EyesWidget.h"
+#include <AK/Math.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/Window.h>
-#include <LibGUI/WindowServerConnection.h>
 #include <LibGfx/Palette.h>
-#include <math.h>
 
 EyesWidget::~EyesWidget()
 {
 }
 
-void EyesWidget::track_cursor_globally()
+void EyesWidget::track_mouse_move(Gfx::IntPoint const& point)
 {
-    VERIFY(window());
-    auto window_id = window()->window_id();
-    VERIFY(window_id >= 0);
-
-    set_global_cursor_tracking(true);
-    GUI::WindowServerConnection::the().send_sync<Messages::WindowServer::SetGlobalCursorTracking>(window_id, true);
-}
-
-void EyesWidget::mousemove_event(GUI::MouseEvent& event)
-{
-    m_mouse_position = event.position();
+    m_mouse_position = point - window()->position();
     update();
 }
 
@@ -98,7 +67,7 @@ Gfx::IntPoint EyesWidget::pupil_center(Gfx::IntRect& eyeball_bounds) const
     auto mouse_vector = m_mouse_position - eyeball_bounds.center();
     double dx = mouse_vector.x();
     double dy = mouse_vector.y();
-    double mouse_distance = sqrt(dx * dx + dy * dy);
+    double mouse_distance = AK::hypot(dx, dy);
 
     if (mouse_distance == 0.0)
         return eyeball_bounds.center();
@@ -109,17 +78,17 @@ Gfx::IntPoint EyesWidget::pupil_center(Gfx::IntRect& eyeball_bounds) const
     double max_distance_along_this_direction;
 
     // clang-format off
-    if (dx != 0 && abs(dx) >= abs(dy)) {
+    if (dx != 0 && AK::abs(dx) >= AK::abs(dy)) {
         double slope = dy / dx;
         double slope_squared = slope * slope;
-        max_distance_along_this_direction = 0.25 * sqrt(
+        max_distance_along_this_direction = 0.25 * AK::sqrt(
             (slope_squared + 1) /
             (1 / width_squared + slope_squared / height_squared)
         );
-    } else if (dy != 0 && abs(dy) >= abs(dx)) {
+    } else if (dy != 0 && AK::abs(dy) >= AK::abs(dx)) {
         double slope = dx / dy;
         double slope_squared = slope * slope;
-        max_distance_along_this_direction = 0.25 * sqrt(
+        max_distance_along_this_direction = 0.25 * AK::sqrt(
             (slope_squared + 1) /
             (slope_squared / width_squared + 1 / height_squared)
         );

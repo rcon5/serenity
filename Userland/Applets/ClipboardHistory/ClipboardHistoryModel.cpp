@@ -1,36 +1,23 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Mustafa Quraish <mustafa@cs.toronto.edu>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "ClipboardHistoryModel.h"
 #include <AK/NumberFormat.h>
 #include <AK/StringBuilder.h>
+#include <LibConfig/Client.h>
 
 NonnullRefPtr<ClipboardHistoryModel> ClipboardHistoryModel::create()
 {
-    return adopt(*new ClipboardHistoryModel());
+    return adopt_ref(*new ClipboardHistoryModel());
+}
+
+ClipboardHistoryModel::ClipboardHistoryModel()
+    : m_history_limit(Config::read_i32("ClipboardHistory", "ClipboardHistory", "NumHistoryItems", 20))
+{
 }
 
 ClipboardHistoryModel::~ClipboardHistoryModel()
@@ -117,11 +104,6 @@ GUI::Variant ClipboardHistoryModel::data(const GUI::ModelIndex& index, GUI::Mode
     }
 }
 
-void ClipboardHistoryModel::update()
-{
-    did_update();
-}
-
 void ClipboardHistoryModel::add_item(const GUI::Clipboard::DataAndType& item)
 {
     m_history_items.remove_first_matching([&](GUI::Clipboard::DataAndType& existing) {
@@ -132,10 +114,30 @@ void ClipboardHistoryModel::add_item(const GUI::Clipboard::DataAndType& item)
         m_history_items.take_last();
 
     m_history_items.prepend(item);
-    update();
+    invalidate();
 }
 
 void ClipboardHistoryModel::remove_item(int index)
 {
     m_history_items.remove(index);
+}
+
+void ClipboardHistoryModel::config_string_did_change(String const& domain, String const& group, String const& key, String const& value_string)
+{
+    if (domain != "ClipboardHistory" || group != "ClipboardHistory")
+        return;
+
+    // FIXME: Once we can get notified for `i32` changes, we can use that instead of this hack.
+    if (key == "NumHistoryItems") {
+        auto value_or_error = value_string.to_int();
+        if (!value_or_error.has_value())
+            return;
+        auto value = value_or_error.value();
+        if (value < (int)m_history_items.size()) {
+            m_history_items.remove(value, m_history_items.size() - value);
+            invalidate();
+        }
+        m_history_limit = value;
+        return;
+    }
 }

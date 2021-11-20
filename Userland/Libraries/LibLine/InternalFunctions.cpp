@@ -1,36 +1,17 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/CharacterTypes.h>
+#include <AK/FileStream.h>
 #include <AK/ScopeGuard.h>
 #include <AK/ScopedValueRollback.h>
 #include <AK/StringBuilder.h>
 #include <AK/TemporaryChange.h>
 #include <LibCore/File.h>
 #include <LibLine/Editor.h>
-#include <ctype.h>
 #include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -103,7 +84,7 @@ void Editor::cursor_left_word()
         for (;;) {
             if (m_cursor == 0)
                 break;
-            if (skipped_at_least_one_character && !isalnum(m_buffer[m_cursor - 1])) // stop *after* a non-alnum, but only if it changes the position
+            if (skipped_at_least_one_character && !is_ascii_alphanumeric(m_buffer[m_cursor - 1])) // stop *after* a non-alnum, but only if it changes the position
                 break;
             skipped_at_least_one_character = true;
             --m_cursor;
@@ -128,7 +109,7 @@ void Editor::cursor_right_word()
         for (;;) {
             if (m_cursor >= m_buffer.size())
                 break;
-            if (!isalnum(m_buffer[++m_cursor]))
+            if (!is_ascii_alphanumeric(m_buffer[++m_cursor]))
                 break;
         }
         m_buffer.take_last();
@@ -197,7 +178,7 @@ void Editor::erase_word_backwards()
     // A word here is space-separated. `foo=bar baz` is two words.
     bool has_seen_nonspace = false;
     while (m_cursor > 0) {
-        if (isspace(m_buffer[m_cursor - 1])) {
+        if (is_ascii_space(m_buffer[m_cursor - 1])) {
             if (has_seen_nonspace)
                 break;
         } else {
@@ -242,6 +223,8 @@ void Editor::enter_search()
             m_pre_search_buffer.append(code_point);
         m_pre_search_cursor = m_cursor;
 
+        ensure_free_lines_from_origin(1 + num_lines());
+
         // Disable our own notifier so as to avoid interfering with the search editor.
         m_notifier->set_enabled(false);
 
@@ -281,7 +264,8 @@ void Editor::enter_search()
         m_search_editor->register_key_input_callback(ctrl('C'), [this](Editor& search_editor) {
             search_editor.finish();
             m_reset_buffer_on_search_end = true;
-            search_editor.deferred_invoke([&search_editor](auto&) { search_editor.really_quit_event_loop(); });
+            search_editor.end_search();
+            search_editor.deferred_invoke([&search_editor] { search_editor.really_quit_event_loop(); });
             return false;
         });
 
@@ -329,9 +313,6 @@ void Editor::enter_search()
             return false;
         });
 
-        fprintf(stderr, "\n");
-        fflush(stderr);
-
         auto search_prompt = "\x1b[32msearch:\x1b[0m ";
 
         // While the search editor is active, we do not want editing events.
@@ -361,12 +342,17 @@ void Editor::enter_search()
         auto& search_string = search_string_result.value();
 
         // Manually cleanup the search line.
-        reposition_cursor();
+        OutputFileStream stderr_stream { stderr };
+        reposition_cursor(stderr_stream);
         auto search_metrics = actual_rendered_string_metrics(search_string);
         auto metrics = actual_rendered_string_metrics(search_prompt);
-        VT::clear_lines(0, metrics.lines_with_addition(search_metrics, m_num_columns) + search_end_row - m_origin_row - 1);
+        VT::clear_lines(0, metrics.lines_with_addition(search_metrics, m_num_columns) + search_end_row - m_origin_row - 1, stderr_stream);
 
-        reposition_cursor();
+        reposition_cursor(stderr_stream);
+
+        m_refresh_needed = true;
+        m_cached_prompt_valid = false;
+        m_chars_touched_in_the_middle = 1;
 
         if (!m_reset_buffer_on_search_end || search_metrics.total_length == 0) {
             // If the entry was empty, or we purposely quit without a newline,
@@ -391,27 +377,27 @@ void Editor::transpose_words()
 
     // Move to end of word under (or after) caret.
     size_t cursor = m_cursor;
-    while (cursor < m_buffer.size() && !isalnum(m_buffer[cursor]))
+    while (cursor < m_buffer.size() && !is_ascii_alphanumeric(m_buffer[cursor]))
         ++cursor;
-    while (cursor < m_buffer.size() && isalnum(m_buffer[cursor]))
+    while (cursor < m_buffer.size() && is_ascii_alphanumeric(m_buffer[cursor]))
         ++cursor;
 
     // Move left over second word and the space to its right.
     size_t end = cursor;
     size_t start = cursor;
-    while (start > 0 && !isalnum(m_buffer[start - 1]))
+    while (start > 0 && !is_ascii_alphanumeric(m_buffer[start - 1]))
         --start;
-    while (start > 0 && isalnum(m_buffer[start - 1]))
+    while (start > 0 && is_ascii_alphanumeric(m_buffer[start - 1]))
         --start;
     size_t start_second_word = start;
 
     // Move left over space between the two words.
-    while (start > 0 && !isalnum(m_buffer[start - 1]))
+    while (start > 0 && !is_ascii_alphanumeric(m_buffer[start - 1]))
         --start;
     size_t start_gap = start;
 
     // Move left over first word.
-    while (start > 0 && isalnum(m_buffer[start - 1]))
+    while (start > 0 && is_ascii_alphanumeric(m_buffer[start - 1]))
         --start;
 
     if (start != start_gap) {
@@ -447,8 +433,9 @@ void Editor::go_end()
 
 void Editor::clear_screen()
 {
-    fprintf(stderr, "\033[3J\033[H\033[2J"); // Clear screen.
-    VT::move_absolute(1, 1);
+    warn("\033[3J\033[H\033[2J");
+    OutputFileStream stream { stderr };
+    VT::move_absolute(1, 1, stream);
     set_origin(1, 1);
     m_refresh_needed = true;
     m_cached_prompt_valid = false;
@@ -468,7 +455,7 @@ void Editor::erase_alnum_word_backwards()
     // A word here is contiguous alnums. `foo=bar baz` is three words.
     bool has_seen_alnum = false;
     while (m_cursor > 0) {
-        if (!isalnum(m_buffer[m_cursor - 1])) {
+        if (!is_ascii_alphanumeric(m_buffer[m_cursor - 1])) {
             if (has_seen_alnum)
                 break;
         } else {
@@ -483,7 +470,7 @@ void Editor::erase_alnum_word_forwards()
     // A word here is contiguous alnums. `foo=bar baz` is three words.
     bool has_seen_alnum = false;
     while (m_cursor < m_buffer.size()) {
-        if (!isalnum(m_buffer[m_cursor])) {
+        if (!is_ascii_alphanumeric(m_buffer[m_cursor])) {
             if (has_seen_alnum)
                 break;
         } else {
@@ -496,15 +483,15 @@ void Editor::erase_alnum_word_forwards()
 void Editor::case_change_word(Editor::CaseChangeOp change_op)
 {
     // A word here is contiguous alnums. `foo=bar baz` is three words.
-    while (m_cursor < m_buffer.size() && !isalnum(m_buffer[m_cursor]))
+    while (m_cursor < m_buffer.size() && !is_ascii_alphanumeric(m_buffer[m_cursor]))
         ++m_cursor;
     size_t start = m_cursor;
-    while (m_cursor < m_buffer.size() && isalnum(m_buffer[m_cursor])) {
+    while (m_cursor < m_buffer.size() && is_ascii_alphanumeric(m_buffer[m_cursor])) {
         if (change_op == CaseChangeOp::Uppercase || (change_op == CaseChangeOp::Capital && m_cursor == start)) {
-            m_buffer[m_cursor] = toupper(m_buffer[m_cursor]);
+            m_buffer[m_cursor] = to_ascii_uppercase(m_buffer[m_cursor]);
         } else {
             VERIFY(change_op == CaseChangeOp::Lowercase || (change_op == CaseChangeOp::Capital && m_cursor > start));
-            m_buffer[m_cursor] = tolower(m_buffer[m_cursor]);
+            m_buffer[m_cursor] = to_ascii_lowercase(m_buffer[m_cursor]);
         }
         ++m_cursor;
         m_refresh_needed = true;
@@ -547,15 +534,15 @@ void Editor::edit_in_external_editor()
             return;
         }
 
+        OutputFileStream stream { fp };
+
         StringBuilder builder;
         builder.append(Utf32View { m_buffer.data(), m_buffer.size() });
-        auto view = builder.string_view();
-        size_t remaining_size = view.length();
-
-        while (remaining_size > 0)
-            remaining_size = fwrite(view.characters_without_null_termination() - remaining_size, sizeof(char), remaining_size, fp);
-
-        fclose(fp);
+        auto bytes = builder.string_view().bytes();
+        while (!bytes.is_empty()) {
+            auto nwritten = stream.write(bytes);
+            bytes = bytes.slice(nwritten);
+        }
     }
 
     ScopeGuard remove_temp_file_guard {
@@ -588,7 +575,7 @@ void Editor::edit_in_external_editor()
     }
 
     {
-        auto file_or_error = Core::File::open(file_path, Core::IODevice::OpenMode::ReadOnly);
+        auto file_or_error = Core::File::open(file_path, Core::OpenMode::ReadOnly);
         if (file_or_error.is_error())
             return;
 

@@ -21,8 +21,10 @@ def run():
             "*.json",
             "CMake*.txt",
             "**/CMake*.txt",
-            ":!:AK/Tests/*.json",
-            ":!:Kernel/FileSystem/ext2_fs.h"
+            ":!:Kernel/FileSystem/ext2_fs.h",
+            ':!:Userland/DevTools/HackStudio/LanguageServers/Cpp/Tests/*',
+            ':!:Userland/Libraries/LibCpp/Tests/parser/*',
+            ':!:Userland/Libraries/LibCpp/Tests/preprocessor/*'
         ],
         check=True,
         capture_output=True

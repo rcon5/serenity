@@ -1,34 +1,15 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/IntrusiveList.h>
 #include <Kernel/Devices/BlockDevice.h>
 #include <Kernel/Interrupts/IRQHandler.h>
-#include <Kernel/Lock.h>
+#include <Kernel/Locking/Mutex.h>
 #include <Kernel/Storage/Partition/DiskPartition.h>
 #include <Kernel/Storage/StorageController.h>
 
@@ -36,31 +17,53 @@ namespace Kernel {
 
 class StorageDevice : public BlockDevice {
     friend class StorageManagement;
-    AK_MAKE_ETERNAL
+
+public:
+    // Note: this attribute describes the internal command set of a Storage device.
+    // For example, an ordinary harddrive utilizes the ATA command set, while
+    // an ATAPI device (e.g. Optical drive) that is connected to the ATA bus,
+    // is actually using SCSI commands (packets) encapsulated inside an ATA command.
+    // The IDE controller code being aware of the possibility of ATAPI devices attached
+    // to the ATA bus, will check whether the Command set is ATA or SCSI and will act
+    // accordingly.
+    enum class CommandSet {
+        PlainMemory,
+        SCSI,
+        ATA,
+        NVMe,
+    };
 
 public:
     virtual u64 max_addressable_block() const { return m_max_addressable_block; }
 
-    NonnullRefPtr<StorageController> controller() const;
-
     // ^BlockDevice
-    virtual KResultOr<size_t> read(FileDescription&, u64, UserOrKernelBuffer&, size_t) override;
-    virtual bool can_read(const FileDescription&, size_t) const override;
-    virtual KResultOr<size_t> write(FileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
-    virtual bool can_write(const FileDescription&, size_t) const override;
+    virtual KResultOr<size_t> read(OpenFileDescription&, u64, UserOrKernelBuffer&, size_t) override;
+    virtual bool can_read(const OpenFileDescription&, size_t) const override;
+    virtual KResultOr<size_t> write(OpenFileDescription&, u64, const UserOrKernelBuffer&, size_t) override;
+    virtual bool can_write(const OpenFileDescription&, size_t) const override;
+    virtual void prepare_for_unplug() { m_partitions.clear(); }
 
-    // ^Device
-    virtual mode_t required_mode() const override { return 0600; }
+    // FIXME: Remove this method after figuring out another scheme for naming.
+    StringView early_storage_name() const;
+
+    NonnullRefPtrVector<DiskPartition> partitions() const { return m_partitions; }
+
+    virtual CommandSet command_set() const = 0;
+
+    // ^File
+    virtual KResult ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg) final;
 
 protected:
-    StorageDevice(const StorageController&, size_t, u64);
-    StorageDevice(const StorageController&, int, int, size_t, u64);
+    StorageDevice(int, int, size_t, u64, NonnullOwnPtr<KString>);
     // ^DiskDevice
-    virtual const char* class_name() const override;
+    virtual StringView class_name() const override;
 
 private:
-    NonnullRefPtr<StorageController> m_storage_controller;
+    mutable IntrusiveListNode<StorageDevice, RefPtr<StorageDevice>> m_list_node;
     NonnullRefPtrVector<DiskPartition> m_partitions;
+
+    // FIXME: Remove this method after figuring out another scheme for naming.
+    NonnullOwnPtr<KString> m_early_storage_device_name;
     u64 m_max_addressable_block;
 };
 

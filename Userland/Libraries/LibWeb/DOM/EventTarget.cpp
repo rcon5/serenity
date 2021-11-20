@@ -1,32 +1,23 @@
 /*
- * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/StringBuilder.h>
+#include <LibJS/Interpreter.h>
+#include <LibJS/Parser.h>
+#include <LibJS/Runtime/ECMAScriptFunctionObject.h>
 #include <LibWeb/Bindings/ScriptExecutionContext.h>
+#include <LibWeb/DOM/Document.h>
+#include <LibWeb/DOM/Event.h>
+#include <LibWeb/DOM/EventDispatcher.h>
 #include <LibWeb/DOM/EventListener.h>
 #include <LibWeb/DOM/EventTarget.h>
+#include <LibWeb/DOM/Window.h>
+#include <LibWeb/HTML/EventHandler.h>
+#include <LibWeb/HTML/HTMLBodyElement.h>
+#include <LibWeb/HTML/HTMLFrameSetElement.h>
 
 namespace Web::DOM {
 
@@ -71,6 +62,96 @@ void EventTarget::remove_from_event_listener_list(NonnullRefPtr<EventListener> l
     m_listeners.remove_first_matching([&](auto& entry) {
         return entry.listener->type() == listener->type() && &entry.listener->function() == &listener->function() && entry.listener->capture() == listener->capture();
     });
+}
+
+// https://dom.spec.whatwg.org/#dom-eventtarget-dispatchevent
+ExceptionOr<bool> EventTarget::dispatch_event_binding(NonnullRefPtr<Event> event)
+{
+    if (event->dispatched())
+        return DOM::InvalidStateError::create("The event is already being dispatched.");
+
+    if (!event->initialized())
+        return DOM::InvalidStateError::create("Cannot dispatch an uninitialized event.");
+
+    event->set_is_trusted(false);
+
+    return dispatch_event(event);
+}
+
+// https://html.spec.whatwg.org/multipage/webappapis.html#determining-the-target-of-an-event-handler
+static EventTarget* determine_target_of_event_handler(EventTarget& event_target, FlyString const& name)
+{
+    // To determine the target of an event handler, given an EventTarget object eventTarget on which the event handler is exposed,
+    // and an event handler name name, the following steps are taken:
+
+    // 1. If eventTarget is not a body element or a frameset element, then return eventTarget.
+    if (!is<HTML::HTMLBodyElement>(event_target) && !is<HTML::HTMLFrameSetElement>(event_target))
+        return &event_target;
+
+    auto& event_target_element = static_cast<HTML::HTMLElement&>(event_target);
+
+    // FIXME: 2. If name is not the name of an attribute member of the WindowEventHandlers interface mixin and the Window-reflecting
+    //           body element event handler set does not contain name, then return eventTarget.
+    (void)name;
+
+    // 3. If eventTarget's node document is not an active document, then return null.
+    if (!event_target_element.document().is_active())
+        return nullptr;
+
+    // Return eventTarget's node document's relevant global object.
+    return &event_target_element.document().window();
+}
+
+HTML::EventHandler EventTarget::event_handler_attribute(FlyString const& name)
+{
+    auto target = determine_target_of_event_handler(*this, name);
+    if (!target)
+        return {};
+
+    for (auto& listener : target->listeners()) {
+        if (listener.event_name == name && listener.listener->is_attribute()) {
+            return HTML::EventHandler { JS::make_handle(&listener.listener->function()) };
+        }
+    }
+    return {};
+}
+
+void EventTarget::set_event_handler_attribute(FlyString const& name, HTML::EventHandler value)
+{
+    auto target = determine_target_of_event_handler(*this, name);
+    if (!target)
+        return;
+
+    RefPtr<DOM::EventListener> listener;
+    if (!value.callback.is_null()) {
+        listener = adopt_ref(*new DOM::EventListener(move(value.callback), true));
+    } else {
+        StringBuilder builder;
+        builder.appendff("function {}(event) {{\n{}\n}}", name, value.string);
+        auto parser = JS::Parser(JS::Lexer(builder.string_view()));
+        auto program = parser.parse_function_node<JS::FunctionExpression>();
+        if (parser.has_errors()) {
+            dbgln("Failed to parse script in event handler attribute '{}'", name);
+            return;
+        }
+        auto* function = JS::ECMAScriptFunctionObject::create(target->script_execution_context()->realm().global_object(), name, program->body(), program->parameters(), program->function_length(), nullptr, nullptr, JS::FunctionKind::Regular, false, false);
+        VERIFY(function);
+        listener = adopt_ref(*new DOM::EventListener(JS::make_handle(static_cast<JS::FunctionObject*>(function)), true));
+    }
+    if (listener) {
+        for (auto& registered_listener : target->listeners()) {
+            if (registered_listener.event_name == name && registered_listener.listener->is_attribute()) {
+                target->remove_event_listener(name, registered_listener.listener);
+                break;
+            }
+        }
+        target->add_event_listener(name, listener.release_nonnull());
+    }
+}
+
+bool EventTarget::dispatch_event(NonnullRefPtr<Event> event)
+{
+    return EventDispatcher::dispatch(*this, move(event));
 }
 
 }

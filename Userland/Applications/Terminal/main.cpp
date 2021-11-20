@@ -1,34 +1,16 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/QuickSort.h>
 #include <AK/URL.h>
 #include <Applications/Terminal/TerminalSettingsWindowGML.h>
+#include <LibConfig/Client.h>
 #include <LibCore/ArgsParser.h>
-#include <LibCore/ConfigFile.h>
-#include <LibCore/File.h>
+#include <LibCore/DirIterator.h>
+#include <LibCore/Process.h>
 #include <LibDesktop/Launcher.h>
 #include <LibGUI/Action.h>
 #include <LibGUI/ActionGroup.h>
@@ -36,10 +18,11 @@
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/CheckBox.h>
+#include <LibGUI/ComboBox.h>
 #include <LibGUI/Event.h>
 #include <LibGUI/FontPicker.h>
-#include <LibGUI/GroupBox.h>
 #include <LibGUI/Icon.h>
+#include <LibGUI/ItemListModel.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Menubar.h>
 #include <LibGUI/OpacitySlider.h>
@@ -48,21 +31,17 @@
 #include <LibGUI/TextBox.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
-#include <LibGfx/Font.h>
 #include <LibGfx/Palette.h>
 #include <LibVT/TerminalWidget.h>
 #include <assert.h>
 #include <errno.h>
-#include <fcntl.h>
+#include <pty.h>
 #include <pwd.h>
-#include <serenity.h>
 #include <signal.h>
-#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <sys/select.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -99,84 +78,30 @@ static void utmp_update(const char* tty, pid_t pid, bool create)
     }
 }
 
-static pid_t run_command(int ptm_fd, String command)
+static void run_command(String command, bool keep_open)
 {
-    pid_t pid = fork();
-    if (pid < 0) {
-        perror("fork");
-        dbgln("run_command: could not fork to run '{}'", command);
-        return pid;
+    String shell = "/bin/Shell";
+    auto* pw = getpwuid(getuid());
+    if (pw && pw->pw_shell) {
+        shell = pw->pw_shell;
     }
+    endpwent();
 
-    if (pid == 0) {
-        const char* tty_name = ptsname(ptm_fd);
-        if (!tty_name) {
-            perror("ptsname");
-            exit(1);
-        }
-        close(ptm_fd);
-        int pts_fd = open(tty_name, O_RDWR);
-        if (pts_fd < 0) {
-            perror("open");
-            exit(1);
-        }
-
-        if (setsid() < 0) {
-            perror("setsid");
-        }
-
-        close(0);
-        close(1);
-        close(2);
-
-        int rc = dup2(pts_fd, 0);
-        if (rc < 0) {
-            perror("dup2");
-            exit(1);
-        }
-        rc = dup2(pts_fd, 1);
-        if (rc < 0) {
-            perror("dup2");
-            exit(1);
-        }
-        rc = dup2(pts_fd, 2);
-        if (rc < 0) {
-            perror("dup2");
-            exit(1);
-        }
-        rc = close(pts_fd);
-        if (rc < 0) {
-            perror("close");
-            exit(1);
-        }
-        rc = ioctl(0, TIOCSCTTY);
-        if (rc < 0) {
-            perror("ioctl(TIOCSCTTY)");
-            exit(1);
-        }
-
-        String shell = "/bin/Shell";
-        auto* pw = getpwuid(getuid());
-        if (pw && pw->pw_shell) {
-            shell = pw->pw_shell;
-        }
-        endpwent();
-
-        const char* args[4] = { shell.characters(), nullptr, nullptr, nullptr };
-        if (!command.is_empty()) {
-            args[1] = "-c";
-            args[2] = command.characters();
-        }
-        const char* envs[] = { "TERM=xterm", "PAGER=more", "PATH=/bin:/usr/bin:/usr/local/bin", nullptr };
-        rc = execve(shell.characters(), const_cast<char**>(args), const_cast<char**>(envs));
-        if (rc < 0) {
-            perror("execve");
-            exit(1);
-        }
-        VERIFY_NOT_REACHED();
+    const char* args[5] = { shell.characters(), nullptr, nullptr, nullptr, nullptr };
+    if (!command.is_empty()) {
+        int arg_index = 1;
+        if (keep_open)
+            args[arg_index++] = "--keep-open";
+        args[arg_index++] = "-c";
+        args[arg_index++] = command.characters();
     }
-
-    return pid;
+    const char* envs[] = { "TERM=xterm", "PAGER=more", "PATH=/usr/local/bin:/usr/bin:/bin", nullptr };
+    int rc = execve(shell.characters(), const_cast<char**>(args), const_cast<char**>(envs));
+    if (rc < 0) {
+        perror("execve");
+        exit(1);
+    }
+    VERIFY_NOT_REACHED();
 }
 
 static RefPtr<GUI::Window> create_settings_window(VT::TerminalWidget& terminal)
@@ -185,7 +110,7 @@ static RefPtr<GUI::Window> create_settings_window(VT::TerminalWidget& terminal)
     window->set_window_type(GUI::WindowType::ToolWindow);
     window->set_title("Terminal settings");
     window->set_resizable(false);
-    window->resize(200, 210);
+    window->resize(200, 240);
     window->center_within(*terminal.window());
 
     auto& settings = window->set_main_widget<GUI::Widget>();
@@ -229,6 +154,25 @@ static RefPtr<GUI::Window> create_settings_window(VT::TerminalWidget& terminal)
         terminal.set_max_history_size(value);
     };
 
+    // The settings window takes a reference to this vector, so it needs to outlive this scope.
+    // As long as we ensure that only one settings window may be open at a time (which we do),
+    // this should cause no problems.
+    static Vector<String> color_scheme_names;
+    color_scheme_names.clear();
+    Core::DirIterator iterator("/res/terminal-colors", Core::DirIterator::SkipParentAndBaseDir);
+    while (iterator.has_next()) {
+        auto path = iterator.next_path();
+        color_scheme_names.append(path.replace(".ini", ""));
+    }
+    quick_sort(color_scheme_names);
+    auto& color_scheme_combo = *settings.find_descendant_of_type_named<GUI::ComboBox>("color_scheme_combo");
+    color_scheme_combo.set_only_allow_values_from_model(true);
+    color_scheme_combo.set_model(*GUI::ItemListModel<String>::create(color_scheme_names));
+    color_scheme_combo.set_selected_index(color_scheme_names.find_first_index(terminal.color_scheme_name()).value());
+    color_scheme_combo.set_enabled(color_scheme_names.size() > 1);
+    color_scheme_combo.on_change = [&](auto&, const GUI::ModelIndex& index) {
+        terminal.set_color_scheme(index.data().as_string());
+    };
     return window;
 }
 
@@ -244,30 +188,31 @@ static RefPtr<GUI::Window> create_find_window(VT::TerminalWidget& terminal)
     search.set_fill_with_background_color(true);
     search.set_background_role(ColorRole::Button);
     search.set_layout<GUI::VerticalBoxLayout>();
-    search.layout()->set_margins({ 4, 4, 4, 4 });
+    search.layout()->set_margins(4);
 
     auto& find = search.add<GUI::Widget>();
     find.set_layout<GUI::HorizontalBoxLayout>();
-    find.layout()->set_margins({ 4, 4, 4, 4 });
+    find.layout()->set_margins(4);
     find.set_fixed_height(30);
 
     auto& find_textbox = find.add<GUI::TextBox>();
     find_textbox.set_fixed_width(230);
     find_textbox.set_focus(true);
-    if (terminal.has_selection()) {
-        String selected_text = terminal.selected_text();
-        selected_text.replace("\n", " ", true);
-        find_textbox.set_text(selected_text);
-    }
+    if (terminal.has_selection())
+        find_textbox.set_text(terminal.selected_text().replace("\n", " ", true));
     auto& find_backwards = find.add<GUI::Button>();
     find_backwards.set_fixed_width(25);
-    find_backwards.set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/upward-triangle.png"));
+    find_backwards.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/upward-triangle.png"));
     auto& find_forwards = find.add<GUI::Button>();
     find_forwards.set_fixed_width(25);
-    find_forwards.set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/downward-triangle.png"));
+    find_forwards.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/downward-triangle.png"));
 
     find_textbox.on_return_pressed = [&]() {
         find_backwards.click();
+    };
+
+    find_textbox.on_shift_return_pressed = [&]() {
+        find_forwards.click();
     };
 
     auto& match_case = search.add<GUI::CheckBox>("Case sensitive");
@@ -305,7 +250,7 @@ static RefPtr<GUI::Window> create_find_window(VT::TerminalWidget& terminal)
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio tty rpath accept cpath wpath recvfd sendfd proc exec unix fattr sigaction", nullptr) < 0) {
+    if (pledge("stdio tty rpath cpath wpath recvfd sendfd proc exec unix sigaction", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
@@ -322,41 +267,41 @@ int main(int argc, char** argv)
 
     auto app = GUI::Application::construct(argc, argv);
 
-    if (pledge("stdio tty rpath accept cpath wpath recvfd sendfd proc exec unix", nullptr) < 0) {
+    if (pledge("stdio tty rpath cpath wpath recvfd sendfd proc exec unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
+    Config::pledge_domains("Terminal");
+
     const char* command_to_execute = nullptr;
+    bool keep_open = false;
 
     Core::ArgsParser args_parser;
     args_parser.add_option(command_to_execute, "Execute this command inside the terminal", nullptr, 'e', "command");
+    args_parser.add_option(keep_open, "Keep the terminal open after the command has finished executing", nullptr, 'k');
 
     args_parser.parse(argc, argv);
 
-    int ptm_fd = posix_openpt(O_RDWR | O_CLOEXEC);
-    if (ptm_fd < 0) {
-        perror("posix_openpt");
-        return 1;
-    }
-    if (grantpt(ptm_fd) < 0) {
-        perror("grantpt");
-        return 1;
-    }
-    if (unlockpt(ptm_fd) < 0) {
-        perror("unlockpt");
+    if (keep_open && !command_to_execute) {
+        warnln("Option -k can only be used in combination with -e.");
         return 1;
     }
 
-    RefPtr<Core::ConfigFile> config = Core::ConfigFile::get_for_app("Terminal");
-    Core::File::ensure_parent_directories(config->file_name());
-
-    pid_t shell_pid = 0;
-
-    if (command_to_execute)
-        shell_pid = run_command(ptm_fd, command_to_execute);
-    else
-        shell_pid = run_command(ptm_fd, config->read_entry("Startup", "Command", ""));
+    int ptm_fd;
+    pid_t shell_pid = forkpty(&ptm_fd, nullptr, nullptr, nullptr);
+    if (shell_pid < 0) {
+        perror("forkpty");
+        return 1;
+    }
+    if (shell_pid == 0) {
+        close(ptm_fd);
+        if (command_to_execute)
+            run_command(command_to_execute, keep_open);
+        else
+            run_command(Config::read_string("Terminal", "Startup", "Command", ""), false);
+        VERIFY_NOT_REACHED();
+    }
 
     auto* pts_name = ptsname(ptm_fd);
     utmp_update(pts_name, shell_pid, true);
@@ -368,7 +313,7 @@ int main(int argc, char** argv)
     window->set_background_color(Color::Black);
     window->set_double_buffering_enabled(false);
 
-    auto& terminal = window->set_main_widget<VT::TerminalWidget>(ptm_fd, true, config);
+    auto& terminal = window->set_main_widget<VT::TerminalWidget>(ptm_fd, true);
     terminal.on_command_exit = [&] {
         app->quit(0);
     };
@@ -379,10 +324,9 @@ int main(int argc, char** argv)
         window->resize(size);
     };
     terminal.apply_size_increments_to_window(*window);
-    window->show();
     window->set_icon(app_icon.bitmap_for_size(16));
 
-    auto bell = config->read_entry("Window", "Bell", "Visible");
+    auto bell = Config::read_string("Terminal", "Window", "Bell", "Visible");
     if (bell == "AudibleBeep") {
         terminal.set_bell_mode(VT::TerminalWidget::BellMode::AudibleBeep);
     } else if (bell == "Disabled") {
@@ -394,30 +338,44 @@ int main(int argc, char** argv)
     RefPtr<GUI::Window> settings_window;
     RefPtr<GUI::Window> find_window;
 
-    auto new_opacity = config->read_num_entry("Window", "Opacity", 255);
+    auto new_opacity = Config::read_i32("Terminal", "Window", "Opacity", 255);
     terminal.set_opacity(new_opacity);
     window->set_has_alpha_channel(new_opacity < 255);
 
-    auto new_scrollback_size = config->read_num_entry("Terminal", "MaxHistorySize", terminal.max_history_size());
+    auto new_scrollback_size = Config::read_i32("Terminal", "Terminal", "MaxHistorySize", terminal.max_history_size());
     terminal.set_max_history_size(new_scrollback_size);
 
-    auto open_settings_action = GUI::Action::create("&Settings", Gfx::Bitmap::load_from_file("/res/icons/16x16/gear.png"),
+    auto open_settings_action = GUI::Action::create("&Settings", Gfx::Bitmap::try_load_from_file("/res/icons/16x16/settings.png"),
         [&](const GUI::Action&) {
             if (!settings_window)
                 settings_window = create_settings_window(terminal);
             settings_window->show();
             settings_window->move_to_front();
+            settings_window->on_close = [&]() {
+                Config::write_i32("Terminal", "Window", "Opacity", terminal.opacity());
+                Config::write_i32("Terminal", "Terminal", "MaxHistorySize", terminal.max_history_size());
+
+                auto bell = terminal.bell_mode();
+                auto bell_setting = String::empty();
+                if (bell == VT::TerminalWidget::BellMode::AudibleBeep) {
+                    bell_setting = "AudibleBeep";
+                } else if (bell == VT::TerminalWidget::BellMode::Disabled) {
+                    bell_setting = "Disabled";
+                } else {
+                    bell_setting = "Visible";
+                }
+                Config::write_string("Terminal", "Window", "Bell", bell_setting);
+            };
         });
 
     terminal.context_menu().add_separator();
-    auto pick_font_action = GUI::Action::create("Terminal &Font...", Gfx::Bitmap::load_from_file("/res/icons/16x16/app-font-editor.png"),
+    auto pick_font_action = GUI::Action::create("&Terminal Font...", Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-font-editor.png"),
         [&](auto&) {
             auto picker = GUI::FontPicker::construct(window, &terminal.font(), true);
             if (picker->exec() == GUI::Dialog::ExecOK) {
                 terminal.set_font_and_resize_to_fit(*picker->font());
                 window->resize(terminal.size());
-                config->write_entry("Text", "Font", picker->font()->qualified_name());
-                config->sync();
+                Config::write_string("Terminal", "Text", "Font", picker->font()->qualified_name());
             }
         });
 
@@ -426,32 +384,23 @@ int main(int argc, char** argv)
     terminal.context_menu().add_separator();
     terminal.context_menu().add_action(open_settings_action);
 
-    auto menubar = GUI::Menubar::construct();
-
-    auto& app_menu = menubar->add_menu("&File");
-    app_menu.add_action(GUI::Action::create("Open New &Terminal", { Mod_Ctrl | Mod_Shift, Key_N }, Gfx::Bitmap::load_from_file("/res/icons/16x16/app-terminal.png"), [&](auto&) {
-        pid_t child;
-        const char* argv[] = { "Terminal", nullptr };
-        if ((errno = posix_spawn(&child, "/bin/Terminal", nullptr, nullptr, const_cast<char**>(argv), environ))) {
-            perror("posix_spawn");
-        } else {
-            if (disown(child) < 0)
-                perror("disown");
-        }
+    auto& file_menu = window->add_menu("&File");
+    file_menu.add_action(GUI::Action::create("Open New &Terminal", { Mod_Ctrl | Mod_Shift, Key_N }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-terminal.png"), [&](auto&) {
+        Core::Process::spawn("/bin/Terminal");
     }));
 
-    app_menu.add_action(open_settings_action);
-    app_menu.add_separator();
-    app_menu.add_action(GUI::CommonActions::make_quit_action([](auto&) {
+    file_menu.add_action(open_settings_action);
+    file_menu.add_separator();
+    file_menu.add_action(GUI::CommonActions::make_quit_action([](auto&) {
         dbgln("Terminal: Quit menu activated!");
         GUI::Application::the()->quit();
     }));
 
-    auto& edit_menu = menubar->add_menu("&Edit");
+    auto& edit_menu = window->add_menu("&Edit");
     edit_menu.add_action(terminal.copy_action());
     edit_menu.add_action(terminal.paste_action());
     edit_menu.add_separator();
-    edit_menu.add_action(GUI::Action::create("&Find...", { Mod_Ctrl | Mod_Shift, Key_F }, Gfx::Bitmap::load_from_file("/res/icons/16x16/find.png"),
+    edit_menu.add_action(GUI::Action::create("&Find...", { Mod_Ctrl | Mod_Shift, Key_F }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/find.png"),
         [&](auto&) {
             if (!find_window)
                 find_window = create_find_window(terminal);
@@ -459,7 +408,7 @@ int main(int argc, char** argv)
             find_window->move_to_front();
         }));
 
-    auto& view_menu = menubar->add_menu("&View");
+    auto& view_menu = window->add_menu("&View");
     view_menu.add_action(GUI::CommonActions::make_fullscreen_action([&](auto&) {
         window->set_fullscreen(!window->is_fullscreen());
     }));
@@ -467,13 +416,18 @@ int main(int argc, char** argv)
     view_menu.add_separator();
     view_menu.add_action(pick_font_action);
 
-    auto& help_menu = menubar->add_menu("&Help");
+    auto& help_menu = window->add_menu("&Help");
     help_menu.add_action(GUI::CommonActions::make_help_action([](auto&) {
         Desktop::Launcher::open(URL::create_with_file_protocol("/usr/share/man/man1/Terminal.md"), "/bin/Help");
     }));
     help_menu.add_action(GUI::CommonActions::make_about_action("Terminal", app_icon, window));
 
-    window->set_menubar(menubar);
+    window->on_close = [&]() {
+        if (find_window)
+            find_window->close();
+        if (settings_window)
+            settings_window->close();
+    };
 
     if (unveil("/res", "r") < 0) {
         perror("unveil");
@@ -505,14 +459,14 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (unveil(config->file_name().characters(), "rwc") < 0) {
+    if (unveil("/tmp/portal/config", "rw") < 0) {
         perror("unveil");
         return 1;
     }
 
     unveil(nullptr, nullptr);
 
-    config->sync();
+    window->show();
     int result = app->exec();
     dbgln("Exiting terminal, updating utmp");
     utmp_update(pts_name, 0, false);

@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -31,6 +11,7 @@
 #include <AK/IntrusiveList.h>
 #include <AK/Noncopyable.h>
 #include <AK/NonnullRefPtrVector.h>
+#include <AK/OwnPtr.h>
 #include <AK/String.h>
 #include <AK/TypeCasts.h>
 #include <AK/Weakable.h>
@@ -39,7 +20,43 @@
 
 namespace Core {
 
-class RPCClient;
+#define REGISTER_ABSTRACT_CORE_OBJECT(namespace_, class_name)                                                                 \
+    namespace Core {                                                                                                          \
+    namespace Registration {                                                                                                  \
+    Core::ObjectClassRegistration registration_##class_name(#namespace_ "::" #class_name, []() { return RefPtr<Object>(); }); \
+    }                                                                                                                         \
+    }
+
+#define REGISTER_CORE_OBJECT(namespace_, class_name)                                                                                             \
+    namespace Core {                                                                                                                             \
+    namespace Registration {                                                                                                                     \
+    Core::ObjectClassRegistration registration_##class_name(#namespace_ "::" #class_name, []() { return namespace_::class_name::construct(); }); \
+    }                                                                                                                                            \
+    }
+
+class ObjectClassRegistration {
+    AK_MAKE_NONCOPYABLE(ObjectClassRegistration);
+    AK_MAKE_NONMOVABLE(ObjectClassRegistration);
+
+public:
+    ObjectClassRegistration(StringView class_name, Function<RefPtr<Object>()> factory, ObjectClassRegistration* parent_class = nullptr);
+    ~ObjectClassRegistration();
+
+    String class_name() const { return m_class_name; }
+    const ObjectClassRegistration* parent_class() const { return m_parent_class; }
+    RefPtr<Object> construct() const { return m_factory(); }
+    bool is_derived_from(const ObjectClassRegistration& base_class) const;
+
+    static void for_each(Function<void(const ObjectClassRegistration&)>);
+    static const ObjectClassRegistration* find(StringView class_name);
+
+private:
+    StringView m_class_name;
+    Function<RefPtr<Object>()> m_factory;
+    ObjectClassRegistration* m_parent_class { nullptr };
+};
+
+class InspectorServerConnection;
 
 enum class TimerShouldFireWhenNotVisible {
     No = 0,
@@ -49,10 +66,11 @@ enum class TimerShouldFireWhenNotVisible {
 #define C_OBJECT(klass)                                                \
 public:                                                                \
     virtual const char* class_name() const override { return #klass; } \
-    template<class... Args>                                            \
+    template<typename Klass = klass, class... Args>                    \
     static inline NonnullRefPtr<klass> construct(Args&&... args)       \
     {                                                                  \
-        return adopt(*new klass(forward<Args>(args)...));              \
+        auto obj = adopt_ref(*new Klass(forward<Args>(args)...));      \
+        return obj;                                                    \
     }
 
 #define C_OBJECT_ABSTRACT(klass) \
@@ -116,7 +134,7 @@ public:
 
     void dump_tree(int indent = 0);
 
-    void deferred_invoke(Function<void(Object&)>);
+    void deferred_invoke(Function<void()>);
 
     void save_to(JsonObject&);
 
@@ -124,7 +142,7 @@ public:
     JsonValue property(String const& name) const;
     const HashMap<String, NonnullOwnPtr<Property>>& properties() const { return m_properties; }
 
-    static IntrusiveList<Object, RawPtr<Object>, &Object::m_all_objects_list_node>& all_objects();
+    static IntrusiveList<&Object::m_all_objects_list_node>& all_objects();
 
     void dispatch_event(Core::Event&, Object* stay_within = nullptr);
 
@@ -146,8 +164,10 @@ public:
 
     bool is_being_inspected() const { return m_inspector_count; }
 
-    void increment_inspector_count(Badge<RPCClient>);
-    void decrement_inspector_count(Badge<RPCClient>);
+    void increment_inspector_count(Badge<InspectorServerConnection>);
+    void decrement_inspector_count(Badge<InspectorServerConnection>);
+
+    virtual bool load_from_json(const JsonObject&, RefPtr<Core::Object> (*)(const String&)) { return false; }
 
 protected:
     explicit Object(Object* parent = nullptr);
@@ -341,11 +361,12 @@ T* Object::find_descendant_of_type_named(String const& name) requires IsBaseOf<O
 #define REGISTER_TEXT_ALIGNMENT_PROPERTY(property_name, getter, setter) \
     REGISTER_ENUM_PROPERTY(                                             \
         property_name, getter, setter, Gfx::TextAlignment,              \
-        { Gfx::TextAlignment::TopLeft, "TopLeft" },                     \
-        { Gfx::TextAlignment::CenterLeft, "CenterLeft" },               \
         { Gfx::TextAlignment::Center, "Center" },                       \
+        { Gfx::TextAlignment::CenterLeft, "CenterLeft" },               \
         { Gfx::TextAlignment::CenterRight, "CenterRight" },             \
+        { Gfx::TextAlignment::TopLeft, "TopLeft" },                     \
         { Gfx::TextAlignment::TopRight, "TopRight" },                   \
+        { Gfx::TextAlignment::BottomLeft, "BottomLeft" },               \
         { Gfx::TextAlignment::BottomRight, "BottomRight" })
 
 #define REGISTER_FONT_WEIGHT_PROPERTY(property_name, getter, setter) \
@@ -361,4 +382,10 @@ T* Object::find_descendant_of_type_named(String const& name) requires IsBaseOf<O
         { Gfx::FontWeight::ExtraBold, "ExtraBold" },                 \
         { Gfx::FontWeight::Black, "Black" },                         \
         { Gfx::FontWeight::ExtraBlack, "ExtraBlack" })
+
+#define REGISTER_TEXT_WRAPPING_PROPERTY(property_name, getter, setter) \
+    REGISTER_ENUM_PROPERTY(                                            \
+        property_name, getter, setter, Gfx::TextWrapping,              \
+        { Gfx::TextWrapping::Wrap, "Wrap" },                           \
+        { Gfx::TextWrapping::DontWrap, "DontWrap" })
 }

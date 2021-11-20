@@ -1,35 +1,17 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/CharacterTypes.h>
+#include <AK/TypeCasts.h>
 #include <AK/Utf8View.h>
 #include <LibWeb/Layout/Box.h>
+#include <LibWeb/Layout/BreakNode.h>
 #include <LibWeb/Layout/LineBox.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Layout/TextNode.h>
-#include <ctype.h>
 
 namespace Web::Layout {
 
@@ -47,7 +29,7 @@ void LineBox::add_fragment(Node& layout_node, int start, int length, float width
     m_width += width;
 
     if (is<Box>(layout_node))
-        downcast<Box>(layout_node).set_containing_line_box_fragment(m_fragments.last());
+        verify_cast<Box>(layout_node).set_containing_line_box_fragment(m_fragments.last());
 }
 
 void LineBox::trim_trailing_whitespace()
@@ -60,16 +42,20 @@ void LineBox::trim_trailing_whitespace()
     if (m_fragments.is_empty())
         return;
 
-    auto last_text = m_fragments.last().text();
+    auto& last_fragment = m_fragments.last();
+    auto last_text = last_fragment.text();
     if (last_text.is_null())
         return;
-    auto& last_fragment = m_fragments.last();
 
-    int space_width = last_fragment.layout_node().font().glyph_width(' ');
-    while (last_fragment.length() && isspace(last_text[last_fragment.length() - 1])) {
+    while (last_fragment.length()) {
+        auto last_character = last_text[last_fragment.length() - 1];
+        if (!is_ascii_space(last_character))
+            break;
+
+        int last_character_width = last_fragment.layout_node().font().glyph_width(last_character);
         last_fragment.m_length -= 1;
-        last_fragment.set_width(last_fragment.width() - space_width);
-        m_width -= space_width;
+        last_fragment.set_width(last_fragment.width() - last_character_width);
+        m_width -= last_character_width;
     }
 }
 
@@ -77,7 +63,13 @@ bool LineBox::is_empty_or_ends_in_whitespace() const
 {
     if (m_fragments.is_empty())
         return true;
+
     return m_fragments.last().ends_in_whitespace();
+}
+
+bool LineBox::ends_with_forced_line_break() const
+{
+    return is<BreakNode>(m_fragments.last().layout_node());
 }
 
 }

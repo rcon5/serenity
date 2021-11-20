@@ -1,34 +1,19 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "PreviewWidget.h"
+#include <AK/LexicalPath.h>
 #include <AK/StringView.h>
+#include <LibCore/MimeData.h>
+#include <LibFileSystemAccessClient/Client.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/CheckBox.h>
+#include <LibGUI/MessageBox.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/RadioButton.h>
 #include <LibGUI/Statusbar.h>
@@ -58,7 +43,6 @@ public:
 private:
     MiniWidgetGallery()
     {
-        set_fill_with_background_color(true);
         m_button = add<GUI::Button>();
         m_button->set_text("Button");
         m_checkbox = add<GUI::CheckBox>();
@@ -69,6 +53,11 @@ private:
         m_statusbar->set_text("Status bar");
         m_editor = add<GUI::TextEditor>();
         m_editor->set_text("Text editor\nwith multiple\nlines.");
+
+        for_each_child_widget([](auto& child) {
+            child.set_focus_policy(GUI::FocusPolicy::NoFocus);
+            return IterationDecision::Continue;
+        });
     }
 
     virtual void resize_event(GUI::ResizeEvent&) override
@@ -90,12 +79,20 @@ private:
 PreviewWidget::PreviewWidget(const Gfx::Palette& preview_palette)
     : m_preview_palette(preview_palette)
 {
-    m_active_window_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/window.png");
-    m_inactive_window_icon = Gfx::Bitmap::load_from_file("/res/icons/16x16/window.png");
+    m_active_window_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/window.png");
+    m_inactive_window_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/window.png");
 
-    m_close_bitmap = Gfx::Bitmap::load_from_file("/res/icons/16x16/window-close.png");
-    m_maximize_bitmap = Gfx::Bitmap::load_from_file("/res/icons/16x16/upward-triangle.png");
-    m_minimize_bitmap = Gfx::Bitmap::load_from_file("/res/icons/16x16/downward-triangle.png");
+    m_default_close_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/window-close.png");
+    m_default_maximize_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/upward-triangle.png");
+    m_default_minimize_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/downward-triangle.png");
+
+    VERIFY(m_active_window_icon);
+    VERIFY(m_inactive_window_icon);
+    VERIFY(m_default_close_bitmap);
+    VERIFY(m_default_maximize_bitmap);
+    VERIFY(m_default_minimize_bitmap);
+
+    load_theme_bitmaps();
 
     m_gallery = add<MiniWidgetGallery>();
     set_greedy_for_hits(true);
@@ -105,11 +102,52 @@ PreviewWidget::~PreviewWidget()
 {
 }
 
+void PreviewWidget::load_theme_bitmaps()
+{
+    auto load_bitmap = [](String const& path, String& last_path, RefPtr<Gfx::Bitmap>& bitmap) {
+        if (path.is_empty()) {
+            last_path = String::empty();
+            bitmap = nullptr;
+        } else if (last_path != path) {
+            bitmap = Gfx::Bitmap::try_load_from_file(path);
+            if (bitmap)
+                last_path = path;
+            else
+                last_path = String::empty();
+        }
+    };
+
+    auto buttons_path = m_preview_palette.title_button_icons_path();
+
+    load_bitmap(LexicalPath::absolute_path(buttons_path, "window-close.png"), m_last_close_path, m_close_bitmap);
+    load_bitmap(LexicalPath::absolute_path(buttons_path, "window-maximize.png"), m_last_maximize_path, m_maximize_bitmap);
+    load_bitmap(LexicalPath::absolute_path(buttons_path, "window-minimize.png"), m_last_minimize_path, m_minimize_bitmap);
+
+    load_bitmap(m_preview_palette.active_window_shadow_path(), m_last_active_window_shadow_path, m_active_window_shadow);
+    load_bitmap(m_preview_palette.inactive_window_shadow_path(), m_last_inactive_window_shadow_path, m_inactive_window_shadow);
+    load_bitmap(m_preview_palette.menu_shadow_path(), m_last_menu_shadow_path, m_menu_shadow);
+    load_bitmap(m_preview_palette.taskbar_shadow_path(), m_last_taskbar_shadow_path, m_taskbar_shadow);
+    load_bitmap(m_preview_palette.tooltip_shadow_path(), m_last_tooltip_shadow_path, m_tooltip_shadow);
+}
+
 void PreviewWidget::set_preview_palette(const Gfx::Palette& palette)
 {
     m_preview_palette = palette;
     m_gallery->set_preview_palette(palette);
+    load_theme_bitmaps();
     update();
+}
+
+void PreviewWidget::set_theme_from_file(String const& path, int fd)
+{
+    auto file = Core::ConfigFile::open(path, fd);
+    auto theme = Gfx::load_system_theme(file);
+    VERIFY(theme.is_valid());
+
+    m_preview_palette = Gfx::Palette(Gfx::PaletteImpl::create_with_anonymous_buffer(theme));
+    set_preview_palette(m_preview_palette);
+    if (on_theme_load_from_file)
+        on_theme_load_from_file(path);
 }
 
 void PreviewWidget::paint_event(GUI::PaintEvent& event)
@@ -134,33 +172,46 @@ void PreviewWidget::paint_event(GUI::PaintEvent& event)
         int pos = titlebar_text_rect.right() + 1;
 
         Vector<Button> buttons;
-        buttons.append(Button { {}, m_close_bitmap });
-        buttons.append(Button { {}, m_maximize_bitmap });
-        buttons.append(Button { {}, m_minimize_bitmap });
+        buttons.append(Button { {}, m_close_bitmap.is_null() ? m_default_close_bitmap : m_close_bitmap });
+        buttons.append(Button { {}, m_maximize_bitmap.is_null() ? m_default_maximize_bitmap : m_maximize_bitmap });
+        buttons.append(Button { {}, m_minimize_bitmap.is_null() ? m_default_minimize_bitmap : m_minimize_bitmap });
 
         for (auto& button : buttons) {
             pos -= window_button_width;
-            Gfx::IntRect rect { pos, 0, window_button_width, window_button_height };
-            rect.center_vertically_within(titlebar_text_rect);
-            button.rect = rect;
+            Gfx::IntRect button_rect { pos, 0, window_button_width, window_button_height };
+            button_rect.center_vertically_within(titlebar_text_rect);
+            button.rect = button_rect;
         }
 
+        painter.fill_rect(rect, m_preview_palette.window());
+
         auto frame_rect = Gfx::WindowTheme::current().frame_rect_for_window(Gfx::WindowTheme::WindowType::Normal, rect, m_preview_palette, 0);
+
+        auto paint_shadow = [](Gfx::Painter& painter, Gfx::IntRect& frame_rect, Gfx::Bitmap const& shadow_bitmap) {
+            auto total_shadow_size = shadow_bitmap.height();
+            auto shadow_rect = frame_rect.inflated(total_shadow_size, total_shadow_size);
+            Gfx::StylePainter::paint_simple_rect_shadow(painter, shadow_rect, shadow_bitmap);
+        };
+
+        if (state == Gfx::WindowTheme::WindowState::Active && m_active_window_shadow) {
+            paint_shadow(painter, frame_rect, *m_active_window_shadow);
+        } else if (state == Gfx::WindowTheme::WindowState::Inactive && m_inactive_window_shadow) {
+            paint_shadow(painter, frame_rect, *m_inactive_window_shadow);
+        }
+
         Gfx::PainterStateSaver saver(painter);
         painter.translate(frame_rect.location());
-        Gfx::WindowTheme::current().paint_normal_frame(painter, state, rect, title, icon, m_preview_palette, buttons.last().rect, 0);
+        Gfx::WindowTheme::current().paint_normal_frame(painter, state, rect, title, icon, m_preview_palette, buttons.last().rect, 0, false);
 
         for (auto& button : buttons) {
             Gfx::StylePainter::paint_button(painter, button.rect, m_preview_palette, Gfx::ButtonStyle::Normal, false);
-            auto bitmap_rect = button.bitmap->rect();
-            bitmap_rect.center_within(button.rect);
+            auto bitmap_rect = button.bitmap->rect().centered_within(button.rect);
             painter.blit(bitmap_rect.location(), *button.bitmap, button.bitmap->rect());
         }
     };
 
-    Gfx::IntRect active_rect { 0, 0, 320, 240 };
-    active_rect.center_within(frame_inner_rect());
-    Gfx::IntRect inactive_rect = active_rect.translated(-20, -20);
+    auto active_rect = Gfx::IntRect(0, 0, 320, 240).centered_within(frame_inner_rect());
+    auto inactive_rect = active_rect.translated(-20, -20);
 
     paint_window("Inactive window", inactive_rect, Gfx::WindowTheme::WindowState::Inactive, *m_active_window_icon);
     paint_window("Active window", active_rect, Gfx::WindowTheme::WindowState::Active, *m_inactive_window_icon);
@@ -168,9 +219,29 @@ void PreviewWidget::paint_event(GUI::PaintEvent& event)
 
 void PreviewWidget::resize_event(GUI::ResizeEvent&)
 {
-    Gfx::IntRect gallery_rect { 0, 0, 320, 240 };
-    gallery_rect.center_within(rect());
-    m_gallery->set_relative_rect(gallery_rect);
+    m_gallery->set_relative_rect(Gfx::IntRect(0, 0, 320, 240).centered_within(rect()));
+}
+
+void PreviewWidget::drop_event(GUI::DropEvent& event)
+{
+    event.accept();
+    window()->move_to_front();
+
+    if (event.mime_data().has_urls()) {
+        auto urls = event.mime_data().urls();
+        if (urls.is_empty())
+            return;
+        if (urls.size() > 1) {
+            GUI::MessageBox::show(window(), "ThemeEditor can only open one file at a time!", "One at a time please!", GUI::MessageBox::Type::Error);
+            return;
+        }
+
+        auto result = FileSystemAccessClient::Client::the().request_file(window()->window_id(), urls.first().path(), Core::OpenMode::ReadOnly);
+        if (result.error != 0)
+            return;
+
+        set_theme_from_file(urls.first().path(), *result.fd);
+    }
 }
 
 }

@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Assertions.h>
@@ -34,7 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum LengthModifier {
+enum class LengthModifier {
     None,
     Default,
     Char,
@@ -47,7 +27,7 @@ enum LengthModifier {
     LongDouble,
 };
 
-enum ConversionSpecifier {
+enum class ConversionSpecifier {
     Unspecified,
     Decimal,
     Integer,
@@ -274,15 +254,15 @@ struct ReadElement {
     {
         switch (length_modifier) {
         default:
-        case None:
+        case LengthModifier::None:
             VERIFY_NOT_REACHED();
-        case Default:
+        case LengthModifier::Default:
             return ReadElementConcrete<T, T, kind> {}(input_lexer, ap);
-        case Char:
+        case LengthModifier::Char:
             return ReadElementConcrete<T, char, kind> {}(input_lexer, ap);
-        case Short:
+        case LengthModifier::Short:
             return ReadElementConcrete<T, short, kind> {}(input_lexer, ap);
-        case Long:
+        case LengthModifier::Long:
             if constexpr (IsSame<T, int>)
                 return ReadElementConcrete<T, long, kind> {}(input_lexer, ap);
             if constexpr (IsSame<T, unsigned>)
@@ -290,7 +270,7 @@ struct ReadElement {
             if constexpr (IsSame<T, float>)
                 return ReadElementConcrete<int, double, kind> {}(input_lexer, ap);
             return false;
-        case LongLong:
+        case LengthModifier::LongLong:
             if constexpr (IsSame<T, int>)
                 return ReadElementConcrete<long long, long long, kind> {}(input_lexer, ap);
             if constexpr (IsSame<T, unsigned>)
@@ -298,13 +278,13 @@ struct ReadElement {
             if constexpr (IsSame<T, float>)
                 return ReadElementConcrete<long long, double, kind> {}(input_lexer, ap);
             return false;
-        case IntMax:
+        case LengthModifier::IntMax:
             return ReadElementConcrete<T, intmax_t, kind> {}(input_lexer, ap);
-        case Size:
+        case LengthModifier::Size:
             return ReadElementConcrete<T, size_t, kind> {}(input_lexer, ap);
-        case PtrDiff:
+        case LengthModifier::PtrDiff:
             return ReadElementConcrete<T, ptrdiff_t, kind> {}(input_lexer, ap);
-        case LongDouble:
+        case LengthModifier::LongDouble:
             return ReadElementConcrete<T, long double, kind> {}(input_lexer, ap);
         }
     }
@@ -403,6 +383,9 @@ extern "C" int vsscanf(const char* input, const char* format, va_list ap)
 
     int elements_matched = 0;
 
+    va_list copy;
+    __builtin_va_copy(copy, ap);
+
     while (!format_lexer.is_eof()) {
         format_lexer.ignore_while(isspace);
         if (!format_lexer.next_is('%')) {
@@ -440,84 +423,84 @@ extern "C" int vsscanf(const char* input, const char* format, va_list ap)
 
         bool invert_scanlist = false;
         StringView scanlist;
-        LengthModifier length_modifier { None };
-        ConversionSpecifier conversion_specifier { Unspecified };
+        LengthModifier length_modifier { LengthModifier::None };
+        ConversionSpecifier conversion_specifier { ConversionSpecifier::Unspecified };
     reread_lookahead:;
         auto format_lookahead = format_lexer.peek();
-        if (length_modifier == None) {
+        if (length_modifier == LengthModifier::None) {
             switch (format_lookahead) {
             case 'h':
                 if (format_lexer.peek(1) == 'h') {
                     format_lexer.consume(2);
-                    length_modifier = Char;
+                    length_modifier = LengthModifier::Char;
                 } else {
                     format_lexer.consume(1);
-                    length_modifier = Short;
+                    length_modifier = LengthModifier::Short;
                 }
                 break;
             case 'l':
                 if (format_lexer.peek(1) == 'l') {
                     format_lexer.consume(2);
-                    length_modifier = LongLong;
+                    length_modifier = LengthModifier::LongLong;
                 } else {
                     format_lexer.consume(1);
-                    length_modifier = Long;
+                    length_modifier = LengthModifier::Long;
                 }
                 break;
             case 'j':
                 format_lexer.consume();
-                length_modifier = IntMax;
+                length_modifier = LengthModifier::IntMax;
                 break;
             case 'z':
                 format_lexer.consume();
-                length_modifier = Size;
+                length_modifier = LengthModifier::Size;
                 break;
             case 't':
                 format_lexer.consume();
-                length_modifier = PtrDiff;
+                length_modifier = LengthModifier::PtrDiff;
                 break;
             case 'L':
                 format_lexer.consume();
-                length_modifier = LongDouble;
+                length_modifier = LengthModifier::LongDouble;
                 break;
             default:
-                length_modifier = Default;
+                length_modifier = LengthModifier::Default;
                 break;
             }
             goto reread_lookahead;
         }
-        if (conversion_specifier == Unspecified) {
+        if (conversion_specifier == ConversionSpecifier::Unspecified) {
             switch (format_lookahead) {
             case 'd':
                 format_lexer.consume();
-                conversion_specifier = Decimal;
+                conversion_specifier = ConversionSpecifier::Decimal;
                 break;
             case 'i':
                 format_lexer.consume();
-                conversion_specifier = Integer;
+                conversion_specifier = ConversionSpecifier::Integer;
                 break;
             case 'o':
                 format_lexer.consume();
-                conversion_specifier = Octal;
+                conversion_specifier = ConversionSpecifier::Octal;
                 break;
             case 'u':
                 format_lexer.consume();
-                conversion_specifier = Unsigned;
+                conversion_specifier = ConversionSpecifier::Unsigned;
                 break;
             case 'x':
                 format_lexer.consume();
-                conversion_specifier = Hex;
+                conversion_specifier = ConversionSpecifier::Hex;
                 break;
             case 'a':
             case 'e':
             case 'f':
             case 'g':
                 format_lexer.consume();
-                conversion_specifier = Floating;
+                conversion_specifier = ConversionSpecifier::Floating;
                 break;
             case 's':
                 format_lexer.consume();
-                conversion_specifier = String;
+                conversion_specifier = ConversionSpecifier::String;
                 break;
             case '[':
                 format_lexer.consume();
@@ -526,117 +509,118 @@ extern "C" int vsscanf(const char* input, const char* format, va_list ap)
                     scanlist = scanlist.substring_view(1);
                     invert_scanlist = true;
                 }
-                conversion_specifier = UseScanList;
+                conversion_specifier = ConversionSpecifier::UseScanList;
                 break;
             case 'c':
                 format_lexer.consume();
-                conversion_specifier = Character;
+                conversion_specifier = ConversionSpecifier::Character;
                 break;
             case 'p':
                 format_lexer.consume();
-                conversion_specifier = Pointer;
+                conversion_specifier = ConversionSpecifier::Pointer;
                 break;
             case 'n':
                 format_lexer.consume();
-                conversion_specifier = OutputNumberOfBytes;
+                conversion_specifier = ConversionSpecifier::OutputNumberOfBytes;
                 break;
             case 'C':
                 format_lexer.consume();
-                length_modifier = Long;
-                conversion_specifier = Character;
+                length_modifier = LengthModifier::Long;
+                conversion_specifier = ConversionSpecifier::Character;
                 break;
             case 'S':
                 format_lexer.consume();
-                length_modifier = Long;
-                conversion_specifier = String;
+                length_modifier = LengthModifier::Long;
+                conversion_specifier = ConversionSpecifier::String;
                 break;
             default:
                 format_lexer.consume();
-                conversion_specifier = Invalid;
+                conversion_specifier = ConversionSpecifier::Invalid;
                 break;
             }
         }
 
-        auto* ap_or_null = !suppress_assignment ? (va_list*)&ap : nullptr;
+        auto* ap_or_null = !suppress_assignment ? (va_list*)&copy : nullptr;
 
         // Now try to read.
         switch (conversion_specifier) {
-        case Invalid:
-        case Unspecified:
+        case ConversionSpecifier::Invalid:
+        case ConversionSpecifier::Unspecified:
         default:
-            // "undefined behaviour", let's be nice and crash.
+            // "undefined behavior", let's be nice and crash.
             dbgln("Invalid conversion specifier {} in scanf!", (int)conversion_specifier);
             VERIFY_NOT_REACHED();
-        case Decimal:
+        case ConversionSpecifier::Decimal:
             if (!ReadElement<int, ReadKind::Normal> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case Integer:
+        case ConversionSpecifier::Integer:
             if (!ReadElement<int, ReadKind::Infer> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case Octal:
+        case ConversionSpecifier::Octal:
             if (!ReadElement<unsigned, ReadKind::Octal> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case Unsigned:
+        case ConversionSpecifier::Unsigned:
             if (!ReadElement<unsigned, ReadKind::Normal> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case Hex:
+        case ConversionSpecifier::Hex:
             if (!ReadElement<unsigned, ReadKind::Hex> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case Floating:
+        case ConversionSpecifier::Floating:
             if (!ReadElement<float, ReadKind::Normal> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case String:
+        case ConversionSpecifier::String:
             if (!ReadElement<char*, ReadKind::Normal> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case UseScanList:
+        case ConversionSpecifier::UseScanList:
             if (!ReadElement<char*, ReadKind::Normal> { scanlist, invert_scanlist }(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case Character:
+        case ConversionSpecifier::Character:
             if (!ReadElement<char, ReadKind::Normal> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case Pointer:
+        case ConversionSpecifier::Pointer:
             if (!ReadElement<void*, ReadKind::Normal> {}(length_modifier, input_lexer, ap_or_null))
                 format_lexer.consume_all();
             else
                 ++elements_matched;
             break;
-        case OutputNumberOfBytes: {
+        case ConversionSpecifier::OutputNumberOfBytes: {
+            input_lexer.ignore_while(isspace);
             if (!suppress_assignment) {
-                auto* ptr = va_arg(ap, int*);
+                auto* ptr = va_arg(copy, int*);
                 *ptr = input_lexer.tell();
             }
-            ++elements_matched;
             break;
         }
         }
     }
+    va_end(copy);
 
     return elements_matched;
 }

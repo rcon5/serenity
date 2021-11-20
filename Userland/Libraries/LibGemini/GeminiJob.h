@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2020, The SerenityOS developers.
- * All rights reserved.
+ * Copyright (c) 2020, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -37,19 +17,16 @@ namespace Gemini {
 class GeminiJob final : public Job {
     C_OBJECT(GeminiJob)
 public:
-    explicit GeminiJob(const GeminiRequest& request, OutputStream& output_stream, const Vector<Certificate>* override_certificates = nullptr)
-        : Job(request, output_stream)
-        , m_override_ca_certificates(override_certificates)
-    {
-    }
-
     virtual ~GeminiJob() override
     {
     }
 
-    virtual void start() override;
-    virtual void shutdown() override;
+    virtual void start(NonnullRefPtr<Core::Socket>) override;
+    virtual void shutdown(ShutdownMode) override;
     void set_certificate(String certificate, String key);
+
+    Core::Socket const* socket() const { return m_socket; }
+    URL url() const { return m_request.url(); }
 
     Function<void(GeminiJob&)> on_certificate_requested;
 
@@ -67,6 +44,12 @@ protected:
     virtual void read_while_data_available(Function<IterationDecision()>) override;
 
 private:
+    explicit GeminiJob(const GeminiRequest& request, OutputStream& output_stream, const Vector<Certificate>* override_certificates = nullptr)
+        : Job(request, output_stream)
+        , m_override_ca_certificates(override_certificates)
+    {
+    }
+
     RefPtr<TLS::TLSv12> m_socket;
     const Vector<Certificate>* m_override_ca_certificates { nullptr };
 };

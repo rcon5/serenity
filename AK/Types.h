@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -85,14 +65,18 @@ namespace std {
 using nullptr_t = decltype(nullptr);
 }
 
-static constexpr u32 explode_byte(u8 b)
+static constexpr FlatPtr explode_byte(u8 b)
 {
-    return b << 24 | b << 16 | b << 8 | b;
+    FlatPtr value = b;
+    if constexpr (sizeof(FlatPtr) == 4)
+        return value << 24 | value << 16 | value << 8 | value;
+    else if (sizeof(FlatPtr) == 8)
+        return value << 56 | value << 48 | value << 40 | value << 32 | value << 24 | value << 16 | value << 8 | value;
 }
 
-static_assert(explode_byte(0xff) == 0xffffffff);
-static_assert(explode_byte(0x80) == 0x80808080);
-static_assert(explode_byte(0x7f) == 0x7f7f7f7f);
+static_assert(explode_byte(0xff) == (FlatPtr)0xffffffffffffffffull);
+static_assert(explode_byte(0x80) == (FlatPtr)0x8080808080808080ull);
+static_assert(explode_byte(0x7f) == (FlatPtr)0x7f7f7f7f7f7f7f7full);
 static_assert(explode_byte(0) == 0);
 
 constexpr size_t align_up_to(const size_t value, const size_t alignment)

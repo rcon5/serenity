@@ -1,27 +1,8 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGUI/BoxLayout.h>
@@ -92,7 +73,7 @@ void Breadcrumbbar::clear_segments()
     remove_all_children();
 }
 
-void Breadcrumbbar::append_segment(String text, const Gfx::Bitmap* icon, String data, String tooltip)
+void Breadcrumbbar::append_segment(String text, Gfx::Bitmap const* icon, String data, String tooltip)
 {
     auto& button = add<BreadcrumbButton>();
     button.set_button_style(Gfx::ButtonStyle::Coolbar);
@@ -118,11 +99,35 @@ void Breadcrumbbar::append_segment(String text, const Gfx::Bitmap* icon, String 
     auto button_text_width = button.font().width(text);
     auto icon_width = icon ? icon->width() : 0;
     auto icon_padding = icon ? 4 : 0;
-    button.set_fixed_size(button_text_width + icon_width + icon_padding + 16, 16 + 8);
 
-    Segment segment { icon, text, data, button.make_weak_ptr<GUI::Button>() };
+    const int max_button_width = 100;
+
+    auto button_width = min(button_text_width + icon_width + icon_padding + 16, max_button_width);
+    auto shrunken_width = icon_width + icon_padding + (icon ? 4 : 16);
+
+    button.set_fixed_size(button_width, 16 + 8);
+
+    Segment segment { icon, text, data, button_width, shrunken_width, button.make_weak_ptr<GUI::Button>() };
 
     m_segments.append(move(segment));
+    relayout();
+}
+
+void Breadcrumbbar::remove_end_segments(size_t start_segment_index)
+{
+    while (segment_count() > start_segment_index) {
+        auto segment = m_segments.take_last();
+        remove_child(*segment.button);
+    }
+}
+
+Optional<size_t> Breadcrumbbar::find_segment_with_data(String const& data)
+{
+    for (size_t i = 0; i < segment_count(); ++i) {
+        if (segment_data(i) == data)
+            return i;
+    }
+    return {};
 }
 
 void Breadcrumbbar::set_selected_segment(Optional<size_t> index)
@@ -138,12 +143,35 @@ void Breadcrumbbar::set_selected_segment(Optional<size_t> index)
     auto& segment = m_segments[index.value()];
     VERIFY(segment.button);
     segment.button->set_checked(true);
+    relayout();
 }
 
 void Breadcrumbbar::doubleclick_event(MouseEvent& event)
 {
     if (on_doubleclick)
         on_doubleclick(event);
+}
+
+void Breadcrumbbar::resize_event(ResizeEvent&)
+{
+    relayout();
+}
+
+void Breadcrumbbar::relayout()
+{
+    auto remaining_width = 0;
+
+    for (auto& segment : m_segments)
+        remaining_width += segment.width;
+
+    for (auto& segment : m_segments) {
+        if (remaining_width > width() && !segment.button->is_checked()) {
+            segment.button->set_fixed_width(segment.shrunken_width);
+            remaining_width -= (segment.width - segment.shrunken_width);
+            continue;
+        }
+        segment.button->set_fixed_width(segment.width);
+    }
 }
 
 }

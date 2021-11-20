@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2021, the SerenityOS developers
- * All rights reserved.
+ * Copyright (c) 2021, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "NewFontDialog.h"
@@ -31,7 +11,7 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/CheckBox.h>
 #include <LibGUI/ComboBox.h>
-#include <LibGUI/FontPickerWeightModel.h>
+#include <LibGUI/ItemListModel.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/MessageBox.h>
 #include <LibGUI/Painter.h>
@@ -40,8 +20,11 @@
 #include <LibGUI/Widget.h>
 #include <LibGUI/Wizards/WizardDialog.h>
 #include <LibGfx/BitmapFont.h>
-#include <LibGfx/Font.h>
+#include <LibGfx/FontStyleMapping.h>
 #include <LibGfx/Palette.h>
+
+static constexpr int s_max_width = 32;
+static constexpr int s_max_height = 36;
 
 namespace GUI {
 
@@ -53,10 +36,13 @@ public:
         m_width = width;
         m_height = height;
         m_glyph_width = width;
-        if (m_width > 25 || m_height > 20)
-            set_scale(6);
-        if (m_width <= 25 && m_height <= 20)
-            set_scale(10);
+        for (int i = 10; i > 0; i--) {
+            if ((frame_thickness() * 2 + (m_width * i) - 1) <= 250
+                && (frame_thickness() * 2 + (m_height * i) - 1) <= 205) {
+                set_scale(i);
+                break;
+            }
+        }
         set_fixed_width(frame_thickness() * 2 + (m_width * m_scale) - 1);
         set_fixed_height(frame_thickness() * 2 + (m_height * m_scale) - 1);
     }
@@ -107,13 +93,13 @@ private:
     }
     virtual void mousemove_event(MouseEvent& event) override
     {
-        if (event.buttons() & (GUI::MouseButton::Left | GUI::MouseButton::Right))
+        if (event.buttons() & (GUI::MouseButton::Primary | GUI::MouseButton::Secondary))
             draw_at_mouse(event);
     }
     void draw_at_mouse(const MouseEvent& event)
     {
-        bool set = event.buttons() & MouseButton::Left;
-        bool unset = event.buttons() & MouseButton::Right;
+        bool set = event.buttons() & MouseButton::Primary;
+        bool unset = event.buttons() & MouseButton::Secondary;
         if (!(set ^ unset))
             return;
         int x = (event.x() - 1) / m_scale;
@@ -134,7 +120,7 @@ private:
     int m_glyph_width { 20 };
     int m_mean_line { 2 };
     int m_baseline { 16 };
-    u8 m_bits[34][34] {};
+    u8 m_bits[s_max_width][s_max_height] {};
 };
 
 }
@@ -149,29 +135,19 @@ NewFontDialog::NewFontDialog(GUI::Window* parent_window)
 
     m_name_textbox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::TextBox>("name_textbox");
     m_family_textbox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::TextBox>("family_textbox");
-    m_type_combobox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::ComboBox>("type_combobox");
-    m_type_info_label = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::Label>("type_info_label");
     m_weight_combobox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::ComboBox>("weight_combobox");
+    m_slope_combobox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::ComboBox>("slope_combobox");
     m_presentation_spinbox = m_font_properties_page->body_widget().find_descendant_of_type_named<GUI::SpinBox>("presentation_spinbox");
 
-    m_type_info_label->set_text("\xE2\x84\xB9\t");
-    m_type_info_label->set_tooltip("Font type governs maximum glyph count");
-
-    for (auto& it : GUI::font_weight_names)
+    for (auto& it : Gfx::font_weight_names)
         m_font_weight_list.append(it.name);
     m_weight_combobox->set_model(*GUI::ItemListModel<String>::create(m_font_weight_list));
     m_weight_combobox->set_selected_index(3);
 
-    StringBuilder type_count;
-    for (int i = 0; i < Gfx::FontTypes::__Count; i++) {
-        type_count.appendff("{} ({})",
-            Gfx::BitmapFont::type_name_by_type(static_cast<Gfx::FontTypes>(i)),
-            Gfx::BitmapFont::glyph_count_by_type(static_cast<Gfx::FontTypes>(i)));
-        m_font_type_list.append(type_count.to_string());
-        type_count.clear();
-    }
-    m_type_combobox->set_model(*GUI::ItemListModel<String>::create(m_font_type_list));
-    m_type_combobox->set_selected_index(0);
+    for (auto& it : Gfx::font_slope_names)
+        m_font_slope_list.append(it.name);
+    m_slope_combobox->set_model(*GUI::ItemListModel<String>::create(m_font_slope_list));
+    m_slope_combobox->set_selected_index(0);
 
     m_presentation_spinbox->set_value(12);
 
@@ -196,8 +172,12 @@ NewFontDialog::NewFontDialog(GUI::Window* parent_window)
 
     m_glyph_height_spinbox->set_value(20);
     m_glyph_width_spinbox->set_value(20);
-    m_mean_line_spinbox->set_value(3);
+    m_glyph_height_spinbox->set_max(s_max_height);
+    m_glyph_width_spinbox->set_max(s_max_width);
+    m_mean_line_spinbox->set_value(2);
     m_baseline_spinbox->set_value(16);
+    m_mean_line_spinbox->set_max(max(m_glyph_height_spinbox->value() - 2, 0));
+    m_baseline_spinbox->set_max(max(m_glyph_height_spinbox->value() - 2, 0));
     m_spacing_spinbox->set_value(1);
     m_fixed_width_checkbox->set_checked(false);
 
@@ -213,6 +193,8 @@ NewFontDialog::NewFontDialog(GUI::Window* parent_window)
     };
     m_glyph_height_spinbox->on_change = [&](int value) {
         preview_editor.set_preview_size(m_glyph_width_spinbox->value(), value);
+        m_mean_line_spinbox->set_max(max(value - 2, 0));
+        m_baseline_spinbox->set_max(max(value - 2, 0));
         deferred_invoke([&] {
             m_glyph_editor_container->set_fixed_height(1 + preview_editor.height() + preview_editor.frame_thickness() * 2);
         });
@@ -233,8 +215,8 @@ void NewFontDialog::save_metadata()
 {
     m_new_font_metadata.name = m_name_textbox->text();
     m_new_font_metadata.family = m_family_textbox->text();
-    m_new_font_metadata.weight = GUI::name_to_weight(m_weight_combobox->text());
-    m_new_font_metadata.type = static_cast<Gfx::FontTypes>(m_type_combobox->selected_index());
+    m_new_font_metadata.weight = Gfx::name_to_weight(m_weight_combobox->text());
+    m_new_font_metadata.slope = Gfx::name_to_slope(m_slope_combobox->text());
     m_new_font_metadata.presentation_size = m_presentation_spinbox->value();
 
     m_new_font_metadata.baseline = m_baseline_spinbox->value();

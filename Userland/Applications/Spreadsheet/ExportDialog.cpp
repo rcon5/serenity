@@ -1,35 +1,13 @@
 /*
  * Copyright (c) 2020-2021, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "ExportDialog.h"
 #include "Spreadsheet.h"
 #include "Workbook.h"
 #include <AK/JsonArray.h>
-#include <AK/JsonObject.h>
-#include <AK/JsonParser.h>
 #include <AK/LexicalPath.h>
 #include <AK/String.h>
 #include <Applications/Spreadsheet/CSVExportGML.h>
@@ -41,9 +19,7 @@
 #include <LibGUI/ComboBox.h>
 #include <LibGUI/ItemListModel.h>
 #include <LibGUI/RadioButton.h>
-#include <LibGUI/TableView.h>
 #include <LibGUI/TextBox.h>
-#include <LibGUI/Wizards/AbstractWizardPage.h>
 #include <LibGUI/Wizards/WizardDialog.h>
 #include <LibGUI/Wizards/WizardPage.h>
 #include <unistd.h>
@@ -56,10 +32,10 @@ namespace Spreadsheet {
 CSVExportDialogPage::CSVExportDialogPage(const Sheet& sheet)
     : m_data(sheet.to_xsv())
 {
-    m_headers.append(m_data.take_first());
+    m_headers.extend(m_data.take_first());
 
     auto temp_template = String::formatted("{}/spreadsheet-csv-export.{}.XXXXXX", Core::StandardPaths::tempfile_directory(), getpid());
-    auto temp_path = ByteBuffer::create_uninitialized(temp_template.length() + 1);
+    auto temp_path = ByteBuffer::create_uninitialized(temp_template.length() + 1).release_value();
     auto buf = reinterpret_cast<char*>(temp_path.data());
     auto copy_ok = temp_template.copy_characters_to_buffer(buf, temp_path.size());
     VERIFY(copy_ok);
@@ -109,18 +85,18 @@ CSVExportDialogPage::CSVExportDialogPage(const Sheet& sheet)
     m_delimiter_tab_radio->on_checked = [&](auto) { update_preview(); };
     m_delimiter_space_radio->on_checked = [&](auto) { update_preview(); };
     m_delimiter_other_radio->on_checked = [&](auto) { update_preview(); };
-    m_delimiter_other_text_box->on_change = [&](auto&) {
+    m_delimiter_other_text_box->on_change = [&] {
         if (m_delimiter_other_radio->is_checked())
             update_preview();
     };
     m_quote_single_radio->on_checked = [&](auto) { update_preview(); };
     m_quote_double_radio->on_checked = [&](auto) { update_preview(); };
     m_quote_other_radio->on_checked = [&](auto) { update_preview(); };
-    m_quote_other_text_box->on_change = [&](auto&) {
+    m_quote_other_text_box->on_change = [&] {
         if (m_quote_other_radio->is_checked())
             update_preview();
     };
-    m_quote_escape_combo_box->on_change = [&](auto&) { update_preview(); };
+    m_quote_escape_combo_box->on_change = [&](auto&, auto&) { update_preview(); };
     m_export_header_check_box->on_checked = [&](auto) { update_preview(); };
     m_quote_all_fields_check_box->on_checked = [&](auto) { update_preview(); };
 
@@ -178,17 +154,17 @@ auto CSVExportDialogPage::make_writer() -> Optional<XSV>
         quote_escape,
     };
 
-    auto behaviours = Writer::default_behaviours();
+    auto behaviors = Writer::default_behaviors();
     Vector<String> empty_headers;
     auto* headers = &empty_headers;
 
     if (should_export_headers) {
-        behaviours = behaviours | Writer::WriterBehaviour::WriteHeaders;
+        behaviors = behaviors | Writer::WriterBehavior::WriteHeaders;
         headers = &m_headers;
     }
 
     if (should_quote_all_fields)
-        behaviours = behaviours | Writer::WriterBehaviour::QuoteAll;
+        behaviors = behaviors | Writer::WriterBehavior::QuoteAll;
 
     // Note that the stream is used only by the ctor.
     auto stream = Core::OutputFileStream::open(m_temp_output_file_path);
@@ -196,7 +172,7 @@ auto CSVExportDialogPage::make_writer() -> Optional<XSV>
         dbgln("Cannot open {} for writing: {}", m_temp_output_file_path, stream.error());
         return {};
     }
-    XSV writer(stream.value(), m_data, traits, *headers, behaviours);
+    XSV writer(stream.value(), m_data, traits, *headers, behaviors);
 
     if (stream.value().has_any_error()) {
         dbgln("Write error when making preview");
@@ -218,7 +194,7 @@ void CSVExportDialogPage::update_preview()
 
     auto file_or_error = Core::File::open(
         m_temp_output_file_path,
-        Core::IODevice::ReadOnly);
+        Core::OpenMode::ReadOnly);
     if (file_or_error.is_error())
         goto fail;
 
@@ -320,7 +296,7 @@ Result<void, String> ExportDialog::make_and_run_for(StringView mime, Core::File&
     } else {
         auto page = GUI::WizardPage::construct(
             "Export File Format",
-            String::formatted("Select the format you wish to export to '{}' as", LexicalPath { file.filename() }.basename()));
+            String::formatted("Select the format you wish to export to '{}' as", LexicalPath::basename(file.filename())));
 
         page->on_next_page = [] { return nullptr; };
 

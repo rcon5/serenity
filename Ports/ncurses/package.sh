@@ -2,13 +2,36 @@
 port=ncurses
 version=6.2
 useconfigure=true
-configopts="--with-termlib --enable-pc-files --with-pkg-config=/usr/local/lib/pkgconfig --with-pkg-config-libdir=/usr/local/lib/pkgconfig --without-ada --enable-sigwinch"
-files="https://ftpmirror.gnu.org/gnu/ncurses/ncurses-${version}.tar.gz ncurses-${version}.tar.gz
-https://ftpmirror.gnu.org/gnu/ncurses/ncurses-${version}.tar.gz.sig ncurses-${version}.tar.gz.sig
-https://ftpmirror.gnu.org/gnu/gnu-keyring.gpg gnu-keyring.gpg"
-auth_type="sig"
-auth_opts="--keyring ./gnu-keyring.gpg ncurses-${version}.tar.gz.sig"
+configopts=(
+    "--enable-pc-files"
+    "--enable-sigwinch"
+    "--enable-term-driver"
+    "--with-pkg-config=/usr/local/lib/pkgconfig"
+    "--with-pkg-config-libdir=/usr/local/lib/pkgconfig"
+    "--with-shared"
+    "--without-ada"
+    "--enable-widec"
+)
+files="https://ftpmirror.gnu.org/gnu/ncurses/ncurses-${version}.tar.gz ncurses-${version}.tar.gz 30306e0c76e0f9f1f0de987cf1c82a5c21e1ce6568b9227f7da5b71cbea86c9d"
+auth_type="sha256"
 
 pre_configure() {
     export CPPFLAGS="-P"
+}
+
+post_install() {
+    # Compatibility symlinks for merged libraries.
+    for lib in tinfo tic curses; do
+        ln -svf libncursesw.so "${SERENITY_INSTALL_ROOT}/usr/local/lib/lib${lib}w.so"
+    done
+
+    # Compatibility symlinks for non-w libraries.
+    for lib in form menu ncurses ncurses++ panel tinfo tic curses; do
+        ln -svf lib${lib}w.so "${SERENITY_INSTALL_ROOT}/usr/local/lib/lib${lib}.so"
+    done
+
+    # Compatibility symlink for the include folder.
+    # Target folder has to be removed, otherwise we will get `/usr/local/include/ncurses/ncursesw`.
+    rm -rf "${SERENITY_INSTALL_ROOT}/usr/local/include/ncurses"
+    ln -svf ncursesw "${SERENITY_INSTALL_ROOT}/usr/local/include/ncurses"
 }

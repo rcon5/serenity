@@ -1,46 +1,21 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
+ * Copyright (c) 2021, Edwin Hoksberg <mail@edwinhoksberg.nl>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Assertions.h>
-#include <AK/ByteBuffer.h>
-#include <AK/Singleton.h>
-#include <AK/StringView.h>
 #include <AK/Types.h>
-#include <Kernel/Arch/x86/CPU.h>
-#include <Kernel/Debug.h>
 #include <Kernel/Devices/HID/KeyboardDevice.h>
-#include <Kernel/IO.h>
+#include <Kernel/Sections.h>
 #include <Kernel/TTY/VirtualConsole.h>
+#include <LibC/sys/ioctl_numbers.h>
 
 namespace Kernel {
 
-#define IRQ_KEYBOARD 1
-
-static const KeyCode unshifted_key_map[0x80] = {
+static constexpr KeyCode unshifted_key_map[0x80] = {
     Key_Invalid,
     Key_Escape,
     Key_1,
@@ -56,7 +31,7 @@ static const KeyCode unshifted_key_map[0x80] = {
     Key_Minus,
     Key_Equal,
     Key_Backspace,
-    Key_Tab, //15
+    Key_Tab, // 15
     Key_Q,
     Key_W,
     Key_E,
@@ -137,7 +112,7 @@ static const KeyCode unshifted_key_map[0x80] = {
     Key_Menu,
 };
 
-static const KeyCode shifted_key_map[0x100] = {
+static constexpr KeyCode shifted_key_map[0x100] = {
     Key_Invalid,
     Key_Escape,
     Key_ExclamationPoint,
@@ -234,8 +209,6 @@ static const KeyCode shifted_key_map[0x100] = {
     Key_Menu,
 };
 
-static const KeyCode numpad_key_map[13] = { Key_7, Key_8, Key_9, Key_Invalid, Key_4, Key_5, Key_6, Key_Invalid, Key_1, Key_2, Key_3, Key_0, Key_Comma };
-
 void KeyboardDevice::key_state_changed(u8 scan_code, bool pressed)
 {
     KeyCode key = (m_modifiers & Mod_Shift) ? shifted_key_map[scan_code] : unshifted_key_map[scan_code];
@@ -246,6 +219,7 @@ void KeyboardDevice::key_state_changed(u8 scan_code, bool pressed)
     if (m_num_lock_on && !m_has_e0_prefix) {
         if (scan_code >= 0x47 && scan_code <= 0x53) {
             u8 index = scan_code - 0x47;
+            constexpr KeyCode numpad_key_map[13] = { Key_7, Key_8, Key_9, Key_Invalid, Key_4, Key_5, Key_6, Key_Invalid, Key_1, Key_2, Key_3, Key_0, Key_Comma };
             KeyCode newKey = numpad_key_map[index];
 
             if (newKey != Key_Invalid) {
@@ -254,8 +228,14 @@ void KeyboardDevice::key_state_changed(u8 scan_code, bool pressed)
         }
     }
 
-    if (key == Key_CapsLock && pressed)
+    if (!g_caps_lock_remapped_to_ctrl && key == Key_CapsLock && pressed)
         m_caps_lock_on = !m_caps_lock_on;
+
+    if (g_caps_lock_remapped_to_ctrl && key == Key_CapsLock)
+        m_caps_lock_to_ctrl_pressed = pressed;
+
+    if (g_caps_lock_remapped_to_ctrl)
+        update_modifier(Mod_Ctrl, m_caps_lock_to_ctrl_pressed);
 
     Event event;
     event.key = key;
@@ -271,7 +251,7 @@ void KeyboardDevice::key_state_changed(u8 scan_code, bool pressed)
         HIDManagement::the().m_client->on_key_pressed(event);
 
     {
-        ScopedSpinLock lock(m_queue_lock);
+        SpinlockLocker lock(m_queue_lock);
         m_queue.enqueue(event);
     }
 
@@ -293,32 +273,32 @@ UNMAP_AFTER_INIT KeyboardDevice::~KeyboardDevice()
 {
 }
 
-bool KeyboardDevice::can_read(const FileDescription&, size_t) const
+bool KeyboardDevice::can_read(const OpenFileDescription&, size_t) const
 {
     return !m_queue.is_empty();
 }
 
-KResultOr<size_t> KeyboardDevice::read(FileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
+KResultOr<size_t> KeyboardDevice::read(OpenFileDescription&, u64, UserOrKernelBuffer& buffer, size_t size)
 {
     size_t nread = 0;
-    ScopedSpinLock lock(m_queue_lock);
+    SpinlockLocker lock(m_queue_lock);
     while (nread < size) {
         if (m_queue.is_empty())
             break;
         // Don't return partial data frames.
-        if ((size - nread) < (ssize_t)sizeof(Event))
+        if (size - nread < sizeof(Event))
             break;
         auto event = m_queue.dequeue();
 
         lock.unlock();
 
-        ssize_t n = buffer.write_buffered<sizeof(Event)>(sizeof(Event), [&](u8* data, size_t data_bytes) {
-            memcpy(data, &event, sizeof(Event));
-            return (ssize_t)data_bytes;
+        auto result = buffer.write_buffered<sizeof(Event)>(sizeof(Event), [&](Bytes bytes) {
+            memcpy(bytes.data(), &event, sizeof(Event));
+            return bytes.size();
         });
-        if (n < 0)
-            return KResult((ErrnoCode)-n);
-        VERIFY((size_t)n == sizeof(Event));
+        if (result.is_error())
+            return result.error();
+        VERIFY(result.value() == sizeof(Event));
         nread += sizeof(Event);
 
         lock.lock();
@@ -326,9 +306,35 @@ KResultOr<size_t> KeyboardDevice::read(FileDescription&, u64, UserOrKernelBuffer
     return nread;
 }
 
-KResultOr<size_t> KeyboardDevice::write(FileDescription&, u64, const UserOrKernelBuffer&, size_t)
+KResult KeyboardDevice::ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg)
 {
-    return 0;
+    switch (request) {
+    case KEYBOARD_IOCTL_GET_NUM_LOCK: {
+        auto output = static_ptr_cast<bool*>(arg);
+        return copy_to_user(output, &m_num_lock_on);
+    }
+    case KEYBOARD_IOCTL_SET_NUM_LOCK: {
+        // In this case we expect the value to be a boolean and not a pointer.
+        auto num_lock_value = static_cast<u8>(arg.ptr());
+        if (num_lock_value != 0 && num_lock_value != 1)
+            return EINVAL;
+        m_num_lock_on = !!num_lock_value;
+        return KSuccess;
+    }
+    case KEYBOARD_IOCTL_GET_CAPS_LOCK: {
+        auto output = static_ptr_cast<bool*>(arg);
+        return copy_to_user(output, &m_caps_lock_on);
+    }
+    case KEYBOARD_IOCTL_SET_CAPS_LOCK: {
+        auto caps_lock_value = static_cast<u8>(arg.ptr());
+        if (caps_lock_value != 0 && caps_lock_value != 1)
+            return EINVAL;
+        m_caps_lock_on = !!caps_lock_value;
+        return KSuccess;
+    }
+    default:
+        return EINVAL;
+    };
 }
 
 }

@@ -1,27 +1,8 @@
 /*
- * Copyright (c) 2020, Matthew Olsson <matthewcolsson@gmail.com>
- * All rights reserved.
+ * Copyright (c) 2020, Matthew Olsson <mattco@serenityos.org>
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibWeb/SVG/SVGGraphicsElement.h>
@@ -33,7 +14,7 @@ SVGGraphicsElement::SVGGraphicsElement(DOM::Document& document, QualifiedName qu
 {
 }
 
-void SVGGraphicsElement::parse_attribute(const FlyString& name, const String& value)
+void SVGGraphicsElement::parse_attribute(FlyString const& name, String const& value)
 {
     SVGElement::parse_attribute(name, value);
 
@@ -46,6 +27,41 @@ void SVGGraphicsElement::parse_attribute(const FlyString& name, const String& va
         if (result.has_value())
             m_stroke_width = result.value();
     }
+}
+
+Optional<Gfx::Color> SVGGraphicsElement::fill_color() const
+{
+    if (m_fill_color.has_value())
+        return m_fill_color;
+    if (!layout_node())
+        return {};
+    // FIXME: In the working-draft spec, `fill` is intended to be a shorthand, with `fill-color`
+    //        being what we actually want to use. But that's not final or widely supported yet.
+    return layout_node()->computed_values().fill();
+}
+
+Optional<Gfx::Color> SVGGraphicsElement::stroke_color() const
+{
+    if (m_stroke_color.has_value())
+        return m_stroke_color;
+    if (!layout_node())
+        return {};
+    // FIXME: In the working-draft spec, `stroke` is intended to be a shorthand, with `stroke-color`
+    //        being what we actually want to use. But that's not final or widely supported yet.
+    return layout_node()->computed_values().stroke();
+}
+
+Optional<float> SVGGraphicsElement::stroke_width() const
+{
+    if (m_stroke_width.has_value())
+        return m_stroke_width;
+    if (!layout_node())
+        return {};
+    // FIXME: Converting to pixels isn't really correct - values should be in "user units"
+    //        https://svgwg.org/svg2-draft/coords.html#TermUserUnits
+    if (auto width = layout_node()->computed_values().stroke_width(); width.has_value())
+        return width->to_px(*layout_node());
+    return {};
 }
 
 }

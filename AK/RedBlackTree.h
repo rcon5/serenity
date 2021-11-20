@@ -1,37 +1,22 @@
 /*
- * Copyright (c) 2021, Idan Horowitz <idan.horowitz@gmail.com>
- * All rights reserved.
+ * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Concepts.h>
+#include <AK/Noncopyable.h>
+#include <AK/kmalloc.h>
 
 namespace AK {
 
 template<Integral K>
 class BaseRedBlackTree {
+    AK_MAKE_NONCOPYABLE(BaseRedBlackTree);
+    AK_MAKE_NONMOVABLE(BaseRedBlackTree);
+
 public:
     [[nodiscard]] size_t size() const { return m_size; }
     [[nodiscard]] bool is_empty() const { return m_size == 0; }
@@ -53,12 +38,15 @@ public:
             : key(key)
         {
         }
+        Node()
+        {
+        }
         virtual ~Node() {};
     };
 
 protected:
     BaseRedBlackTree() = default; // These are protected to ensure no one instantiates the leaky base red black tree directly
-    virtual ~BaseRedBlackTree() {};
+    virtual ~BaseRedBlackTree() = default;
 
     void rotate_left(Node* subtree_root)
     {
@@ -423,6 +411,8 @@ public:
     [[nodiscard]] bool is_end() const { return !m_node; }
     [[nodiscard]] bool is_begin() const { return !m_prev; }
 
+    [[nodiscard]] auto key() const { return m_node->key; }
+
 private:
     friend TreeType;
     explicit RedBlackTreeIterator(typename TreeType::Node* node, typename TreeType::Node* prev = nullptr)
@@ -435,7 +425,7 @@ private:
 };
 
 template<Integral K, typename V>
-class RedBlackTree : public BaseRedBlackTree<K> {
+class RedBlackTree final : public BaseRedBlackTree<K> {
 public:
     RedBlackTree() = default;
     virtual ~RedBlackTree() override
@@ -445,7 +435,7 @@ public:
 
     using BaseTree = BaseRedBlackTree<K>;
 
-    V* find(K key)
+    [[nodiscard]] V* find(K key)
     {
         auto* node = static_cast<Node*>(BaseTree::find(this->m_root, key));
         if (!node)
@@ -453,7 +443,7 @@ public:
         return &node->value;
     }
 
-    V* find_largest_not_above(K key)
+    [[nodiscard]] V* find_largest_not_above(K key)
     {
         auto* node = static_cast<Node*>(BaseTree::find_largest_not_above(this->m_root, key));
         if (!node)
@@ -466,10 +456,19 @@ public:
         insert(key, V(value));
     }
 
+    [[nodiscard]] bool try_insert(K key, V&& value)
+    {
+        auto* node = new (nothrow) Node(key, move(value));
+        if (!node)
+            return false;
+        BaseTree::insert(node);
+        return true;
+    }
+
     void insert(K key, V&& value)
     {
-        auto* node = new Node(key, move(value));
-        BaseTree::insert(node);
+        auto success = try_insert(key, move(value));
+        VERIFY(success);
     }
 
     using Iterator = RedBlackTreeIterator<RedBlackTree, V>;
@@ -483,6 +482,14 @@ public:
     ConstIterator begin() const { return ConstIterator(static_cast<Node*>(this->m_minimum)); }
     ConstIterator end() const { return {}; }
     ConstIterator begin_from(K key) const { return ConstIterator(static_cast<Node*>(BaseTree::find(this->m_root, key))); }
+
+    ConstIterator find_largest_not_above_iterator(K key) const
+    {
+        auto node = static_cast<Node*>(BaseTree::find_largest_not_above(this->m_root, key));
+        if (!node)
+            return end();
+        return ConstIterator(node, static_cast<Node*>(BaseTree::predecessor(node)));
+    }
 
     V unsafe_remove(K key)
     {

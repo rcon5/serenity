@@ -1,13 +1,14 @@
 #!/usr/bin/env -S bash ../.port_include.sh
 port=SDL2
-version=serenity-git
+version=git
 workdir=SDL-main-serenity
 useconfigure=true
-files="https://github.com/SerenityOS/SDL/archive/main-serenity.tar.gz SDL2-git.tar.gz"
-configopts="-DCMAKE_TOOLCHAIN_FILE=$SERENITY_SOURCE_DIR/Toolchain/CMake/CMakeToolchain.txt -DPULSEAUDIO=OFF -DJACK=OFF"
+files="https://github.com/SerenityPorts/SDL/archive/main-serenity.tar.gz SDL2-git.tar.gz"
+configopts=("-DCMAKE_TOOLCHAIN_FILE=${SERENITY_BUILD_DIR}/CMakeToolchain.txt" "-DPULSEAUDIO=OFF" "-DJACK=OFF" "-DEXTRA_LDFLAGS=-liconv;-ldl")
+depends=("libiconv")
 
 configure() {
-    run cmake $configopts
+    run cmake "${configopts[@]}"
 }
 
 install() {

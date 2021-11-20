@@ -2,7 +2,7 @@
     fill_with_background_color: true
 
     layout: @GUI::VerticalBoxLayout {
-        margins: [4, 4, 4, 4]
+        margins: [4]
     }
 
     @GUI::GroupBox {
@@ -10,7 +10,7 @@
         shrink_to_fit: true
 
         layout: @GUI::VerticalBoxLayout {
-            margins: [6, 16, 6, 6]
+            margins: [4]
         }
 
         @GUI::RadioButton {
@@ -34,7 +34,7 @@
         shrink_to_fit: true
 
         layout: @GUI::VerticalBoxLayout {
-            margins: [6, 16, 6, 6]
+            margins: [4]
         }
 
         @GUI::OpacitySlider {
@@ -50,7 +50,7 @@
         shrink_to_fit: true
 
         layout: @GUI::VerticalBoxLayout {
-            margins: [6, 16, 6, 6]
+            margins: [4]
         }
 
         @GUI::SpinBox {
@@ -58,6 +58,19 @@
             min: 0
             max: 40960
             orientation: "Horizontal"
+        }
+    }
+
+    @GUI::GroupBox {
+        title: "Color scheme"
+        shrink_to_fit: true
+
+        layout: @GUI::VerticalBoxLayout {
+            margins: [4]
+        }
+
+        @GUI::ComboBox {
+            name: "color_scheme_combo"
         }
     }
 }

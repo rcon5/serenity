@@ -98,3 +98,22 @@ describe("errors", () => {
         }).toThrowWithMessage(TypeError, "[object Object] is not iterable");
     });
 });
+
+test("allow binding patterns", () => {
+    let counter = 0;
+    for (let [a, b] of [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+    ]) {
+        expect(a + 1).toBe(b);
+        counter++;
+    }
+    expect(counter).toBe(3);
+});
+
+test("allow member expression as variable", () => {
+    const f = {};
+    for (f.a of "abc");
+    expect(f.a).toBe("c");
+});

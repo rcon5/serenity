@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Alex McGrath <amk@amk.ie>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGUI/Action.h>
@@ -41,7 +21,6 @@ namespace GUI {
 LinkLabel::LinkLabel(String text)
     : Label(move(text))
 {
-    set_override_cursor(Gfx::StandardCursor::Hand);
     set_foreground_role(Gfx::ColorRole::Link);
     set_focus_policy(FocusPolicy::TabFocus);
     setup_actions();
@@ -49,7 +28,7 @@ LinkLabel::LinkLabel(String text)
 
 void LinkLabel::setup_actions()
 {
-    m_open_action = GUI::Action::create("Show in File Manager", {}, Gfx::Bitmap::load_from_file("/res/icons/16x16/app-file-manager.png"), [&](const GUI::Action&) {
+    m_open_action = GUI::Action::create("Show in File Manager", {}, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-file-manager.png"), [&](const GUI::Action&) {
         if (on_click)
             on_click();
     });
@@ -57,13 +36,29 @@ void LinkLabel::setup_actions()
     m_copy_action = CommonActions::make_copy_action([this](auto&) { Clipboard::the().set_plain_text(text()); }, this);
 }
 
+void LinkLabel::set_hovered(bool hover)
+{
+    if (hover == m_hovered)
+        return;
+
+    m_hovered = hover;
+    set_override_cursor(hover ? Gfx::StandardCursor::Hand : Gfx::StandardCursor::None);
+    update();
+}
+
+void LinkLabel::mousemove_event(MouseEvent& event)
+{
+    static const int extra_target_width = 3;
+    set_hovered(event.position().x() <= font().width(text()) + extra_target_width);
+}
+
 void LinkLabel::mousedown_event(MouseEvent& event)
 {
-    if (event.button() != MouseButton::Left)
+    if (event.button() != MouseButton::Primary)
         return;
 
     Label::mousedown_event(event);
-    if (on_click) {
+    if (m_hovered && on_click) {
         on_click();
     }
 }
@@ -89,18 +84,10 @@ void LinkLabel::paint_event(PaintEvent& event)
         painter.draw_focus_rect(text_rect(), palette().focus_outline());
 }
 
-void LinkLabel::enter_event(Core::Event& event)
-{
-    Label::enter_event(event);
-    m_hovered = true;
-    update();
-}
-
 void LinkLabel::leave_event(Core::Event& event)
 {
     Label::leave_event(event);
-    m_hovered = false;
-    update();
+    set_hovered(false);
 }
 
 void LinkLabel::did_change_text()

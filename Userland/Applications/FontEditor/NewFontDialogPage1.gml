@@ -1,6 +1,6 @@
 @GUI::Widget {
     layout: @GUI::VerticalBoxLayout {
-        margins: [20, 20, 20, 20]
+        margins: [20]
     }
 
     @GUI::Widget {
@@ -47,21 +47,15 @@
             }
 
             @GUI::Label {
+                text: "Weight:"
                 fixed_width: 100
                 text_alignment: "CenterLeft"
-                text: "Type:"
             }
 
             @GUI::ComboBox {
-                name: "type_combobox"
+                name: "weight_combobox"
                 fixed_width: 180
                 model_only: true
-            }
-
-            @GUI::Label {
-                name: "type_info_label"
-                text_alignment: "CenterLeft"
-                autosize: true
             }
         }
 
@@ -70,13 +64,13 @@
             }
 
             @GUI::Label {
-                text: "Weight:"
                 fixed_width: 100
                 text_alignment: "CenterLeft"
+                text: "Slope:"
             }
 
             @GUI::ComboBox {
-                name: "weight_combobox"
+                name: "slope_combobox"
                 fixed_width: 180
                 model_only: true
             }

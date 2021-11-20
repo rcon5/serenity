@@ -1,31 +1,10 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Badge.h>
-#include <AK/ByteBuffer.h>
 #include <AK/Debug.h>
 #include <AK/Format.h>
 #include <AK/IDAllocator.h>
@@ -41,49 +20,52 @@
 #include <LibCore/LocalSocket.h>
 #include <LibCore/Notifier.h>
 #include <LibCore/Object.h>
-#include <LibCore/SyscallUtils.h>
-#include <LibThread/Lock.h>
+#include <LibThreading/Mutex.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/select.h>
 #include <sys/socket.h>
-#include <sys/stat.h>
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
 
 namespace Core {
 
-class RPCClient;
+class InspectorServerConnection;
+
+[[maybe_unused]] static bool connect_to_inspector_server();
 
 struct EventLoopTimer {
     int timer_id { 0 };
-    int interval { 0 };
-    timeval fire_time { 0, 0 };
+    Time interval;
+    Time fire_time;
     bool should_reload { false };
     TimerShouldFireWhenNotVisible fire_when_not_visible { TimerShouldFireWhenNotVisible::No };
     WeakPtr<Object> owner;
 
-    void reload(const timeval& now);
-    bool has_expired(const timeval& now) const;
+    void reload(const Time& now);
+    bool has_expired(const Time& now) const;
 };
 
 struct EventLoop::Private {
-    LibThread::Lock lock;
+    Threading::Mutex lock;
 };
 
 static EventLoop* s_main_event_loop;
-static Vector<EventLoop*>* s_event_loop_stack;
+static Vector<EventLoop&>* s_event_loop_stack;
 static NeverDestroyed<IDAllocator> s_id_allocator;
 static HashMap<int, NonnullOwnPtr<EventLoopTimer>>* s_timers;
 static HashTable<Notifier*>* s_notifiers;
 int EventLoop::s_wake_pipe_fds[2];
-static RefPtr<LocalServer> s_rpc_server;
-HashMap<int, RefPtr<RPCClient>> s_rpc_clients;
+static RefPtr<InspectorServerConnection> s_inspector_server_connection;
+
+bool EventLoop::has_been_instantiated()
+{
+    return s_main_event_loop;
+}
 
 class SignalHandlers : public RefCounted<SignalHandlers> {
     AK_MAKE_NONCOPYABLE(SignalHandlers);
@@ -132,24 +114,23 @@ struct SignalHandlersInfo {
     int next_signal_id { 0 };
 };
 
+static Singleton<SignalHandlersInfo> s_signals;
 template<bool create_if_null = true>
 inline SignalHandlersInfo* signals_info()
 {
-    static SignalHandlersInfo* s_signals;
-    return AK::Singleton<SignalHandlersInfo>::get(s_signals);
+    return s_signals.ptr();
 }
 
 pid_t EventLoop::s_pid;
 
-class RPCClient : public Object {
-    C_OBJECT(RPCClient)
-public:
-    explicit RPCClient(RefPtr<LocalSocket> socket)
+class InspectorServerConnection : public Object {
+    C_OBJECT(InspectorServerConnection)
+private:
+    explicit InspectorServerConnection(RefPtr<LocalSocket> socket)
         : m_socket(move(socket))
         , m_client_id(s_id_allocator->allocate())
     {
 #ifdef __serenity__
-        s_rpc_clients.set(m_client_id, this);
         add_child(*m_socket);
         m_socket->on_ready_to_read = [this] {
             u32 length;
@@ -175,12 +156,13 @@ public:
         warnln("RPC Client constructed outside serenity, this is very likely a bug!");
 #endif
     }
-    virtual ~RPCClient() override
+    virtual ~InspectorServerConnection() override
     {
         if (auto inspected_object = m_inspected_object.strong_ref())
             inspected_object->decrement_inspector_count({});
     }
 
+public:
     void send_response(const JsonObject& response)
     {
         auto serialized = response.to_string();
@@ -265,7 +247,6 @@ public:
 
     void shutdown()
     {
-        s_rpc_clients.remove(m_client_id);
         s_id_allocator->deallocate(m_client_id);
     }
 
@@ -275,11 +256,11 @@ private:
     int m_client_id { -1 };
 };
 
-EventLoop::EventLoop()
+EventLoop::EventLoop([[maybe_unused]] MakeInspectable make_inspectable)
     : m_private(make<Private>())
 {
     if (!s_event_loop_stack) {
-        s_event_loop_stack = new Vector<EventLoop*>;
+        s_event_loop_stack = new Vector<EventLoop&>;
         s_timers = new HashMap<int, NonnullOwnPtr<EventLoopTimer>>;
         s_notifiers = new HashTable<Notifier*>;
     }
@@ -296,12 +277,14 @@ EventLoop::EventLoop()
 
 #endif
         VERIFY(rc == 0);
-        s_event_loop_stack->append(this);
+        s_event_loop_stack->append(*this);
 
 #ifdef __serenity__
-        if (!s_rpc_server) {
-            if (!start_rpc_server())
-                dbgln("Core::EventLoop: Failed to start an RPC server");
+        if (getuid() != 0
+            && make_inspectable == MakeInspectable::Yes
+            && !s_inspector_server_connection) {
+            if (!connect_to_inspector_server())
+                dbgln("Core::EventLoop: Failed to connect to InspectorServer");
         }
 #endif
     }
@@ -311,17 +294,21 @@ EventLoop::EventLoop()
 
 EventLoop::~EventLoop()
 {
+    // NOTE: Pop the main event loop off of the stack when destroyed.
+    if (this == s_main_event_loop) {
+        s_event_loop_stack->take_last();
+        s_main_event_loop = nullptr;
+    }
 }
 
-bool EventLoop::start_rpc_server()
+bool connect_to_inspector_server()
 {
 #ifdef __serenity__
-    s_rpc_server = LocalServer::construct();
-    s_rpc_server->set_name("Core::EventLoop_RPC_server");
-    s_rpc_server->on_ready_to_accept = [&] {
-        RPCClient::construct(s_rpc_server->accept());
-    };
-    return s_rpc_server->listen(String::formatted("/tmp/rpc/{}", getpid()));
+    auto socket = Core::LocalSocket::construct();
+    if (!socket->connect(SocketAddress::local("/tmp/portal/inspectables")))
+        return false;
+    s_inspector_server_connection = InspectorServerConnection::construct(move(socket));
+    return true;
 #else
     VERIFY_NOT_REACHED();
 #endif
@@ -335,9 +322,7 @@ EventLoop& EventLoop::main()
 
 EventLoop& EventLoop::current()
 {
-    EventLoop* event_loop = s_event_loop_stack->last();
-    VERIFY(event_loop != nullptr);
-    return *event_loop;
+    return s_event_loop_stack->last();
 }
 
 void EventLoop::quit(int code)
@@ -361,7 +346,7 @@ public:
     {
         if (&m_event_loop != s_main_event_loop) {
             m_event_loop.take_pending_events_from(EventLoop::current());
-            s_event_loop_stack->append(&event_loop);
+            s_event_loop_stack->append(event_loop);
         }
     }
     ~EventLoopPusher()
@@ -387,13 +372,20 @@ int EventLoop::exec()
     VERIFY_NOT_REACHED();
 }
 
+void EventLoop::spin_until(Function<bool()> goal_condition)
+{
+    EventLoopPusher pusher(*this);
+    while (!goal_condition())
+        pump();
+}
+
 void EventLoop::pump(WaitMode mode)
 {
     wait_for_event(mode);
 
     decltype(m_queued_events) events;
     {
-        LOCKER(m_private->lock);
+        Threading::MutexLocker locker(m_private->lock);
         events = move(m_queued_events);
     }
 
@@ -414,23 +406,21 @@ void EventLoop::pump(WaitMode mode)
                 break;
             }
         } else if (event.type() == Event::Type::DeferredInvoke) {
-#if DEFERRED_INVOKE_DEBUG
-            dbgln("DeferredInvoke: receiver = {}", *receiver);
-#endif
-            static_cast<DeferredInvocationEvent&>(event).m_invokee(*receiver);
+            dbgln_if(DEFERRED_INVOKE_DEBUG, "DeferredInvoke: receiver = {}", *receiver);
+            static_cast<DeferredInvocationEvent&>(event).m_invokee();
         } else {
             NonnullRefPtr<Object> protector(*receiver);
             receiver->dispatch_event(event);
         }
 
         if (m_exit_requested) {
-            LOCKER(m_private->lock);
+            Threading::MutexLocker locker(m_private->lock);
             dbgln_if(EVENTLOOP_DEBUG, "Core::EventLoop: Exit requested. Rejigging {} events.", events.size() - i);
             decltype(m_queued_events) new_event_queue;
             new_event_queue.ensure_capacity(m_queued_events.size() + events.size());
             for (++i; i < events.size(); ++i)
                 new_event_queue.unchecked_append(move(events[i]));
-            new_event_queue.append(move(m_queued_events));
+            new_event_queue.extend(move(m_queued_events));
             m_queued_events = move(new_event_queue);
             return;
         }
@@ -439,7 +429,7 @@ void EventLoop::pump(WaitMode mode)
 
 void EventLoop::post_event(Object& receiver, NonnullOwnPtr<Event>&& event)
 {
-    LOCKER(m_private->lock);
+    Threading::MutexLocker lock(m_private->lock);
     dbgln_if(EVENTLOOP_DEBUG, "Core::EventLoop::post_event: ({}) << receivier={}, event={}", m_queued_events.size(), receiver, event);
     m_queued_events.empend(receiver, move(event));
 }
@@ -546,7 +536,7 @@ int EventLoop::register_signal(int signo, Function<void(int)> handler)
     auto& info = *signals_info();
     auto handlers = info.signal_handlers.find(signo);
     if (handlers == info.signal_handlers.end()) {
-        auto signal_handlers = adopt(*new SignalHandlers(signo, EventLoop::handle_signal));
+        auto signal_handlers = adopt_ref(*new SignalHandlers(signo, EventLoop::handle_signal));
         auto handler_id = signal_handlers->add(move(handler));
         info.signal_handlers.set(signo, move(signal_handlers));
         return handler_id;
@@ -586,8 +576,7 @@ void EventLoop::notify_forked(ForkEvent event)
         }
         s_pid = 0;
 #ifdef __serenity__
-        s_rpc_server = nullptr;
-        s_rpc_clients.clear();
+        s_inspector_server_connection = nullptr;
 #endif
         return;
     }
@@ -624,25 +613,21 @@ retry:
 
     bool queued_events_is_empty;
     {
-        LOCKER(m_private->lock);
+        Threading::MutexLocker locker(m_private->lock);
         queued_events_is_empty = m_queued_events.is_empty();
     }
 
-    timeval now;
+    Time now;
     struct timeval timeout = { 0, 0 };
     bool should_wait_forever = false;
     if (mode == WaitMode::WaitForEvents && queued_events_is_empty) {
         auto next_timer_expiration = get_next_timer_expiration();
         if (next_timer_expiration.has_value()) {
-            timespec now_spec;
-            clock_gettime(CLOCK_MONOTONIC_COARSE, &now_spec);
-            now.tv_sec = now_spec.tv_sec;
-            now.tv_usec = now_spec.tv_nsec / 1000;
-            timeval_sub(next_timer_expiration.value(), now, timeout);
-            if (timeout.tv_sec < 0 || (timeout.tv_sec == 0 && timeout.tv_usec < 0)) {
-                timeout.tv_sec = 0;
-                timeout.tv_usec = 0;
-            }
+            now = Time::now_monotonic_coarse();
+            auto computed_timeout = next_timer_expiration.value() - now;
+            if (computed_timeout.is_negative())
+                computed_timeout = Time::zero();
+            timeout = computed_timeout.to_timeval();
         } else {
             should_wait_forever = true;
         }
@@ -658,8 +643,6 @@ try_select_again:
             goto try_select_again;
         }
         dbgln_if(EVENTLOOP_DEBUG, "Core::EventLoop::wait_for_event: {} ({}: {})", marked_fd_count, saved_errno, strerror(saved_errno));
-
-        // Blow up, similar to Core::safe_syscall.
         VERIFY_NOT_REACHED();
     }
     if (FD_ISSET(s_wake_pipe_fds[0], &rfds)) {
@@ -684,10 +667,7 @@ try_select_again:
     }
 
     if (!s_timers->is_empty()) {
-        timespec now_spec;
-        clock_gettime(CLOCK_MONOTONIC_COARSE, &now_spec);
-        now.tv_sec = now_spec.tv_sec;
-        now.tv_usec = now_spec.tv_nsec / 1000;
+        now = Time::now_monotonic_coarse();
     }
 
     for (auto& it : *s_timers) {
@@ -727,21 +707,19 @@ try_select_again:
     }
 }
 
-bool EventLoopTimer::has_expired(const timeval& now) const
+bool EventLoopTimer::has_expired(const Time& now) const
 {
-    return now.tv_sec > fire_time.tv_sec || (now.tv_sec == fire_time.tv_sec && now.tv_usec >= fire_time.tv_usec);
+    return now > fire_time;
 }
 
-void EventLoopTimer::reload(const timeval& now)
+void EventLoopTimer::reload(const Time& now)
 {
-    fire_time = now;
-    fire_time.tv_sec += interval / 1000;
-    fire_time.tv_usec += (interval % 1000) * 1000;
+    fire_time = now + interval;
 }
 
-Optional<struct timeval> EventLoop::get_next_timer_expiration()
+Optional<Time> EventLoop::get_next_timer_expiration()
 {
-    Optional<struct timeval> soonest {};
+    Optional<Time> soonest {};
     for (auto& it : *s_timers) {
         auto& fire_time = it.value->fire_time;
         auto owner = it.value->owner.strong_ref();
@@ -749,7 +727,7 @@ Optional<struct timeval> EventLoop::get_next_timer_expiration()
             && owner && !owner->is_visible_for_timer_purposes()) {
             continue;
         }
-        if (!soonest.has_value() || fire_time.tv_sec < soonest.value().tv_sec || (fire_time.tv_sec == soonest.value().tv_sec && fire_time.tv_usec < soonest.value().tv_usec))
+        if (!soonest.has_value() || fire_time < soonest.value())
             soonest = fire_time;
     }
     return soonest;
@@ -760,13 +738,8 @@ int EventLoop::register_timer(Object& object, int milliseconds, bool should_relo
     VERIFY(milliseconds >= 0);
     auto timer = make<EventLoopTimer>();
     timer->owner = object;
-    timer->interval = milliseconds;
-    timeval now;
-    timespec now_spec;
-    clock_gettime(CLOCK_MONOTONIC_COARSE, &now_spec);
-    now.tv_sec = now_spec.tv_sec;
-    now.tv_usec = now_spec.tv_nsec / 1000;
-    timer->reload(now);
+    timer->interval = Time::from_milliseconds(milliseconds);
+    timer->reload(Time::now_monotonic_coarse());
     timer->should_reload = should_reload;
     timer->fire_when_not_visible = fire_when_not_visible;
     int timer_id = s_id_allocator->allocate();

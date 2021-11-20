@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -36,6 +16,7 @@
 #include <LibGfx/Forward.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/StandardCursor.h>
+#include <LibWeb/CSS/PreferredColorScheme.h>
 #include <LibWeb/Forward.h>
 
 namespace Web {
@@ -53,18 +34,18 @@ public:
     PageClient& client() { return m_client; }
     const PageClient& client() const { return m_client; }
 
-    Web::Frame& main_frame() { return *m_main_frame; }
-    const Web::Frame& main_frame() const { return *m_main_frame; }
+    Web::BrowsingContext& top_level_browsing_context() { return *m_top_level_browsing_context; }
+    const Web::BrowsingContext& top_level_browsing_context() const { return *m_top_level_browsing_context; }
 
-    Web::Frame& focused_frame();
-    const Web::Frame& focused_frame() const { return const_cast<Page*>(this)->focused_frame(); }
+    Web::BrowsingContext& focused_context();
+    const Web::BrowsingContext& focused_context() const { return const_cast<Page*>(this)->focused_context(); }
 
-    void set_focused_frame(Badge<EventHandler>, Frame&);
+    void set_focused_browsing_context(Badge<EventHandler>, BrowsingContext&);
 
-    void load(const URL&);
-    void load(const LoadRequest&);
+    void load(const AK::URL&);
+    void load(LoadRequest&);
 
-    void load_html(const StringView&, const URL&);
+    void load_html(const StringView&, const AK::URL&);
 
     bool handle_mouseup(const Gfx::IntPoint&, unsigned button, unsigned modifiers);
     bool handle_mousedown(const Gfx::IntPoint&, unsigned button, unsigned modifiers);
@@ -72,47 +53,56 @@ public:
     bool handle_mousewheel(const Gfx::IntPoint&, unsigned button, unsigned modifiers, int wheel_delta);
 
     bool handle_keydown(KeyCode, unsigned modifiers, u32 code_point);
+    bool handle_keyup(KeyCode, unsigned modifiers, u32 code_point);
 
     Gfx::Palette palette() const;
     Gfx::IntRect screen_rect() const;
+    CSS::PreferredColorScheme preferred_color_scheme() const;
+
+    bool is_same_origin_policy_enabled() const { return m_same_origin_policy_enabled; }
+    void set_same_origin_policy_enabled(bool b) { m_same_origin_policy_enabled = b; }
 
 private:
     PageClient& m_client;
 
-    RefPtr<Frame> m_main_frame;
-    WeakPtr<Frame> m_focused_frame;
+    RefPtr<BrowsingContext> m_top_level_browsing_context;
+    WeakPtr<BrowsingContext> m_focused_context;
+
+    // FIXME: Enable this by default once CORS preflight checks are supported.
+    bool m_same_origin_policy_enabled { false };
 };
 
 class PageClient {
 public:
-    virtual bool is_multi_process() const = 0;
     virtual Gfx::Palette palette() const = 0;
     virtual Gfx::IntRect screen_rect() const = 0;
-    virtual void page_did_set_document_in_main_frame(DOM::Document*) { }
+    virtual CSS::PreferredColorScheme preferred_color_scheme() const = 0;
+    virtual void page_did_set_document_in_top_level_browsing_context(DOM::Document*) { }
     virtual void page_did_change_title(const String&) { }
-    virtual void page_did_start_loading(const URL&) { }
-    virtual void page_did_finish_loading(const URL&) { }
+    virtual void page_did_start_loading(const AK::URL&) { }
+    virtual void page_did_finish_loading(const AK::URL&) { }
     virtual void page_did_change_selection() { }
     virtual void page_did_request_cursor_change(Gfx::StandardCursor) { }
     virtual void page_did_request_context_menu(const Gfx::IntPoint&) { }
-    virtual void page_did_request_link_context_menu(const Gfx::IntPoint&, const URL&, [[maybe_unused]] const String& target, [[maybe_unused]] unsigned modifiers) { }
-    virtual void page_did_request_image_context_menu(const Gfx::IntPoint&, const URL&, [[maybe_unused]] const String& target, [[maybe_unused]] unsigned modifiers, const Gfx::Bitmap*) { }
-    virtual void page_did_click_link(const URL&, [[maybe_unused]] const String& target, [[maybe_unused]] unsigned modifiers) { }
-    virtual void page_did_middle_click_link(const URL&, [[maybe_unused]] const String& target, [[maybe_unused]] unsigned modifiers) { }
+    virtual void page_did_request_link_context_menu(const Gfx::IntPoint&, const AK::URL&, [[maybe_unused]] const String& target, [[maybe_unused]] unsigned modifiers) { }
+    virtual void page_did_request_image_context_menu(const Gfx::IntPoint&, const AK::URL&, [[maybe_unused]] const String& target, [[maybe_unused]] unsigned modifiers, const Gfx::Bitmap*) { }
+    virtual void page_did_click_link(const AK::URL&, [[maybe_unused]] const String& target, [[maybe_unused]] unsigned modifiers) { }
+    virtual void page_did_middle_click_link(const AK::URL&, [[maybe_unused]] const String& target, [[maybe_unused]] unsigned modifiers) { }
     virtual void page_did_enter_tooltip_area(const Gfx::IntPoint&, const String&) { }
     virtual void page_did_leave_tooltip_area() { }
-    virtual void page_did_hover_link(const URL&) { }
+    virtual void page_did_hover_link(const AK::URL&) { }
     virtual void page_did_unhover_link() { }
     virtual void page_did_invalidate(const Gfx::IntRect&) { }
     virtual void page_did_change_favicon(const Gfx::Bitmap&) { }
     virtual void page_did_layout() { }
-    virtual void page_did_request_scroll(int) { }
+    virtual void page_did_request_scroll(i32, i32) { }
+    virtual void page_did_request_scroll_to(Gfx::IntPoint const&) { }
     virtual void page_did_request_scroll_into_view(const Gfx::IntRect&) { }
     virtual void page_did_request_alert(const String&) { }
     virtual bool page_did_request_confirm(const String&) { return false; }
     virtual String page_did_request_prompt(const String&, const String&) { return {}; }
-    virtual String page_did_request_cookie(const URL&, Cookie::Source) { return {}; }
-    virtual void page_did_set_cookie(const URL&, const Cookie::ParsedCookie&, Cookie::Source) { }
+    virtual String page_did_request_cookie(const AK::URL&, Cookie::Source) { return {}; }
+    virtual void page_did_set_cookie(const AK::URL&, const Cookie::ParsedCookie&, Cookie::Source) { }
 
 protected:
     virtual ~PageClient() = default;

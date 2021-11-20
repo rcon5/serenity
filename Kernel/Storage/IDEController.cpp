@@ -1,42 +1,24 @@
 /*
  * Copyright (c) 2020, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/OwnPtr.h>
 #include <AK/RefPtr.h>
 #include <AK/Types.h>
+#include <Kernel/Bus/PCI/API.h>
 #include <Kernel/FileSystem/ProcFS.h>
+#include <Kernel/Sections.h>
+#include <Kernel/Storage/ATADiskDevice.h>
 #include <Kernel/Storage/BMIDEChannel.h>
 #include <Kernel/Storage/IDEController.h>
-#include <Kernel/Storage/PATADiskDevice.h>
 
 namespace Kernel {
 
-UNMAP_AFTER_INIT NonnullRefPtr<IDEController> IDEController::initialize(PCI::Address address, bool force_pio)
+UNMAP_AFTER_INIT NonnullRefPtr<IDEController> IDEController::initialize(PCI::DeviceIdentifier const& device_identifier, bool force_pio)
 {
-    return adopt(*new IDEController(address, force_pio));
+    return adopt_ref(*new IDEController(device_identifier, force_pio));
 }
 
 bool IDEController::reset()
@@ -59,8 +41,18 @@ size_t IDEController::devices_count() const
     return count;
 }
 
-void IDEController::start_request(const StorageDevice&, AsyncBlockDeviceRequest&)
+void IDEController::start_request(const ATADevice& device, AsyncBlockDeviceRequest& request)
 {
+    auto& address = device.ata_address();
+    VERIFY(address.subport < 2);
+    switch (address.port) {
+    case 0:
+        m_channels[0].start_request(request, address.subport == 0 ? false : true, device.ata_capabilites());
+        return;
+    case 1:
+        m_channels[1].start_request(request, address.subport == 0 ? false : true, device.ata_capabilites());
+        return;
+    }
     VERIFY_NOT_REACHED();
 }
 
@@ -69,10 +61,14 @@ void IDEController::complete_current_request(AsyncDeviceRequest::RequestResult)
     VERIFY_NOT_REACHED();
 }
 
-UNMAP_AFTER_INIT IDEController::IDEController(PCI::Address address, bool force_pio)
-    : StorageController()
-    , PCI::DeviceController(address)
+UNMAP_AFTER_INIT IDEController::IDEController(PCI::DeviceIdentifier const& device_identifier, bool force_pio)
+    : ATAController()
+    , PCI::Device(device_identifier.address())
+    , m_prog_if(device_identifier.prog_if())
+    , m_interrupt_line(device_identifier.interrupt_line())
 {
+    PCI::enable_io_space(device_identifier.address());
+    PCI::enable_memory_space(device_identifier.address());
     initialize(force_pio);
 }
 
@@ -82,22 +78,22 @@ UNMAP_AFTER_INIT IDEController::~IDEController()
 
 bool IDEController::is_pci_native_mode_enabled() const
 {
-    return (PCI::get_programming_interface(pci_address()) & 0x05) != 0;
+    return (m_prog_if.value() & 0x05) != 0;
 }
 
 bool IDEController::is_pci_native_mode_enabled_on_primary_channel() const
 {
-    return (PCI::get_programming_interface(pci_address()) & 0x1) == 0x1;
+    return (m_prog_if.value() & 0x1) == 0x1;
 }
 
 bool IDEController::is_pci_native_mode_enabled_on_secondary_channel() const
 {
-    return (PCI::get_programming_interface(pci_address()) & 0x4) == 0x4;
+    return (m_prog_if.value() & 0x4) == 0x4;
 }
 
 bool IDEController::is_bus_master_capable() const
 {
-    return PCI::get_programming_interface(pci_address()) & (1 << 7);
+    return m_prog_if.value() & (1 << 7);
 }
 
 static const char* detect_controller_type(u8 programming_value)
@@ -129,8 +125,8 @@ UNMAP_AFTER_INIT void IDEController::initialize(bool force_pio)
 {
     auto bus_master_base = IOAddress(PCI::get_BAR4(pci_address()) & (~1));
     dbgln("IDE controller @ {}: bus master base was set to {}", pci_address(), bus_master_base);
-    dbgln("IDE controller @ {}: interrupt line was set to {}", pci_address(), PCI::get_interrupt_line(pci_address()));
-    dbgln("IDE controller @ {}: {}", pci_address(), detect_controller_type(PCI::get_programming_interface(pci_address())));
+    dbgln("IDE controller @ {}: interrupt line was set to {}", pci_address(), m_interrupt_line.value());
+    dbgln("IDE controller @ {}: {}", pci_address(), detect_controller_type(m_prog_if.value()));
     dbgln("IDE controller @ {}: primary channel DMA capable? {}", pci_address(), ((bus_master_base.offset(2).in<u8>() >> 5) & 0b11));
     dbgln("IDE controller @ {}: secondary channel DMA capable? {}", pci_address(), ((bus_master_base.offset(2 + 8).in<u8>() >> 5) & 0b11));
 
@@ -146,7 +142,7 @@ UNMAP_AFTER_INIT void IDEController::initialize(bool force_pio)
     auto bar3 = PCI::get_BAR3(pci_address());
     auto secondary_control_io = (bar3 == 0x1 || bar3 == 0) ? IOAddress(0x376) : IOAddress(bar3 & (~1));
 
-    auto irq_line = PCI::get_interrupt_line(pci_address());
+    auto irq_line = m_interrupt_line.value();
     if (is_pci_native_mode_enabled()) {
         VERIFY(irq_line != 0);
     }
@@ -155,7 +151,7 @@ UNMAP_AFTER_INIT void IDEController::initialize(bool force_pio)
         if (force_pio)
             m_channels.append(IDEChannel::create(*this, irq_line, { primary_base_io, primary_control_io }, IDEChannel::ChannelType::Primary));
         else
-            m_channels.append(BMIDEChannel::create(*this, irq_line, { primary_control_io, primary_control_io, bus_master_base }, IDEChannel::ChannelType::Primary));
+            m_channels.append(BMIDEChannel::create(*this, irq_line, { primary_base_io, primary_control_io, bus_master_base }, IDEChannel::ChannelType::Primary));
     } else {
         if (force_pio)
             m_channels.append(IDEChannel::create(*this, { primary_base_io, primary_control_io }, IDEChannel::ChannelType::Primary));

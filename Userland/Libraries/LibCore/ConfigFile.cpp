@@ -1,69 +1,65 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Jakob-Niklas See <git@nwex.de>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/ByteBuffer.h>
 #include <AK/StringBuilder.h>
 #include <LibCore/ConfigFile.h>
 #include <LibCore/File.h>
 #include <LibCore/StandardPaths.h>
 #include <pwd.h>
 #include <stdio.h>
-#include <unistd.h>
 
 namespace Core {
 
-NonnullRefPtr<ConfigFile> ConfigFile::get_for_lib(const String& lib_name)
+NonnullRefPtr<ConfigFile> ConfigFile::open_for_lib(String const& lib_name, AllowWriting allow_altering)
 {
     String directory = StandardPaths::config_directory();
     auto path = String::formatted("{}/lib/{}.ini", directory, lib_name);
 
-    return adopt(*new ConfigFile(path));
+    return adopt_ref(*new ConfigFile(path, allow_altering));
 }
 
-NonnullRefPtr<ConfigFile> ConfigFile::get_for_app(const String& app_name)
+NonnullRefPtr<ConfigFile> ConfigFile::open_for_app(String const& app_name, AllowWriting allow_altering)
 {
     String directory = StandardPaths::config_directory();
     auto path = String::formatted("{}/{}.ini", directory, app_name);
-    return adopt(*new ConfigFile(path));
+    return adopt_ref(*new ConfigFile(path, allow_altering));
 }
 
-NonnullRefPtr<ConfigFile> ConfigFile::get_for_system(const String& app_name)
+NonnullRefPtr<ConfigFile> ConfigFile::open_for_system(String const& app_name, AllowWriting allow_altering)
 {
     auto path = String::formatted("/etc/{}.ini", app_name);
-    return adopt(*new ConfigFile(path));
+    return adopt_ref(*new ConfigFile(path, allow_altering));
 }
 
-NonnullRefPtr<ConfigFile> ConfigFile::open(const String& path)
+NonnullRefPtr<ConfigFile> ConfigFile::open(String const& filename, AllowWriting allow_altering)
 {
-    return adopt(*new ConfigFile(path));
+    return adopt_ref(*new ConfigFile(filename, allow_altering));
 }
 
-ConfigFile::ConfigFile(const String& file_name)
-    : m_file_name(file_name)
+NonnullRefPtr<ConfigFile> ConfigFile::open(String const& filename, int fd)
 {
+    return adopt_ref(*new ConfigFile(filename, fd));
+}
+
+ConfigFile::ConfigFile(const String& filename, AllowWriting allow_altering)
+    : m_file(File::construct(filename))
+{
+    if (!m_file->open(allow_altering == AllowWriting::Yes ? OpenMode::ReadWrite : OpenMode::ReadOnly))
+        return;
+
+    reparse();
+}
+
+ConfigFile::ConfigFile(String const& filename, int fd)
+    : m_file(File::construct(filename))
+{
+    if (!m_file->open(fd, OpenMode::ReadWrite, File::ShouldCloseFileDescriptor::Yes))
+        return;
+
     reparse();
 }
 
@@ -76,14 +72,10 @@ void ConfigFile::reparse()
 {
     m_groups.clear();
 
-    auto file = File::construct(m_file_name);
-    if (!file->open(IODevice::OpenMode::ReadOnly))
-        return;
-
     HashMap<String, String>* current_group = nullptr;
 
-    while (file->can_read_line()) {
-        auto line = file->read_line();
+    while (m_file->can_read_line()) {
+        auto line = m_file->read_line();
         auto* cp = line.characters();
 
         while (*cp && (*cp == ' ' || *cp == '\t' || *cp == '\n'))
@@ -120,7 +112,7 @@ void ConfigFile::reparse()
     }
 }
 
-String ConfigFile::read_entry(const String& group, const String& key, const String& default_value) const
+String ConfigFile::read_entry(String const& group, String const& key, String const& default_value) const
 {
     if (!has_key(group, key)) {
         return default_value;
@@ -130,7 +122,7 @@ String ConfigFile::read_entry(const String& group, const String& key, const Stri
     return jt->value;
 }
 
-int ConfigFile::read_num_entry(const String& group, const String& key, int default_value) const
+int ConfigFile::read_num_entry(String const& group, String const& key, int default_value) const
 {
     if (!has_key(group, key)) {
         return default_value;
@@ -139,7 +131,7 @@ int ConfigFile::read_num_entry(const String& group, const String& key, int defau
     return read_entry(group, key).to_int().value_or(default_value);
 }
 
-bool ConfigFile::read_bool_entry(const String& group, const String& key, bool default_value) const
+bool ConfigFile::read_bool_entry(String const& group, String const& key, bool default_value) const
 {
     auto value = read_entry(group, key, default_value ? "1" : "0");
     if (value == "1" || value.to_lowercase() == "true")
@@ -147,21 +139,21 @@ bool ConfigFile::read_bool_entry(const String& group, const String& key, bool de
     return 0;
 }
 
-void ConfigFile::write_entry(const String& group, const String& key, const String& value)
+void ConfigFile::write_entry(String const& group, String const& key, String const& value)
 {
     m_groups.ensure(group).ensure(key) = value;
     m_dirty = true;
 }
 
-void ConfigFile::write_num_entry(const String& group, const String& key, int value)
+void ConfigFile::write_num_entry(String const& group, String const& key, int value)
 {
     write_entry(group, key, String::number(value));
 }
-void ConfigFile::write_bool_entry(const String& group, const String& key, bool value)
+void ConfigFile::write_bool_entry(String const& group, String const& key, bool value)
 {
     write_entry(group, key, value ? "1" : "0");
 }
-void ConfigFile::write_color_entry(const String& group, const String& key, Color value)
+void ConfigFile::write_color_entry(String const& group, String const& key, Color value)
 {
     write_entry(group, key, String::formatted("{},{},{},{}", value.red(), value.green(), value.blue(), value.alpha()));
 }
@@ -171,18 +163,15 @@ bool ConfigFile::sync()
     if (!m_dirty)
         return true;
 
-    FILE* fp = fopen(m_file_name.characters(), "wb");
-    if (!fp)
-        return false;
+    m_file->truncate(0);
+    m_file->seek(0);
 
     for (auto& it : m_groups) {
-        outln(fp, "[{}]", it.key);
+        m_file->write(String::formatted("[{}]\n", it.key));
         for (auto& jt : it.value)
-            outln(fp, "{}={}", jt.key, jt.value);
-        outln(fp);
+            m_file->write(String::formatted("{}={}\n", jt.key, jt.value));
+        m_file->write("\n");
     }
-
-    fclose(fp);
 
     m_dirty = false;
     return true;
@@ -203,7 +192,7 @@ Vector<String> ConfigFile::groups() const
     return m_groups.keys();
 }
 
-Vector<String> ConfigFile::keys(const String& group) const
+Vector<String> ConfigFile::keys(String const& group) const
 {
     auto it = m_groups.find(group);
     if (it == m_groups.end())
@@ -211,7 +200,7 @@ Vector<String> ConfigFile::keys(const String& group) const
     return it->value.keys();
 }
 
-bool ConfigFile::has_key(const String& group, const String& key) const
+bool ConfigFile::has_key(String const& group, String const& key) const
 {
     auto it = m_groups.find(group);
     if (it == m_groups.end())
@@ -219,18 +208,18 @@ bool ConfigFile::has_key(const String& group, const String& key) const
     return it->value.contains(key);
 }
 
-bool ConfigFile::has_group(const String& group) const
+bool ConfigFile::has_group(String const& group) const
 {
     return m_groups.contains(group);
 }
 
-void ConfigFile::remove_group(const String& group)
+void ConfigFile::remove_group(String const& group)
 {
     m_groups.remove(group);
     m_dirty = true;
 }
 
-void ConfigFile::remove_entry(const String& group, const String& key)
+void ConfigFile::remove_entry(String const& group, String const& key)
 {
     auto it = m_groups.find(group);
     if (it == m_groups.end())

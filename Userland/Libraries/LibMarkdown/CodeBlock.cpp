@@ -1,79 +1,46 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/StringBuilder.h>
 #include <LibJS/MarkupGenerator.h>
 #include <LibMarkdown/CodeBlock.h>
+#include <LibMarkdown/Visitor.h>
+#include <LibRegex/Regex.h>
 
 namespace Markdown {
 
-Text::Style CodeBlock::style() const
-{
-    if (m_style_spec.spans().is_empty())
-        return {};
-    return m_style_spec.spans()[0].style;
-}
-
-String CodeBlock::style_language() const
-{
-    if (m_style_spec.spans().is_empty())
-        return {};
-    return m_style_spec.spans()[0].text;
-}
-
-String CodeBlock::render_to_html() const
+String CodeBlock::render_to_html(bool) const
 {
     StringBuilder builder;
 
-    String style_language = this->style_language();
-    Text::Style style = this->style();
+    builder.append("<pre>");
 
-    if (style.strong)
-        builder.append("<b>");
-    if (style.emph)
-        builder.append("<i>");
+    if (m_style.length() >= 2)
+        builder.append("<strong>");
+    else if (m_style.length() >= 2)
+        builder.append("<em>");
 
-    if (style_language.is_empty())
+    if (m_language.is_empty())
         builder.append("<code>");
     else
-        builder.appendff("<code class=\"{}\">", style_language);
+        builder.appendff("<code class=\"language-{}\">", escape_html_entities(m_language));
 
-    if (style_language == "js")
+    if (m_language == "js")
         builder.append(JS::MarkupGenerator::html_from_source(m_code));
     else
         builder.append(escape_html_entities(m_code));
 
-    builder.append("</code>");
+    builder.append("\n</code>");
 
-    if (style.emph)
-        builder.append("</i>");
-    if (style.strong)
-        builder.append("</b>");
+    if (m_style.length() >= 2)
+        builder.append("</strong>");
+    else if (m_style.length() >= 2)
+        builder.append("</em>");
 
-    builder.append('\n');
+    builder.append("</pre>\n");
 
     return builder.build();
 }
@@ -82,34 +49,31 @@ String CodeBlock::render_for_terminal(size_t) const
 {
     StringBuilder builder;
 
-    Text::Style style = this->style();
-    bool needs_styling = style.strong || style.emph;
-    if (needs_styling) {
-        builder.append("\033[");
-        bool first = true;
-        if (style.strong) {
-            builder.append('1');
-            first = false;
-        }
-        if (style.emph) {
-            if (!first)
-                builder.append(';');
-            builder.append('4');
-        }
-        builder.append('m');
-    }
-
     builder.append(m_code);
-
-    if (needs_styling)
-        builder.append("\033[0m");
-
     builder.append("\n\n");
 
     return builder.build();
 }
 
-OwnPtr<CodeBlock> CodeBlock::parse(Vector<StringView>::ConstIterator& lines)
+RecursionDecision CodeBlock::walk(Visitor& visitor) const
+{
+    RecursionDecision rd = visitor.visit(*this);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
+
+    rd = visitor.visit(m_code);
+    if (rd != RecursionDecision::Recurse)
+        return rd;
+
+    // Don't recurse on m_language and m_style.
+
+    // Normalize return value.
+    return RecursionDecision::Continue;
+}
+
+static Regex<ECMA262> style_spec_re("\\s*([\\*_]*)\\s*([^\\*_\\s]*).*");
+
+OwnPtr<CodeBlock> CodeBlock::parse(LineIterator& lines)
 {
     if (lines.is_end())
         return {};
@@ -132,9 +96,9 @@ OwnPtr<CodeBlock> CodeBlock::parse(Vector<StringView>::ConstIterator& lines)
     // and if possible syntax-highlighted
     // as appropriate for a shell script.
     StringView style_spec = line.substring_view(3, line.length() - 3);
-    auto spec = Text::parse(style_spec);
-    if (!spec.has_value())
-        return {};
+    auto matches = style_spec_re.match(style_spec);
+    auto style = matches.capture_group_matches[0][0].view.string_view();
+    auto language = matches.capture_group_matches[0][1].view.string_view();
 
     ++lines;
 
@@ -154,7 +118,7 @@ OwnPtr<CodeBlock> CodeBlock::parse(Vector<StringView>::ConstIterator& lines)
         first = false;
     }
 
-    return make<CodeBlock>(move(spec.value()), builder.build());
+    return make<CodeBlock>(language, style, builder.build());
 }
 
 }

@@ -1,31 +1,13 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Concepts.h>
+#include <AK/StdLibExtras.h>
 #include <LibIPC/Forward.h>
 #include <LibIPC/Message.h>
 
@@ -55,15 +37,16 @@ public:
     Encoder& operator<<(i32);
     Encoder& operator<<(i64);
     Encoder& operator<<(float);
-    Encoder& operator<<(const char*);
-    Encoder& operator<<(const StringView&);
-    Encoder& operator<<(const String&);
-    Encoder& operator<<(const ByteBuffer&);
-    Encoder& operator<<(const URL&);
-    Encoder& operator<<(const Dictionary&);
-    Encoder& operator<<(const File&);
+    Encoder& operator<<(double);
+    Encoder& operator<<(char const*);
+    Encoder& operator<<(StringView const&);
+    Encoder& operator<<(String const&);
+    Encoder& operator<<(ByteBuffer const&);
+    Encoder& operator<<(URL const&);
+    Encoder& operator<<(Dictionary const&);
+    Encoder& operator<<(File const&);
     template<typename K, typename V>
-    Encoder& operator<<(const HashMap<K, V>& hashmap)
+    Encoder& operator<<(HashMap<K, V> const& hashmap)
     {
         *this << (u32)hashmap.size();
         for (auto it : hashmap) {
@@ -74,7 +57,7 @@ public:
     }
 
     template<typename T>
-    Encoder& operator<<(const Vector<T>& vector)
+    Encoder& operator<<(Vector<T> const& vector)
     {
         *this << (u64)vector.size();
         for (auto& value : vector)
@@ -82,15 +65,22 @@ public:
         return *this;
     }
 
+    template<Enum T>
+    Encoder& operator<<(T const& enum_value)
+    {
+        *this << AK::to_underlying(enum_value);
+        return *this;
+    }
+
     template<typename T>
-    Encoder& operator<<(const T& value)
+    Encoder& operator<<(T const& value)
     {
         encode(value);
         return *this;
     }
 
     template<typename T>
-    Encoder& operator<<(const Optional<T>& optional)
+    Encoder& operator<<(Optional<T> const& optional)
     {
         *this << optional.has_value();
         if (optional.has_value())
@@ -99,7 +89,7 @@ public:
     }
 
     template<typename T>
-    void encode(const T& value)
+    void encode(T const& value)
     {
         IPC::encode(*this, value);
     }

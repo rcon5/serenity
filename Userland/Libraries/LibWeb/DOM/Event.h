@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -32,6 +12,12 @@
 #include <LibWeb/DOM/EventTarget.h>
 
 namespace Web::DOM {
+
+struct EventInit {
+    bool bubbles { false };
+    bool cancelable { false };
+    bool composed { false };
+};
 
 class Event
     : public RefCounted<Event>
@@ -61,16 +47,18 @@ public:
 
     using Path = Vector<PathEntry>;
 
-    static NonnullRefPtr<Event> create(const FlyString& event_name)
+    static NonnullRefPtr<Event> create(const FlyString& event_name, EventInit const& event_init = {})
     {
-        return adopt(*new Event(event_name));
+        return adopt_ref(*new Event(event_name, event_init));
     }
-    static NonnullRefPtr<Event> create_with_global_object(Bindings::WindowObject&, const FlyString& event_name)
+    static NonnullRefPtr<Event> create_with_global_object(Bindings::WindowObject&, const FlyString& event_name, EventInit const& event_init)
     {
-        return Event::create(event_name);
+        return Event::create(event_name, event_init);
     }
 
     virtual ~Event() { }
+
+    double time_stamp() const;
 
     const FlyString& type() const { return m_type; }
     void set_type(const StringView& type) { m_type = type; }
@@ -156,9 +144,21 @@ public:
 
     void init_event(const String&, bool, bool);
 
+    void set_time_stamp(double time_stamp) { m_time_stamp = time_stamp; }
+
+    NonnullRefPtrVector<EventTarget> composed_path() const;
+
 protected:
-    explicit Event(const FlyString& type)
+    explicit Event(FlyString const& type)
         : m_type(type)
+        , m_initialized(true)
+    {
+    }
+    Event(FlyString const& type, EventInit const& event_init)
+        : m_type(type)
+        , m_bubbles(event_init.bubbles)
+        , m_cancelable(event_init.cancelable)
+        , m_composed(event_init.composed)
         , m_initialized(true)
     {
     }
@@ -188,6 +188,8 @@ private:
 
     Path m_path;
     TouchTargetList m_touch_target_list;
+
+    double m_time_stamp { 0 };
 
     void set_cancelled_flag();
 };

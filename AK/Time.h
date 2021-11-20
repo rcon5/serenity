@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -35,6 +15,16 @@
 struct timeval;
 struct timespec;
 
+// Concept to detect types which look like timespec without requiring the type.
+template<typename T>
+concept TimeSpecType = requires(T t)
+{
+    t.tv_sec;
+    t.tv_nsec;
+};
+
+// FIXME: remove once Clang formats these properly.
+// clang-format off
 namespace AK {
 
 // Month and day start at 1. Month must be >= 1 and <= 12.
@@ -58,7 +48,7 @@ inline bool is_leap_year(int year)
     return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
 }
 
-inline unsigned days_in_year(int year)
+inline int days_in_year(int year)
 {
     return 365 + is_leap_year(year);
 }
@@ -131,42 +121,50 @@ private:
     }
 
 public:
-    constexpr static Time from_seconds(i64 seconds) { return Time(seconds, 0); }
-    constexpr static Time from_nanoseconds(i64 nanoseconds)
+    [[nodiscard]] constexpr static Time from_seconds(i64 seconds) { return Time(seconds, 0); }
+    [[nodiscard]] constexpr static Time from_nanoseconds(i64 nanoseconds)
     {
         i64 seconds = sane_mod(nanoseconds, 1'000'000'000);
         return Time(seconds, nanoseconds);
     }
-    constexpr static Time from_microseconds(i64 microseconds)
+    [[nodiscard]] constexpr static Time from_microseconds(i64 microseconds)
     {
         i64 seconds = sane_mod(microseconds, 1'000'000);
         return Time(seconds, microseconds * 1'000);
     }
-    constexpr static Time from_milliseconds(i64 milliseconds)
+    [[nodiscard]] constexpr static Time from_milliseconds(i64 milliseconds)
     {
         i64 seconds = sane_mod(milliseconds, 1'000);
         return Time(seconds, milliseconds * 1'000'000);
     }
-    static Time from_timespec(const struct timespec&);
-    static Time from_timeval(const struct timeval&);
-    static Time min() { return Time(-0x8000'0000'0000'0000LL, 0); };
-    static Time zero() { return Time(0, 0); };
-    static Time max() { return Time(0x7fff'ffff'ffff'ffffLL, 999'999'999); };
+    [[nodiscard]] static Time from_timespec(const struct timespec&);
+    [[nodiscard]] static Time from_timeval(const struct timeval&);
+    [[nodiscard]] constexpr static Time min() { return Time(-0x8000'0000'0000'0000LL, 0); };
+    [[nodiscard]] constexpr static Time zero() { return Time(0, 0); };
+    [[nodiscard]] constexpr static Time max() { return Time(0x7fff'ffff'ffff'ffffLL, 999'999'999); };
+
+#ifndef KERNEL
+    [[nodiscard]] static Time now_realtime();
+    [[nodiscard]] static Time now_realtime_coarse();
+    [[nodiscard]] static Time now_monotonic();
+    [[nodiscard]] static Time now_monotonic_coarse();
+#endif
 
     // Truncates towards zero (2.8s to 2s, -2.8s to -2s).
-    i64 to_truncated_seconds() const;
-    i64 to_truncated_milliseconds() const;
-    i64 to_truncated_microseconds() const;
+    [[nodiscard]] i64 to_truncated_seconds() const;
+    [[nodiscard]] i64 to_truncated_milliseconds() const;
+    [[nodiscard]] i64 to_truncated_microseconds() const;
     // Rounds away from zero (2.3s to 3s, -2.3s to -3s).
-    i64 to_seconds() const;
-    i64 to_milliseconds() const;
-    i64 to_microseconds() const;
-    i64 to_nanoseconds() const;
-    timespec to_timespec() const;
+    [[nodiscard]] i64 to_seconds() const;
+    [[nodiscard]] i64 to_milliseconds() const;
+    [[nodiscard]] i64 to_microseconds() const;
+    [[nodiscard]] i64 to_nanoseconds() const;
+    [[nodiscard]] timespec to_timespec() const;
     // Rounds towards -inf (it was the easiest to implement).
-    timeval to_timeval() const;
+    [[nodiscard]] timeval to_timeval() const;
 
-    bool is_zero() const { return !m_seconds && !m_nanoseconds; }
+    [[nodiscard]] bool is_zero() const { return !m_seconds && !m_nanoseconds; }
+    [[nodiscard]] bool is_negative() const { return m_seconds < 0; }
 
     bool operator==(const Time& other) const { return this->m_seconds == other.m_seconds && this->m_nanoseconds == other.m_nanoseconds; }
     bool operator!=(const Time& other) const { return !(*this == other); }
@@ -186,7 +184,7 @@ private:
     {
     }
 
-    static Time from_half_sanitized(i64 seconds, i32 extra_seconds, u32 nanoseconds);
+    [[nodiscard]] static Time from_half_sanitized(i64 seconds, i32 extra_seconds, u32 nanoseconds);
 
     i64 m_seconds { 0 };
     u32 m_nanoseconds { 0 }; // Always less than 1'000'000'000
@@ -261,43 +259,45 @@ inline void timespec_to_timeval(const TimespecType& ts, TimevalType& tv)
     tv.tv_usec = ts.tv_nsec / 1000;
 }
 
-template<typename TimespecType>
-inline bool operator>=(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator>=(const T& a, const T& b)
 {
     return a.tv_sec > b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec >= b.tv_nsec);
 }
 
-template<typename TimespecType>
-inline bool operator>(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator>(const T& a, const T& b)
 {
     return a.tv_sec > b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec > b.tv_nsec);
 }
 
-template<typename TimespecType>
-inline bool operator<(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator<(const T& a, const T& b)
 {
     return a.tv_sec < b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec < b.tv_nsec);
 }
 
-template<typename TimespecType>
-inline bool operator<=(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator<=(const T& a, const T& b)
+
 {
     return a.tv_sec < b.tv_sec || (a.tv_sec == b.tv_sec && a.tv_nsec <= b.tv_nsec);
 }
 
-template<typename TimespecType>
-inline bool operator==(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator==(const T& a, const T& b)
 {
     return a.tv_sec == b.tv_sec && a.tv_nsec == b.tv_nsec;
 }
 
-template<typename TimespecType>
-inline bool operator!=(const TimespecType& a, const TimespecType& b)
+template<TimeSpecType T>
+inline bool operator!=(const T& a, const T& b)
 {
     return a.tv_sec != b.tv_sec || a.tv_nsec != b.tv_nsec;
 }
 
 }
+// clang-format on
 
 using AK::day_of_week;
 using AK::day_of_year;

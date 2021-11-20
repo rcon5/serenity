@@ -1,32 +1,12 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGfx/Bitmap.h>
-#include <LibWeb/CSS/Parser/DeprecatedCSSParser.h>
-#include <LibWeb/CSS/StyleResolver.h>
+#include <LibWeb/CSS/Parser/Parser.h>
+#include <LibWeb/CSS/StyleComputer.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Event.h>
 #include <LibWeb/HTML/EventNames.h>
@@ -41,14 +21,18 @@ HTMLImageElement::HTMLImageElement(DOM::Document& document, QualifiedName qualif
     , m_image_loader(*this)
 {
     m_image_loader.on_load = [this] {
-        this->document().update_layout();
-        dispatch_event(DOM::Event::create(EventNames::load));
+        set_needs_style_update(true);
+        queue_an_element_task(HTML::Task::Source::DOMManipulation, [this] {
+            dispatch_event(DOM::Event::create(EventNames::load));
+        });
     };
 
     m_image_loader.on_fail = [this] {
         dbgln("HTMLImageElement: Resource did fail: {}", src());
-        this->document().update_layout();
-        dispatch_event(DOM::Event::create(EventNames::error));
+        set_needs_style_update(true);
+        queue_an_element_task(HTML::Task::Source::DOMManipulation, [this] {
+            dispatch_event(DOM::Event::create(EventNames::error));
+        });
     };
 
     m_image_loader.on_animate = [this] {
@@ -80,16 +64,16 @@ void HTMLImageElement::parse_attribute(const FlyString& name, const String& valu
 {
     HTMLElement::parse_attribute(name, value);
 
-    if (name == HTML::AttributeNames::src)
-        m_image_loader.load(document().complete_url(value));
+    if (name == HTML::AttributeNames::src && !value.is_empty())
+        m_image_loader.load(document().parse_url(value));
 }
 
 RefPtr<Layout::Node> HTMLImageElement::create_layout_node()
 {
-    auto style = document().style_resolver().resolve_style(*this);
-    if (style->display() == CSS::Display::None)
+    auto style = document().style_computer().compute_style(*this);
+    if (style->display().is_none())
         return nullptr;
-    return adopt(*new Layout::ImageBox(document(), *this, move(style), m_image_loader));
+    return adopt_ref(*new Layout::ImageBox(document(), *this, move(style), m_image_loader));
 }
 
 const Gfx::Bitmap* HTMLImageElement::bitmap() const

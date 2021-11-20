@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -34,9 +14,10 @@
 namespace Web::CSS {
 
 struct StyleProperty {
+    bool important { false };
     CSS::PropertyID property_id;
     NonnullRefPtr<StyleValue> value;
-    bool important { false };
+    String custom_name {};
 };
 
 class CSSStyleDeclaration
@@ -45,30 +26,62 @@ class CSSStyleDeclaration
 public:
     using WrapperType = Bindings::CSSStyleDeclarationWrapper;
 
-    static NonnullRefPtr<CSSStyleDeclaration> create(Vector<StyleProperty>&& properties)
-    {
-        return adopt(*new CSSStyleDeclaration(move(properties)));
-    }
-
     virtual ~CSSStyleDeclaration();
 
-    const Vector<StyleProperty>& properties() const { return m_properties; }
+    virtual size_t length() const = 0;
+    virtual String item(size_t index) const = 0;
 
-    size_t length() const { return m_properties.size(); }
-    String item(size_t index) const;
+    virtual Optional<StyleProperty> property(PropertyID) const = 0;
+    virtual bool set_property(PropertyID, StringView css_text) = 0;
+
+    void set_property(StringView property_name, StringView css_text);
+
+    String get_property_value(StringView property) const;
+
+    String css_text() const;
+    void set_css_text(StringView);
+
+    virtual String serialized() const = 0;
 
 protected:
-    explicit CSSStyleDeclaration(Vector<StyleProperty>&&);
-
-private:
-    friend class Bindings::CSSStyleDeclarationWrapper;
-
-    Vector<StyleProperty> m_properties;
+    CSSStyleDeclaration() { }
 };
 
-class ElementInlineCSSStyleDeclaration final : public CSSStyleDeclaration {
+class PropertyOwningCSSStyleDeclaration : public CSSStyleDeclaration {
+    friend class ElementInlineCSSStyleDeclaration;
+
 public:
-    static NonnullRefPtr<ElementInlineCSSStyleDeclaration> create(DOM::Element& element) { return adopt(*new ElementInlineCSSStyleDeclaration(element)); }
+    static NonnullRefPtr<PropertyOwningCSSStyleDeclaration> create(Vector<StyleProperty> properties, HashMap<String, StyleProperty> custom_properties)
+    {
+        return adopt_ref(*new PropertyOwningCSSStyleDeclaration(move(properties), move(custom_properties)));
+    }
+
+    virtual ~PropertyOwningCSSStyleDeclaration() override;
+
+    virtual size_t length() const override;
+    virtual String item(size_t index) const override;
+
+    virtual Optional<StyleProperty> property(PropertyID) const override;
+    virtual bool set_property(PropertyID, StringView css_text) override;
+
+    const Vector<StyleProperty>& properties() const { return m_properties; }
+    Optional<StyleProperty> custom_property(const String& custom_property_name) const { return m_custom_properties.get(custom_property_name); }
+    size_t custom_property_count() const { return m_custom_properties.size(); }
+
+    virtual String serialized() const final override;
+
+protected:
+    explicit PropertyOwningCSSStyleDeclaration(Vector<StyleProperty>, HashMap<String, StyleProperty>);
+
+private:
+    Vector<StyleProperty> m_properties;
+    HashMap<String, StyleProperty> m_custom_properties;
+};
+
+class ElementInlineCSSStyleDeclaration final : public PropertyOwningCSSStyleDeclaration {
+public:
+    static NonnullRefPtr<ElementInlineCSSStyleDeclaration> create(DOM::Element& element) { return adopt_ref(*new ElementInlineCSSStyleDeclaration(element)); }
+    static NonnullRefPtr<ElementInlineCSSStyleDeclaration> create_and_take_properties_from(DOM::Element& element, PropertyOwningCSSStyleDeclaration& declaration) { return adopt_ref(*new ElementInlineCSSStyleDeclaration(element, declaration)); }
     virtual ~ElementInlineCSSStyleDeclaration() override;
 
     DOM::Element* element() { return m_element.ptr(); }
@@ -76,6 +89,7 @@ public:
 
 private:
     explicit ElementInlineCSSStyleDeclaration(DOM::Element&);
+    explicit ElementInlineCSSStyleDeclaration(DOM::Element&, PropertyOwningCSSStyleDeclaration&);
 
     WeakPtr<DOM::Element> m_element;
 };

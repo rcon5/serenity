@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2021, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -59,17 +39,17 @@ private:
     void complete_current_request(AsyncDeviceRequest::RequestResult);
 
     //^ IRQHandler
-    virtual void handle_irq(const RegisterState&) override;
+    virtual bool handle_irq(const RegisterState&) override;
 
     //* IDEChannel
-    virtual void send_ata_io_command(LBAMode lba_mode, Direction direction) const;
-    virtual void ata_read_sectors(bool, u16);
-    virtual void ata_write_sectors(bool, u16);
+    virtual void send_ata_io_command(LBAMode lba_mode, Direction direction) const override;
+    virtual void ata_read_sectors(bool, u16) override;
+    virtual void ata_write_sectors(bool, u16) override;
 
     PhysicalRegionDescriptor& prdt() { return *reinterpret_cast<PhysicalRegionDescriptor*>(m_prdt_region->vaddr().as_ptr()); }
-    OwnPtr<Region> m_prdt_region;
-    OwnPtr<Region> m_dma_buffer_region;
-    RefPtr<PhysicalPage> m_prdt_page;
-    RefPtr<PhysicalPage> m_dma_buffer_page;
+    OwnPtr<Memory::Region> m_prdt_region;
+    OwnPtr<Memory::Region> m_dma_buffer_region;
+    RefPtr<Memory::PhysicalPage> m_prdt_page;
+    RefPtr<Memory::PhysicalPage> m_dma_buffer_page;
 };
 }

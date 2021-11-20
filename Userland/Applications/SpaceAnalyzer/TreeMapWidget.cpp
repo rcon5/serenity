@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "TreeMapWidget.h"
@@ -31,9 +11,9 @@
 #include <LibGfx/Font.h>
 #include <WindowServer/WindowManager.h>
 
-namespace SpaceAnalyzer {
-
 REGISTER_WIDGET(SpaceAnalyzer, TreeMapWidget)
+
+namespace SpaceAnalyzer {
 
 TreeMapWidget::TreeMapWidget()
     : m_viewpoint(0)
@@ -113,14 +93,16 @@ void TreeMapWidget::paint_cell_frame(GUI::Painter& painter, const TreeMapNode& n
 
     // Paint text.
     if (has_label == HasLabel::Yes) {
-        painter.clear_clip_rect();
-        painter.add_clip_rect(cell_rect);
         Gfx::IntRect text_rect = remainder;
-        text_rect.move_by(2, 2);
-        painter.draw_text(text_rect, node.name(), font(), Gfx::TextAlignment::TopLeft, Color::Black);
+        text_rect.shrink(4, 4);
+        painter.clear_clip_rect();
+        painter.add_clip_rect(text_rect);
         if (node_is_leaf(node)) {
-            text_rect.move_by(0, font().presentation_size() + 1);
+            painter.draw_text(text_rect, node.name(), font(), Gfx::TextAlignment::TopLeft, Color::Black);
+            text_rect.take_from_top(font().presentation_size() + 1);
             painter.draw_text(text_rect, human_readable_size(node.area()), font(), Gfx::TextAlignment::TopLeft, Color::Black);
+        } else {
+            painter.draw_text(text_rect, String::formatted("{} - {}", node.name(), human_readable_size(node.area())), font(), Gfx::TextAlignment::TopLeft, Color::Black);
         }
         painter.clear_clip_rect();
     }
@@ -141,19 +123,19 @@ void TreeMapWidget::lay_out_children(const TreeMapNode& node, const Gfx::IntRect
         }
     }
 
-    int total_area = node.area();
+    i64 total_area = node.area();
     Gfx::IntRect canvas = rect;
     bool remaining_nodes_are_too_small = false;
     for (size_t i = 0; !remaining_nodes_are_too_small && i < node.num_children(); i++) {
-        const int i_node_area = node.child_at(i).area();
+        const i64 i_node_area = node.child_at(i).area();
         if (i_node_area == 0)
             break;
 
-        const int long_side_size = max(canvas.width(), canvas.height());
-        const int short_side_size = min(canvas.width(), canvas.height());
+        const size_t long_side_size = max(canvas.width(), canvas.height());
+        const size_t short_side_size = min(canvas.width(), canvas.height());
 
-        int row_or_column_size = (long long int)long_side_size * i_node_area / total_area;
-        int node_area_sum = i_node_area;
+        size_t row_or_column_size = long_side_size * i_node_area / total_area;
+        i64 node_area_sum = i_node_area;
         size_t k = i + 1;
 
         // Try to add nodes to this row or column so long as the worst aspect ratio of
@@ -164,14 +146,14 @@ void TreeMapWidget::lay_out_children(const TreeMapNode& node, const Gfx::IntRect
                 // Do a preliminary calculation of the worst aspect ratio of the nodes at index i and k
                 // if that aspect ratio is better than the 'best_worst_aspect_ratio_so_far' we keep it,
                 // otherwise it is discarded.
-                int k_node_area = node.child_at(k).area();
+                i64 k_node_area = node.child_at(k).area();
                 if (k_node_area == 0) {
                     break;
                 }
-                int new_node_area_sum = node_area_sum + k_node_area;
-                int new_row_or_column_size = (long long int)long_side_size * new_node_area_sum / total_area;
-                int i_node_size = (long long int)short_side_size * i_node_area / new_node_area_sum;
-                int k_node_size = (long long int)short_side_size * k_node_area / new_node_area_sum;
+                i64 new_node_area_sum = node_area_sum + k_node_area;
+                size_t new_row_or_column_size = long_side_size * new_node_area_sum / total_area;
+                size_t i_node_size = short_side_size * i_node_area / new_node_area_sum;
+                size_t k_node_size = short_side_size * k_node_area / new_node_area_sum;
                 float i_node_aspect_ratio = get_normalized_aspect_ratio(new_row_or_column_size, i_node_size);
                 float k_node_aspect_ratio = get_normalized_aspect_ratio(new_row_or_column_size, k_node_size);
                 float new_worst_aspect_ratio = min(i_node_aspect_ratio, k_node_aspect_ratio);
@@ -186,9 +168,9 @@ void TreeMapWidget::lay_out_children(const TreeMapNode& node, const Gfx::IntRect
 
         // Paint the elements from 'i' up to and including 'k-1'.
         {
-            const int fixed_side_size = row_or_column_size;
-            int placement_area = node_area_sum;
-            int main_dim = short_side_size;
+            const size_t fixed_side_size = row_or_column_size;
+            i64 placement_area = node_area_sum;
+            size_t main_dim = short_side_size;
 
             // Lay out nodes in a row or column.
             Orientation orientation = canvas.width() > canvas.height() ? Orientation::Horizontal : Orientation::Vertical;
@@ -196,7 +178,7 @@ void TreeMapWidget::lay_out_children(const TreeMapNode& node, const Gfx::IntRect
             layout_rect.set_primary_size_for_orientation(orientation, fixed_side_size);
             for (size_t q = i; q < k; q++) {
                 auto& child = node.child_at(q);
-                int node_size = (long long int)main_dim * child.area() / placement_area;
+                size_t node_size = main_dim * child.area() / placement_area;
                 Gfx::IntRect cell_rect = layout_rect;
                 cell_rect.set_secondary_size_for_orientation(orientation, node_size);
                 Gfx::IntRect inner_rect;
@@ -306,7 +288,7 @@ void TreeMapWidget::mousedown_event(GUI::MouseEvent& event)
         Vector<int> path = path_to_position(event.position());
         if (!path.is_empty()) {
             m_path.shrink(m_viewpoint);
-            m_path.append(path);
+            m_path.extend(path);
             if (on_path_change) {
                 on_path_change();
             }
@@ -317,13 +299,13 @@ void TreeMapWidget::mousedown_event(GUI::MouseEvent& event)
 
 void TreeMapWidget::doubleclick_event(GUI::MouseEvent& event)
 {
-    if (event.button() != GUI::MouseButton::Left)
+    if (event.button() != GUI::MouseButton::Primary)
         return;
     const TreeMapNode* node = path_node(m_viewpoint);
     if (node && !node_is_leaf(*node)) {
         Vector<int> path = path_to_position(event.position());
         m_path.shrink(m_viewpoint);
-        m_path.append(path);
+        m_path.extend(path);
         m_viewpoint = m_path.size();
         if (on_path_change) {
             on_path_change();
@@ -336,7 +318,7 @@ void TreeMapWidget::mousewheel_event(GUI::MouseEvent& event)
 {
     int delta = event.wheel_delta();
     // FIXME: The wheel_delta is premultiplied in the window server, we actually want a raw value here.
-    int step_size = GUI::WindowServerConnection::the().send_sync<Messages::WindowServer::GetScrollStepSize>()->step_size();
+    int step_size = GUI::WindowServerConnection::the().get_scroll_step_size();
     if (delta > 0) {
         size_t step_back = delta / step_size;
         if (step_back > m_viewpoint)

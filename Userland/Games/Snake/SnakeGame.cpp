@@ -1,50 +1,28 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Mustafa Quraish <mustafa@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "SnakeGame.h"
-#include <LibCore/ConfigFile.h>
+#include <AK/Random.h>
+#include <LibConfig/Client.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/Bitmap.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/FontDatabase.h>
-#include <stdlib.h>
-#include <time.h>
 
 SnakeGame::SnakeGame()
 {
-    set_font(Gfx::FontDatabase::default_bold_fixed_width_font());
-    m_fruit_bitmaps.append(*Gfx::Bitmap::load_from_file("/res/icons/snake/paprika.png"));
-    m_fruit_bitmaps.append(*Gfx::Bitmap::load_from_file("/res/icons/snake/eggplant.png"));
-    m_fruit_bitmaps.append(*Gfx::Bitmap::load_from_file("/res/icons/snake/cauliflower.png"));
-    m_fruit_bitmaps.append(*Gfx::Bitmap::load_from_file("/res/icons/snake/tomato.png"));
-    srand(time(nullptr));
+    set_font(Gfx::FontDatabase::default_fixed_width_font().bold_variant());
+    m_fruit_bitmaps.append(*Gfx::Bitmap::try_load_from_file("/res/icons/snake/paprika.png"));
+    m_fruit_bitmaps.append(*Gfx::Bitmap::try_load_from_file("/res/icons/snake/eggplant.png"));
+    m_fruit_bitmaps.append(*Gfx::Bitmap::try_load_from_file("/res/icons/snake/cauliflower.png"));
+    m_fruit_bitmaps.append(*Gfx::Bitmap::try_load_from_file("/res/icons/snake/tomato.png"));
     reset();
 
-    auto config = Core::ConfigFile::get_for_app("Snake");
-    m_high_score = config->read_num_entry("Snake", "HighScore", 0);
+    m_high_score = Config::read_i32("Snake", "Snake", "HighScore", 0);
     m_high_score_text = String::formatted("Best: {}", m_high_score);
 }
 
@@ -83,25 +61,25 @@ void SnakeGame::spawn_fruit()
 {
     Coordinate coord;
     for (;;) {
-        coord.row = rand() % m_rows;
-        coord.column = rand() % m_columns;
+        coord.row = get_random_uniform(m_rows);
+        coord.column = get_random_uniform(m_columns);
         if (is_available(coord))
             break;
     }
     m_fruit = coord;
-    m_fruit_type = rand() % m_fruit_bitmaps.size();
+    m_fruit_type = get_random_uniform(m_fruit_bitmaps.size());
 }
 
 Gfx::IntRect SnakeGame::score_rect() const
 {
     int score_width = font().width(m_score_text);
-    return { width() - score_width - 2, height() - font().glyph_height() - 2, score_width, font().glyph_height() };
+    return { frame_inner_rect().width() - score_width - 2, frame_inner_rect().height() - font().glyph_height() - 2, score_width, font().glyph_height() };
 }
 
 Gfx::IntRect SnakeGame::high_score_rect() const
 {
     int high_score_width = font().width(m_high_score_text);
-    return { 2, height() - font().glyph_height() - 2, high_score_width, font().glyph_height() };
+    return { frame_thickness() + 2, frame_inner_rect().height() - font().glyph_height() - 2, high_score_width, font().glyph_height() };
 }
 
 void SnakeGame::timer_event(Core::TimerEvent&)
@@ -151,8 +129,7 @@ void SnakeGame::timer_event(Core::TimerEvent&)
             m_high_score = m_score;
             m_high_score_text = String::formatted("Best: {}", m_high_score);
             update(high_score_rect());
-            auto config = Core::ConfigFile::get_for_app("Snake");
-            config->write_num_entry("Snake", "HighScore", m_high_score);
+            Config::write_i32("Snake", "Snake", "HighScore", m_high_score);
         }
         update(score_rect());
         dirty_cells.append(m_fruit);
@@ -199,11 +176,11 @@ void SnakeGame::keydown_event(GUI::KeyEvent& event)
 
 Gfx::IntRect SnakeGame::cell_rect(const Coordinate& coord) const
 {
-    auto game_rect = rect();
+    auto game_rect = frame_inner_rect();
     auto cell_size = Gfx::IntSize(game_rect.width() / m_columns, game_rect.height() / m_rows);
     return {
-        coord.column * cell_size.width(),
-        coord.row * cell_size.height(),
+        game_rect.x() + coord.column * cell_size.width(),
+        game_rect.y() + coord.row * cell_size.height(),
         cell_size.width(),
         cell_size.height()
     };
@@ -211,7 +188,9 @@ Gfx::IntRect SnakeGame::cell_rect(const Coordinate& coord) const
 
 void SnakeGame::paint_event(GUI::PaintEvent& event)
 {
+    GUI::Frame::paint_event(event);
     GUI::Painter painter(*this);
+    painter.add_clip_rect(frame_inner_rect());
     painter.add_clip_rect(event.rect());
     painter.fill_rect(event.rect(), Color::Black);
 

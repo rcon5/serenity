@@ -1,32 +1,14 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <LibGUI/Frame.h>
+#include <LibGfx/Bitmap.h>
 #include <LibGfx/Palette.h>
 
 namespace ThemeEditor {
@@ -41,12 +23,18 @@ public:
 
     const Gfx::Palette& preview_palette() const { return m_preview_palette; }
     void set_preview_palette(const Gfx::Palette&);
+    void set_theme_from_file(String const& path, int fd);
+
+    Function<void(String const&)> on_theme_load_from_file;
 
 private:
     explicit PreviewWidget(const Gfx::Palette&);
 
+    void load_theme_bitmaps();
+
     virtual void paint_event(GUI::PaintEvent&) override;
     virtual void resize_event(GUI::ResizeEvent&) override;
+    virtual void drop_event(GUI::DropEvent&) override;
 
     Gfx::Palette m_preview_palette;
 
@@ -55,9 +43,26 @@ private:
 
     RefPtr<MiniWidgetGallery> m_gallery;
 
+    RefPtr<Gfx::Bitmap> m_default_close_bitmap;
+    RefPtr<Gfx::Bitmap> m_default_maximize_bitmap;
+    RefPtr<Gfx::Bitmap> m_default_minimize_bitmap;
     RefPtr<Gfx::Bitmap> m_close_bitmap;
     RefPtr<Gfx::Bitmap> m_maximize_bitmap;
     RefPtr<Gfx::Bitmap> m_minimize_bitmap;
+    String m_last_close_path;
+    String m_last_maximize_path;
+    String m_last_minimize_path;
+
+    RefPtr<Gfx::Bitmap> m_active_window_shadow;
+    RefPtr<Gfx::Bitmap> m_inactive_window_shadow;
+    RefPtr<Gfx::Bitmap> m_menu_shadow;
+    RefPtr<Gfx::Bitmap> m_taskbar_shadow;
+    RefPtr<Gfx::Bitmap> m_tooltip_shadow;
+    String m_last_active_window_shadow_path;
+    String m_last_inactive_window_shadow_path;
+    String m_last_menu_shadow_path;
+    String m_last_taskbar_shadow_path;
+    String m_last_tooltip_shadow_path;
 };
 
 }

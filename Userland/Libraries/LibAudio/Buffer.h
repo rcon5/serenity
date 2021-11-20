@@ -1,58 +1,48 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/ByteBuffer.h>
+#include <AK/Math.h>
 #include <AK/MemoryStream.h>
+#include <AK/String.h>
 #include <AK/Types.h>
 #include <AK/Vector.h>
 #include <LibCore/AnonymousBuffer.h>
 #include <string.h>
 
 namespace Audio {
+using namespace AK::Exponentials;
+
+// Constants for logarithmic volume. See Frame::operator*
+// Corresponds to 60dB
+constexpr double DYNAMIC_RANGE = 1000;
+constexpr double VOLUME_A = 1 / DYNAMIC_RANGE;
+double const VOLUME_B = log(DYNAMIC_RANGE);
 
 // A single sample in an audio buffer.
 // Values are floating point, and should range from -1.0 to +1.0
 struct Frame {
-    Frame()
+    constexpr Frame()
         : left(0)
         , right(0)
     {
     }
 
     // For mono
-    Frame(double left)
+    constexpr Frame(double left)
         : left(left)
         , right(left)
     {
     }
 
     // For stereo
-    Frame(double left, double right)
+    constexpr Frame(double left, double right)
         : left(left)
         , right(right)
     {
@@ -71,53 +61,115 @@ struct Frame {
             right = -1;
     }
 
-    void scale(int percent)
+    // Logarithmic scaling, as audio should ALWAYS do.
+    // Reference: https://www.dr-lex.be/info-stuff/volumecontrols.html
+    // We use the curve `factor = a * exp(b * change)`,
+    // where change is the input fraction we want to change by,
+    // a = 1/1000, b = ln(1000) = 6.908 and factor is the multiplier used.
+    // The value 1000 represents the dynamic range in sound pressure, which corresponds to 60 dB(A).
+    // This is a good dynamic range because it can represent all loudness values from
+    // 30 dB(A) (barely hearable with background noise)
+    // to 90 dB(A) (almost too loud to hear and about the reasonable limit of actual sound equipment).
+    ALWAYS_INLINE Frame& log_multiply(double const change)
     {
-        double pct = (double)percent / 100.0;
-        left *= pct;
-        right *= pct;
+        double factor = VOLUME_A * exp(VOLUME_B * change);
+        left *= factor;
+        right *= factor;
+        return *this;
     }
 
-    Frame& operator+=(const Frame& other)
+    ALWAYS_INLINE Frame log_multiplied(double const volume_change) const
+    {
+        Frame new_frame { left, right };
+        new_frame.log_multiply(volume_change);
+        return new_frame;
+    }
+
+    constexpr Frame& operator*=(double const mult)
+    {
+        left *= mult;
+        right *= mult;
+        return *this;
+    }
+
+    constexpr Frame operator*(double const mult)
+    {
+        return { left * mult, right * mult };
+    }
+
+    constexpr Frame& operator+=(Frame const& other)
     {
         left += other.left;
         right += other.right;
         return *this;
     }
 
+    constexpr Frame operator+(Frame const& other)
+    {
+        return { left + other.left, right + other.right };
+    }
+
     double left;
     double right;
 };
 
+// Supported PCM sample formats.
+enum PcmSampleFormat : u8 {
+    Uint8,
+    Int16,
+    Int24,
+    Int32,
+    Float32,
+    Float64,
+};
+
+// Most of the read code only cares about how many bits to read or write
+u16 pcm_bits_per_sample(PcmSampleFormat format);
+String sample_format_name(PcmSampleFormat format);
+
 // Small helper to resample from one playback rate to another
 // This isn't really "smart", in that we just insert (or drop) samples.
 // Should do better...
+template<typename SampleType>
 class ResampleHelper {
 public:
-    ResampleHelper(double source, double target);
+    ResampleHelper(u32 source, u32 target);
 
-    void process_sample(double sample_l, double sample_r);
-    bool read_sample(double& next_l, double& next_r);
+    // To be used as follows:
+    // while the resampler doesn't need a new sample, read_sample(current) and store the resulting samples.
+    // as long as the resampler needs a new sample, process_sample(current)
+
+    // Stores a new sample
+    void process_sample(SampleType sample_l, SampleType sample_r);
+    // Assigns the given sample to its correct value and returns false if there is a new sample required
+    bool read_sample(SampleType& next_l, SampleType& next_r);
+    Vector<SampleType> resample(Vector<SampleType> to_resample);
+
+    void reset();
+
+    u32 source() const { return m_source; }
+    u32 target() const { return m_target; }
 
 private:
-    const double m_ratio;
-    double m_current_ratio { 0 };
-    double m_last_sample_l { 0 };
-    double m_last_sample_r { 0 };
+    const u32 m_source;
+    const u32 m_target;
+    u32 m_current_ratio { 0 };
+    SampleType m_last_sample_l;
+    SampleType m_last_sample_r;
 };
 
-// A buffer of audio samples, normalized to 44100hz.
+// A buffer of audio samples.
 class Buffer : public RefCounted<Buffer> {
 public:
-    static RefPtr<Buffer> from_pcm_data(ReadonlyBytes data, ResampleHelper& resampler, int num_channels, int bits_per_sample);
-    static RefPtr<Buffer> from_pcm_stream(InputMemoryStream& stream, ResampleHelper& resampler, int num_channels, int bits_per_sample, int num_samples);
+    static RefPtr<Buffer> from_pcm_data(ReadonlyBytes data, int num_channels, PcmSampleFormat sample_format);
+    static RefPtr<Buffer> from_pcm_stream(InputMemoryStream& stream, int num_channels, PcmSampleFormat sample_format, int num_samples);
     static NonnullRefPtr<Buffer> create_with_samples(Vector<Frame>&& samples)
     {
-        return adopt(*new Buffer(move(samples)));
+        return adopt_ref(*new Buffer(move(samples)));
     }
     static NonnullRefPtr<Buffer> create_with_anonymous_buffer(Core::AnonymousBuffer buffer, i32 buffer_id, int sample_count)
     {
-        return adopt(*new Buffer(move(buffer), buffer_id, sample_count));
+        return adopt_ref(*new Buffer(move(buffer), buffer_id, sample_count));
     }
 
     const Frame* samples() const { return (const Frame*)data(); }
@@ -149,5 +201,8 @@ private:
     const i32 m_id;
     const int m_sample_count;
 };
+
+// This only works for double resamplers, and therefore cannot be part of the class
+NonnullRefPtr<Buffer> resample_buffer(ResampleHelper<double>& resampler, Buffer const& to_resample);
 
 }

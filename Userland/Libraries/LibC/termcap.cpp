@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Debug.h>
@@ -29,7 +9,6 @@
 #include <AK/String.h>
 #include <AK/Vector.h>
 #include <assert.h>
-#include <stdio.h>
 #include <string.h>
 #include <termcap.h>
 
@@ -39,11 +18,9 @@ char PC;
 char* UP;
 char* BC;
 
-int tgetent([[maybe_unused]] char* bp, [[maybe_unused]] const char* name)
+int __attribute__((weak)) tgetent([[maybe_unused]] char* bp, [[maybe_unused]] const char* name)
 {
-#if TERMCAP_DEBUG
-    fprintf(stderr, "tgetent: bp=%p, name='%s'\n", bp, name);
-#endif
+    warnln_if(TERMCAP_DEBUG, "tgetent: bp={:p}, name='{}'", bp, name);
     PC = '\0';
     BC = const_cast<char*>("\033[D");
     UP = const_cast<char*>("\033[A");
@@ -98,12 +75,10 @@ static void ensure_caps()
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 
-char* tgetstr(const char* id, char** area)
+char* __attribute__((weak)) tgetstr(const char* id, char** area)
 {
     ensure_caps();
-#if TERMCAP_DEBUG
-    fprintf(stderr, "tgetstr: id='%s'\n", id);
-#endif
+    warnln_if(TERMCAP_DEBUG, "tgetstr: id='{}'", id);
     auto it = caps->find(id);
     if (it != caps->end()) {
         char* ret = *area;
@@ -112,40 +87,34 @@ char* tgetstr(const char* id, char** area)
         *area += strlen(val) + 1;
         return ret;
     }
-    fprintf(stderr, "tgetstr: missing cap id='%s'\n", id);
+    warnln_if(TERMCAP_DEBUG, "tgetstr: missing cap id='{}'", id);
     return nullptr;
 }
 
 #pragma GCC diagnostic pop
 
-int tgetflag([[maybe_unused]] const char* id)
+int __attribute__((weak)) tgetflag([[maybe_unused]] const char* id)
 {
-#if TERMCAP_DEBUG
-    fprintf(stderr, "tgetflag: '%s'\n", id);
-#endif
+    warnln_if(TERMCAP_DEBUG, "tgetflag: '{}'", id);
     auto it = caps->find(id);
     if (it != caps->end())
         return 1;
     return 0;
 }
 
-int tgetnum(const char* id)
+int __attribute__((weak)) tgetnum(const char* id)
 {
-#if TERMCAP_DEBUG
-    fprintf(stderr, "tgetnum: '%s'\n", id);
-#endif
+    warnln_if(TERMCAP_DEBUG, "tgetnum: '{}'", id);
     auto it = caps->find(id);
     if (it != caps->end())
         return atoi((*it).value);
-    VERIFY_NOT_REACHED();
+    return -1;
 }
 
 static Vector<char> s_tgoto_buffer;
-char* tgoto([[maybe_unused]] const char* cap, [[maybe_unused]] int col, [[maybe_unused]] int row)
+char* __attribute__((weak)) tgoto([[maybe_unused]] const char* cap, [[maybe_unused]] int col, [[maybe_unused]] int row)
 {
-    auto cap_str = String(cap);
-    cap_str.replace("%p1%d", String::number(col));
-    cap_str.replace("%p2%d", String::number(row));
+    auto cap_str = StringView(cap).replace("%p1%d", String::number(col)).replace("%p2%d", String::number(row));
 
     s_tgoto_buffer.clear_with_capacity();
     s_tgoto_buffer.ensure_capacity(cap_str.length());
@@ -153,7 +122,7 @@ char* tgoto([[maybe_unused]] const char* cap, [[maybe_unused]] int col, [[maybe_
     return s_tgoto_buffer.data();
 }
 
-int tputs(const char* str, [[maybe_unused]] int affcnt, int (*putc)(int))
+int __attribute__((weak)) tputs(const char* str, [[maybe_unused]] int affcnt, int (*putc)(int))
 {
     size_t len = strlen(str);
     for (size_t i = 0; i < len; ++i)

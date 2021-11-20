@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGfx/CharacterBitmap.h>
@@ -29,6 +9,7 @@
 #include <LibGfx/StylePainter.h>
 #include <WindowServer/Button.h>
 #include <WindowServer/Event.h>
+#include <WindowServer/Screen.h>
 #include <WindowServer/WindowManager.h>
 
 namespace WindowServer {
@@ -43,7 +24,7 @@ Button::~Button()
 {
 }
 
-void Button::paint(Gfx::Painter& painter)
+void Button::paint(Screen& screen, Gfx::Painter& painter)
 {
     auto palette = WindowManager::the().palette();
     Gfx::PainterStateSaver saver(painter);
@@ -51,25 +32,45 @@ void Button::paint(Gfx::Painter& painter)
     Gfx::StylePainter::paint_button(painter, rect(), palette, Gfx::ButtonStyle::Normal, m_pressed, m_hovered);
 
     if (m_icon) {
-        auto icon_location = rect().center().translated(-(m_icon->width() / 2), -(m_icon->height() / 2));
+        auto& bitmap = m_icon->bitmap(screen.scale_factor());
+        auto icon_location = rect().center().translated(-(bitmap.width() / 2), -(bitmap.height() / 2));
         if (m_pressed)
             painter.translate(1, 1);
-        painter.blit(icon_location, *m_icon, m_icon->rect());
+        painter.blit(icon_location, bitmap, bitmap.rect());
     }
 }
 
 void Button::on_mouse_event(const MouseEvent& event)
 {
+    auto interesting_button = false;
+
+    switch (event.button()) {
+    case MouseButton::Primary:
+        interesting_button = !!on_click;
+        break;
+    case MouseButton::Middle:
+        interesting_button = !!on_middle_click;
+        break;
+    case MouseButton::Secondary:
+        interesting_button = !!on_secondary_click;
+        break;
+    default:
+        break;
+    }
+
+    if (event.type() != Event::Type::MouseMove && !interesting_button)
+        return;
+
     auto& wm = WindowManager::the();
 
-    if (event.type() == Event::MouseDown && (event.button() == MouseButton::Left || event.button() == MouseButton::Right || event.button() == MouseButton::Middle)) {
+    if (event.type() == Event::MouseDown && (event.button() == MouseButton::Primary || event.button() == MouseButton::Secondary || event.button() == MouseButton::Middle)) {
         m_pressed = true;
         wm.set_cursor_tracking_button(this);
         m_frame.invalidate(m_relative_rect);
         return;
     }
 
-    if (event.type() == Event::MouseUp && (event.button() == MouseButton::Left || event.button() == MouseButton::Right || event.button() == MouseButton::Middle)) {
+    if (event.type() == Event::MouseUp && (event.button() == MouseButton::Primary || event.button() == MouseButton::Secondary || event.button() == MouseButton::Middle)) {
         if (wm.cursor_tracking_button() != this)
             return;
         wm.set_cursor_tracking_button(nullptr);
@@ -77,14 +78,14 @@ void Button::on_mouse_event(const MouseEvent& event)
         m_pressed = false;
         if (rect().contains(event.position())) {
             switch (event.button()) {
-            case MouseButton::Left:
+            case MouseButton::Primary:
                 if (on_click)
                     on_click(*this);
                 break;
 
-            case MouseButton::Right:
-                if (on_right_click)
-                    on_right_click(*this);
+            case MouseButton::Secondary:
+                if (on_secondary_click)
+                    on_secondary_click(*this);
                 break;
 
             default:
@@ -112,7 +113,7 @@ void Button::on_mouse_event(const MouseEvent& event)
             m_frame.invalidate(m_relative_rect);
     }
 
-    if (event.type() == Event::MouseMove && event.buttons() & (unsigned)MouseButton::Left) {
+    if (event.type() == Event::MouseMove && event.buttons() & (unsigned)MouseButton::Primary) {
         if (wm.cursor_tracking_button() != this)
             return;
         bool old_pressed = m_pressed;

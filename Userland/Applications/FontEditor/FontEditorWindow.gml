@@ -1,6 +1,7 @@
 @GUI::Widget {
     fill_with_background_color: true
     layout: @GUI::VerticalBoxLayout {
+        spacing: 2
     }
 
     @GUI::ToolbarContainer {
@@ -31,13 +32,25 @@
                 layout: @GUI::VerticalBoxLayout {
                 }
 
-                @GUI::SpinBox {
-                    name: "glyph_editor_width_spinbox"
-                }
+                @GUI::Widget {
+                    layout: @GUI::HorizontalBoxLayout {
+                    }
 
-                @GUI::CheckBox {
-                    name: "glyph_editor_present_checkbox"
-                    text: "Glyph Present"
+                    @GUI::SpinBox {
+                        name: "glyph_editor_width_spinbox"
+                    }
+
+                    @GUI::CheckBox {
+                        name: "glyph_editor_present_checkbox"
+                        text: "Show"
+                    }
+
+                    @GUI::Button {
+                        name: "move_glyph_button"
+                        fixed_width: 22
+                        tooltip: "Move Glyph"
+                        button_style: "Coolbar"
+                    }
                 }
             }
 
@@ -62,7 +75,7 @@
                 title: "Metadata"
                 fixed_height: 220
                 layout: @GUI::VerticalBoxLayout {
-                    margins: [8, 16, 8, 4]
+                    margins: [6, 6, 6, 6]
                 }
 
                 @GUI::Widget {
@@ -119,16 +132,15 @@
                     }
 
                     @GUI::Label {
-                        name: "presentation_label"
+                        name: "slope_label"
                         fixed_width: 100
                         text_alignment: "CenterLeft"
-                        text: "Presentation size:"
+                        text: "Slope:"
                     }
 
-                    @GUI::SpinBox {
-                        name: "presentation_spinbox"
-                        min: 0
-                        max: 255
+                    @GUI::ComboBox {
+                        name: "slope_combobox"
+                        model_only: true
                     }
                 }
 
@@ -137,14 +149,14 @@
                     }
 
                     @GUI::Label {
-                        name: "spacing_label"
+                        name: "presentation_label"
                         fixed_width: 100
                         text_alignment: "CenterLeft"
-                        text: "Glyph spacing:"
+                        text: "Presentation size:"
                     }
 
                     @GUI::SpinBox {
-                        name: "spacing_spinbox"
+                        name: "presentation_spinbox"
                         min: 0
                         max: 255
                     }
@@ -164,7 +176,6 @@
                     @GUI::SpinBox {
                         name: "mean_line_spinbox"
                         min: 0
-                        max: 32
                     }
                 }
 
@@ -182,7 +193,6 @@
                     @GUI::SpinBox {
                         name: "baseline_spinbox"
                         min: 0
-                        max: 32
                     }
                 }
 
@@ -191,19 +201,23 @@
                     layout: @GUI::HorizontalBoxLayout {
                     }
 
+                    @GUI::Label {
+                        name: "spacing_label"
+                        fixed_width: 100
+                        text_alignment: "CenterLeft"
+                        text: "Glyph spacing:"
+                    }
+
+                    @GUI::SpinBox {
+                        name: "spacing_spinbox"
+                        min: 0
+                        max: 255
+                    }
+
                     @GUI::CheckBox {
                         name: "fixed_width_checkbox"
                         text: "Fixed width"
                         autosize: true
-                    }
-
-                    @GUI::Widget {
-                        fixed_width: 16
-                    }
-
-                    @GUI::ComboBox {
-                        name: "type_combobox"
-                        model_only: true
                     }
                 }
             }

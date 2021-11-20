@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2019-2020, Sergey Bugaev <bugaevc@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -39,7 +19,7 @@ public:
     explicit JsonArraySerializer(Builder& builder)
         : m_builder(builder)
     {
-        m_builder.append('[');
+        (void)m_builder.append('[');
     }
 
     JsonArraySerializer(const JsonArraySerializer&) = delete;
@@ -51,34 +31,78 @@ public:
             finish();
     }
 
+#ifndef KERNEL
     void add(const JsonValue& value)
     {
         begin_item();
         value.serialize(m_builder);
     }
+#endif
 
     void add(const StringView& value)
     {
         begin_item();
-        m_builder.append('"');
-        m_builder.append_escaped_for_json(value);
-        m_builder.append('"');
+        (void)m_builder.append('"');
+        (void)m_builder.append_escaped_for_json(value);
+        (void)m_builder.append('"');
     }
 
     void add(const String& value)
     {
         begin_item();
-        m_builder.append('"');
-        m_builder.append_escaped_for_json(value);
-        m_builder.append('"');
+        (void)m_builder.append('"');
+        (void)m_builder.append_escaped_for_json(value);
+        (void)m_builder.append('"');
     }
 
     void add(const char* value)
     {
         begin_item();
-        m_builder.append('"');
-        m_builder.append_escaped_for_json(value);
-        m_builder.append('"');
+        (void)m_builder.append('"');
+        (void)m_builder.append_escaped_for_json(value);
+        (void)m_builder.append('"');
+    }
+
+    void add(bool value)
+    {
+        begin_item();
+        (void)m_builder.append(value ? "true"sv : "false"sv);
+    }
+
+    void add(int value)
+    {
+        begin_item();
+        (void)m_builder.appendff("{}", value);
+    }
+
+    void add(unsigned value)
+    {
+        begin_item();
+        (void)m_builder.appendff("{}", value);
+    }
+
+    void add(long value)
+    {
+        begin_item();
+        (void)m_builder.appendff("{}", value);
+    }
+
+    void add(long unsigned value)
+    {
+        begin_item();
+        (void)m_builder.appendff("{}", value);
+    }
+
+    void add(long long value)
+    {
+        begin_item();
+        (void)m_builder.appendff("{}", value);
+    }
+
+    void add(long long unsigned value)
+    {
+        begin_item();
+        (void)m_builder.appendff("{}", value);
     }
 
     JsonArraySerializer<Builder> add_array()
@@ -94,14 +118,14 @@ public:
     {
         VERIFY(!m_finished);
         m_finished = true;
-        m_builder.append(']');
+        (void)m_builder.append(']');
     }
 
 private:
     void begin_item()
     {
         if (!m_empty)
-            m_builder.append(',');
+            (void)m_builder.append(',');
         m_empty = false;
     }
 

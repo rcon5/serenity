@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -53,7 +33,7 @@ public:
         Icon = 0,
         Name,
         Size,
-        Owner,
+        User,
         Group,
         Permissions,
         ModificationTime,
@@ -87,7 +67,7 @@ public:
 
         bool has_error() const { return m_error != 0; }
         int error() const { return m_error; }
-        const char* error_string() const { return strerror(m_error); }
+        char const* error_string() const { return strerror(m_error); }
 
         String full_path() const;
 
@@ -101,13 +81,11 @@ public:
 
         FileSystemModel& m_model;
 
-        Node* parent { nullptr };
-        NonnullOwnPtrVector<Node> children;
-        bool has_traversed { false };
+        Node* m_parent { nullptr };
+        NonnullOwnPtrVector<Node> m_children;
+        bool m_has_traversed { false };
 
         bool m_selected { false };
-
-        RefPtr<Core::FileWatcher> m_file_watcher;
 
         int m_error { 0 };
         bool m_parent_of_root { false };
@@ -115,44 +93,48 @@ public:
         ModelIndex index(int column) const;
         void traverse_if_needed();
         void reify_if_needed();
-        bool fetch_data(const String& full_path, bool is_root);
+        bool fetch_data(String const& full_path, bool is_root);
+
+        OwnPtr<Node> create_child(String const& child_name);
     };
 
     static NonnullRefPtr<FileSystemModel> create(String root_path = "/", Mode mode = Mode::FilesAndDirectories)
     {
-        return adopt(*new FileSystemModel(root_path, mode));
+        return adopt_ref(*new FileSystemModel(root_path, mode));
     }
     virtual ~FileSystemModel() override;
 
     String root_path() const { return m_root_path; }
     void set_root_path(String);
-    String full_path(const ModelIndex&) const;
+    String full_path(ModelIndex const&) const;
     ModelIndex index(String path, int column) const;
 
-    void update_node_on_selection(const ModelIndex&, const bool);
+    void update_node_on_selection(ModelIndex const&, const bool);
     ModelIndex m_previously_selected_index {};
 
-    const Node& node(const ModelIndex& index) const;
+    Node const& node(ModelIndex const& index) const;
 
     Function<void(int done, int total)> on_thumbnail_progress;
     Function<void()> on_complete;
-    Function<void(int error, const char* error_string)> on_error;
+    Function<void(int error, char const* error_string)> on_directory_change_error;
+    Function<void(int error, char const* error_string)> on_rename_error;
+    Function<void(String const& old_name, String const& new_name)> on_rename_successful;
 
     virtual int tree_column() const override { return Column::Name; }
-    virtual int row_count(const ModelIndex& = ModelIndex()) const override;
-    virtual int column_count(const ModelIndex& = ModelIndex()) const override;
+    virtual int row_count(ModelIndex const& = ModelIndex()) const override;
+    virtual int column_count(ModelIndex const& = ModelIndex()) const override;
     virtual String column_name(int column) const override;
-    virtual Variant data(const ModelIndex&, ModelRole = ModelRole::Display) const override;
-    virtual void update() override;
-    virtual ModelIndex parent_index(const ModelIndex&) const override;
-    virtual ModelIndex index(int row, int column = 0, const ModelIndex& parent = ModelIndex()) const override;
+    virtual Variant data(ModelIndex const&, ModelRole = ModelRole::Display) const override;
+    virtual ModelIndex parent_index(ModelIndex const&) const override;
+    virtual ModelIndex index(int row, int column = 0, ModelIndex const& parent = ModelIndex()) const override;
     virtual StringView drag_data_type() const override { return "text/uri-list"; }
-    virtual bool accepts_drag(const ModelIndex&, const Vector<String>& mime_types) const override;
+    virtual bool accepts_drag(ModelIndex const&, Vector<String> const& mime_types) const override;
     virtual bool is_column_sortable(int column_index) const override { return column_index != Column::Icon; }
-    virtual bool is_editable(const ModelIndex&) const override;
+    virtual bool is_editable(ModelIndex const&) const override;
     virtual bool is_searchable() const override { return true; }
-    virtual void set_data(const ModelIndex&, const Variant&) override;
-    virtual Vector<ModelIndex, 1> matches(const StringView&, unsigned = MatchesFlag::AllMatching, const ModelIndex& = ModelIndex()) override;
+    virtual void set_data(ModelIndex const&, Variant const&) override;
+    virtual Vector<ModelIndex> matches(StringView const&, unsigned = MatchesFlag::AllMatching, ModelIndex const& = ModelIndex()) override;
+    virtual void invalidate() override;
 
     static String timestamp_string(time_t timestamp)
     {
@@ -168,11 +150,15 @@ private:
     String name_for_uid(uid_t) const;
     String name_for_gid(gid_t) const;
 
+    Node const* node_for_path(String const&) const;
+
     HashMap<uid_t, String> m_user_names;
     HashMap<gid_t, String> m_group_names;
 
-    bool fetch_thumbnail_for(const Node& node);
-    GUI::Icon icon_for(const Node& node) const;
+    bool fetch_thumbnail_for(Node const& node);
+    GUI::Icon icon_for(Node const& node) const;
+
+    void handle_file_event(Core::FileWatcherEvent const& event);
 
     String m_root_path;
     Mode m_mode { Invalid };
@@ -182,6 +168,8 @@ private:
     unsigned m_thumbnail_progress_total { 0 };
 
     bool m_should_show_dotfiles { false };
+
+    RefPtr<Core::FileWatcher> m_file_watcher;
 };
 
 }

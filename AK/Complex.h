@@ -1,36 +1,13 @@
 /*
  * Copyright (c) 2021, Cesar Torres <shortanemoia@protonmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Concepts.h>
-#if __has_include(<math.h>)
-#    define AKCOMPLEX_CAN_USE_MATH_H
-#    include <math.h>
-#endif
+#include <AK/Math.h>
 
 #ifdef __cplusplus
 #    if __cplusplus >= 201103L
@@ -65,18 +42,9 @@ public:
 
     constexpr T magnitude_squared() const COMPLEX_NOEXCEPT { return m_real * m_real + m_imag * m_imag; }
 
-#    ifdef AKCOMPLEX_CAN_USE_MATH_H
     constexpr T magnitude() const COMPLEX_NOEXCEPT
     {
-        // for numbers 32 or under bit long we don't need the extra precision of sqrt
-        // although it may return values with a considerable error if real and imag are too big?
-        if constexpr (sizeof(T) <= sizeof(float)) {
-            return sqrtf(m_real * m_real + m_imag * m_imag);
-        } else if constexpr (sizeof(T) <= sizeof(double)) {
-            return sqrt(m_real * m_real + m_imag * m_imag);
-        } else {
-            return sqrtl(m_real * m_real + m_imag * m_imag);
-        }
+        return hypot(m_real, m_imag);
     }
 
     constexpr T phase() const COMPLEX_NOEXCEPT
@@ -87,15 +55,8 @@ public:
     template<AK::Concepts::Arithmetic U, AK::Concepts::Arithmetic V>
     static constexpr Complex<T> from_polar(U magnitude, V phase)
     {
-        if constexpr (sizeof(T) <= sizeof(float)) {
-            return Complex<T>(magnitude * cosf(phase), magnitude * sinf(phase));
-        } else if constexpr (sizeof(T) <= sizeof(double)) {
-            return Complex<T>(magnitude * cos(phase), magnitude * sin(phase));
-        } else {
-            return Complex<T>(magnitude * cosl(phase), magnitude * sinl(phase));
-        }
+        return Complex<T>(magnitude * cos(phase), magnitude * sin(phase));
     }
-#    endif
 
     template<AK::Concepts::Arithmetic U>
     constexpr Complex<T>& operator=(const Complex<U>& other)
@@ -308,7 +269,6 @@ static constinit Complex<T> complex_real_unit = Complex<T>((T)1, (T)0);
 template<AK::Concepts::Arithmetic T>
 static constinit Complex<T> complex_imag_unit = Complex<T>((T)0, (T)1);
 
-#    ifdef AKCOMPLEX_CAN_USE_MATH_H
 template<AK::Concepts::Arithmetic T, AK::Concepts::Arithmetic U>
 static constexpr bool approx_eq(const Complex<T>& a, const Complex<U>& b, const double margin = 0.000001)
 {
@@ -320,23 +280,15 @@ static constexpr bool approx_eq(const Complex<T>& a, const Complex<U>& b, const 
 template<AK::Concepts::Arithmetic T>
 static constexpr Complex<T> cexp(const Complex<T>& a)
 {
-    // FIXME: this can probably be faster and not use so many expensive trigonometric functions
-    if constexpr (sizeof(T) <= sizeof(float)) {
-        return expf(a.real()) * Complex<T>(cosf(a.imag()), sinf(a.imag()));
-    } else if constexpr (sizeof(T) <= sizeof(double)) {
-        return exp(a.real()) * Complex<T>(cos(a.imag()), sin(a.imag()));
-    } else {
-        return expl(a.real()) * Complex<T>(cosl(a.imag()), sinl(a.imag()));
-    }
+    // FIXME: this can probably be faster and not use so many "expensive" trigonometric functions
+    return exp(a.real()) * Complex<T>(cos(a.imag()), sin(a.imag()));
 }
 }
-#    endif
 
+using AK::approx_eq;
+using AK::cexp;
 using AK::Complex;
 using AK::complex_imag_unit;
 using AK::complex_real_unit;
-#    ifdef AKCOMPLEX_CAN_USE_MATH_H
-using AK::approx_eq;
-using AK::cexp;
-#    endif
+
 #endif

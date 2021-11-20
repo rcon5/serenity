@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibWeb/CSS/StyleSheetList.h>
@@ -30,12 +10,29 @@ namespace Web::CSS {
 
 void StyleSheetList::add_sheet(NonnullRefPtr<CSSStyleSheet> sheet)
 {
+    VERIFY(!m_sheets.contains_slow(sheet));
     m_sheets.append(move(sheet));
+}
+
+void StyleSheetList::remove_sheet(CSSStyleSheet& sheet)
+{
+    m_sheets.remove_first_matching([&](auto& entry) { return &*entry == &sheet; });
 }
 
 StyleSheetList::StyleSheetList(DOM::Document& document)
     : m_document(document)
 {
+}
+
+// https://www.w3.org/TR/cssom/#ref-for-dfn-supported-property-indices%E2%91%A1
+bool StyleSheetList::is_supported_property_index(u32 index) const
+{
+    // The object’s supported property indices are the numbers in the range zero to one less than the number of CSS style sheets represented by the collection.
+    // If there are no such CSS style sheets, then there are no supported property indices.
+    if (m_sheets.is_empty())
+        return false;
+
+    return index < m_sheets.size();
 }
 
 }

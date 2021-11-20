@@ -1,34 +1,16 @@
 /*
  * Copyright (c) 2020-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Emulator.h"
 #include "MmapRegion.h"
 #include "SimpleRegion.h"
 #include <AK/Debug.h>
+#include <AK/FileStream.h>
 #include <AK/Format.h>
+#include <alloca.h>
 #include <fcntl.h>
 #include <sched.h>
 #include <serenity.h>
@@ -51,9 +33,8 @@ namespace UserspaceEmulator {
 
 u32 Emulator::virt_syscall(u32 function, u32 arg1, u32 arg2, u32 arg3)
 {
-#if SPAM_DEBUG
-    reportln("Syscall: {} ({:x})", Syscall::to_string((Syscall::Function)function), function);
-#endif
+    if constexpr (SPAM_DEBUG)
+        reportln("Syscall: {} ({:x})", Syscall::to_string((Syscall::Function)function), function);
     switch (function) {
     case SC_chdir:
         return virt$chdir(arg1, arg2);
@@ -95,6 +76,10 @@ u32 Emulator::virt_syscall(u32 function, u32 arg1, u32 arg2, u32 arg3)
         return virt$profiling_enable(arg1);
     case SC_profiling_disable:
         return virt$profiling_disable(arg1);
+    case SC_perf_event:
+        return virt$perf_event((int)arg1, arg2, arg3);
+    case SC_perf_register_string:
+        return virt$perf_register_string(arg1, arg2);
     case SC_disown:
         return virt$disown(arg1);
     case SC_purge:
@@ -189,8 +174,8 @@ u32 Emulator::virt_syscall(u32 function, u32 arg1, u32 arg2, u32 arg3)
         return virt$fchmod(arg1, arg2);
     case SC_fchown:
         return virt$fchown(arg1, arg2, arg3);
-    case SC_accept:
-        return virt$accept(arg1, arg2, arg3);
+    case SC_accept4:
+        return virt$accept4(arg1);
     case SC_setsockopt:
         return virt$setsockopt(arg1);
     case SC_getsockname:
@@ -223,8 +208,6 @@ u32 Emulator::virt_syscall(u32 function, u32 arg1, u32 arg2, u32 arg3)
     case SC_exit:
         virt$exit((int)arg1);
         return 0;
-    case SC_gettimeofday:
-        return virt$gettimeofday(arg1);
     case SC_clock_gettime:
         return virt$clock_gettime(arg1, arg2);
     case SC_clock_settime:
@@ -243,8 +226,12 @@ u32 Emulator::virt_syscall(u32 function, u32 arg1, u32 arg2, u32 arg3)
         return virt$set_thread_name(arg1, arg2, arg3);
     case SC_setsid:
         return virt$setsid();
-    case SC_watch_file:
-        return virt$watch_file(arg1, arg2);
+    case SC_create_inode_watcher:
+        return virt$create_inode_watcher(arg1);
+    case SC_inode_watcher_add_watch:
+        return virt$inode_watcher_add_watch(arg1);
+    case SC_inode_watcher_remove_watch:
+        return virt$inode_watcher_remove_watch(arg1, arg2);
     case SC_clock_nanosleep:
         return virt$clock_nanosleep(arg1);
     case SC_readlink:
@@ -252,7 +239,7 @@ u32 Emulator::virt_syscall(u32 function, u32 arg1, u32 arg2, u32 arg3)
     case SC_ptsname:
         return virt$ptsname(arg1, arg2, arg3);
     case SC_allocate_tls:
-        return virt$allocate_tls(arg1);
+        return virt$allocate_tls(arg1, arg2);
     case SC_beep:
         return virt$beep();
     case SC_ftruncate:
@@ -263,6 +250,10 @@ u32 Emulator::virt_syscall(u32 function, u32 arg1, u32 arg2, u32 arg3)
         return virt$chown(arg1);
     case SC_msyscall:
         return virt$msyscall(arg1);
+    case SC_futex:
+        return virt$futex(arg1);
+    case SC_map_time_page:
+        return -ENOSYS;
     default:
         reportln("\n=={}==  \033[31;1mUnimplemented syscall: {}\033[0m, {:p}", getpid(), Syscall::to_string((Syscall::Function)function), function);
         dump_backtrace();
@@ -293,6 +284,37 @@ int Emulator::virt$profiling_enable(pid_t pid)
 int Emulator::virt$profiling_disable(pid_t pid)
 {
     return syscall(SC_profiling_disable, pid);
+}
+
+FlatPtr Emulator::virt$perf_event(int event, FlatPtr arg1, FlatPtr arg2)
+{
+    if (event == PERF_EVENT_SIGNPOST) {
+        if (is_profiling()) {
+            if (profiler_string_id_map().size() > arg1)
+                emit_profile_event(profile_stream(), "signpost", String::formatted("\"arg1\": {}, \"arg2\": {}", arg1, arg2));
+            syscall(SC_perf_event, PERF_EVENT_SIGNPOST, profiler_string_id_map().at(arg1), arg2);
+        } else {
+            syscall(SC_perf_event, PERF_EVENT_SIGNPOST, arg1, arg2);
+        }
+        return 0;
+    }
+    return -ENOSYS;
+}
+
+FlatPtr Emulator::virt$perf_register_string(FlatPtr string, size_t size)
+{
+    char* buffer = (char*)alloca(size + 4);
+    // FIXME: not nice, but works
+    __builtin_memcpy(buffer, "UE: ", 4);
+    mmu().copy_from_vm((buffer + 4), string, size);
+    auto ret = (int)syscall(SC_perf_register_string, buffer, size + 4);
+
+    if (ret >= 0 && is_profiling()) {
+        profiler_strings().append(make<String>(StringView { buffer + 4, size }));
+        profiler_string_id_map().append(ret);
+        ret = profiler_string_id_map().size() - 1;
+    }
+    return ret;
 }
 
 int Emulator::virt$disown(pid_t pid)
@@ -427,7 +449,10 @@ int Emulator::virt$setsockopt(FlatPtr params_addr)
     mmu().copy_from_vm(&params, params_addr, sizeof(params));
 
     if (params.option == SO_RCVTIMEO || params.option == SO_TIMESTAMP) {
-        auto host_value_buffer = ByteBuffer::create_zeroed(params.value_size);
+        auto host_value_buffer_result = ByteBuffer::create_zeroed(params.value_size);
+        if (!host_value_buffer_result.has_value())
+            return -ENOMEM;
+        auto& host_value_buffer = host_value_buffer_result.value();
         mmu().copy_from_vm(host_value_buffer.data(), (FlatPtr)params.value, params.value_size);
         int rc = setsockopt(params.sockfd, params.level, params.option, host_value_buffer.data(), host_value_buffer.size());
         if (rc < 0)
@@ -467,17 +492,20 @@ mode_t Emulator::virt$umask(mode_t mask)
     return syscall(SC_umask, mask);
 }
 
-int Emulator::virt$accept(int sockfd, FlatPtr address, FlatPtr address_length)
+int Emulator::virt$accept4(FlatPtr params_addr)
 {
-    socklen_t host_address_length = 0;
-    mmu().copy_from_vm(&host_address_length, address_length, sizeof(host_address_length));
-    auto host_buffer = ByteBuffer::create_zeroed(host_address_length);
-    int rc = syscall(SC_accept, sockfd, host_buffer.data(), &host_address_length);
-    if (rc < 0)
-        return rc;
-    mmu().copy_to_vm(address, host_buffer.data(), min((socklen_t)host_buffer.size(), host_address_length));
-    mmu().copy_to_vm(address_length, &host_address_length, sizeof(host_address_length));
-    return rc;
+    Syscall::SC_accept4_params params;
+    mmu().copy_from_vm(&params, params_addr, sizeof(params));
+    sockaddr_storage addr = {};
+    socklen_t addrlen;
+    mmu().copy_from_vm(&addrlen, (FlatPtr)params.addrlen, sizeof(socklen_t));
+    VERIFY(addrlen <= sizeof(addr));
+    int rc = accept4(params.sockfd, (sockaddr*)&addr, &addrlen, params.flags);
+    if (rc == 0) {
+        mmu().copy_to_vm((FlatPtr)params.addr, &addr, addrlen);
+        mmu().copy_to_vm((FlatPtr)params.addrlen, &addrlen, sizeof(socklen_t));
+    }
+    return rc < 0 ? -errno : rc;
 }
 
 int Emulator::virt$bind(int sockfd, FlatPtr address, socklen_t address_length)
@@ -518,16 +546,6 @@ int Emulator::virt$killpg(int pgrp, int sig)
     return syscall(SC_killpg, pgrp, sig);
 }
 
-int Emulator::virt$gettimeofday(FlatPtr timeval)
-{
-    struct timeval host_timeval;
-    int rc = syscall(SC_gettimeofday, &host_timeval);
-    if (rc < 0)
-        return rc;
-    mmu().copy_to_vm(timeval, &host_timeval, sizeof(host_timeval));
-    return rc;
-}
-
 int Emulator::virt$clock_gettime(int clockid, FlatPtr timespec)
 {
     struct timespec host_timespec;
@@ -563,7 +581,10 @@ int Emulator::virt$get_process_name(FlatPtr buffer, int size)
 {
     if (size < 0)
         return -EINVAL;
-    auto host_buffer = ByteBuffer::create_zeroed((size_t)size);
+    auto host_buffer_result = ByteBuffer::create_zeroed((size_t)size);
+    if (!host_buffer_result.has_value())
+        return -ENOMEM;
+    auto& host_buffer = host_buffer_result.value();
     int rc = syscall(SC_get_process_name, host_buffer.data(), host_buffer.size());
     mmu().copy_to_vm(buffer, host_buffer.data(), host_buffer.size());
     return rc;
@@ -603,13 +624,20 @@ int Emulator::virt$recvmsg(int sockfd, FlatPtr msg_addr, int flags)
     Vector<ByteBuffer, 1> buffers;
     Vector<iovec, 1> iovs;
     for (const auto& iov : mmu_iovs) {
-        buffers.append(ByteBuffer::create_uninitialized(iov.iov_len));
+        auto buffer_result = ByteBuffer::create_uninitialized(iov.iov_len);
+        if (!buffer_result.has_value())
+            return -ENOMEM;
+        buffers.append(buffer_result.release_value());
         iovs.append({ buffers.last().data(), buffers.last().size() });
     }
 
     ByteBuffer control_buffer;
-    if (mmu_msg.msg_control)
-        control_buffer = ByteBuffer::create_uninitialized(mmu_msg.msg_controllen);
+    if (mmu_msg.msg_control) {
+        auto buffer_result = ByteBuffer::create_uninitialized(mmu_msg.msg_controllen);
+        if (!buffer_result.has_value())
+            return -ENOMEM;
+        control_buffer = buffer_result.release_value();
+    }
 
     sockaddr_storage addr;
     msghdr msg = { &addr, sizeof(addr), iovs.data(), (int)iovs.size(), mmu_msg.msg_control ? control_buffer.data() : nullptr, mmu_msg.msg_controllen, mmu_msg.msg_flags };
@@ -646,8 +674,12 @@ int Emulator::virt$sendmsg(int sockfd, FlatPtr msg_addr, int flags)
     }
 
     ByteBuffer control_buffer;
-    if (mmu_msg.msg_control)
-        control_buffer = ByteBuffer::create_uninitialized(mmu_msg.msg_controllen);
+    if (mmu_msg.msg_control) {
+        auto buffer_result = ByteBuffer::create_uninitialized(mmu_msg.msg_controllen);
+        if (!buffer_result.has_value())
+            return -ENOMEM;
+        control_buffer = buffer_result.release_value();
+    }
 
     sockaddr_storage address;
     socklen_t address_length = 0;
@@ -713,7 +745,18 @@ int Emulator::virt$getsockopt(FlatPtr params_addr)
         mmu().copy_to_vm((FlatPtr)params.value, &creds, sizeof(creds));
         return rc;
     }
+    if (params.option == SO_ERROR) {
+        int so_error;
+        socklen_t so_error_len = sizeof(so_error);
+        int rc = getsockopt(params.sockfd, params.level, SO_ERROR, &so_error, &so_error_len);
+        if (rc < 0)
+            return -errno;
+        // FIXME: Check params.value_size
+        mmu().copy_to_vm((FlatPtr)params.value, &so_error, sizeof(so_error));
+        return rc;
+    }
 
+    dbgln("Not implemented socket param: {}", params.option);
     TODO();
 }
 
@@ -721,24 +764,32 @@ int Emulator::virt$getsockname(FlatPtr params_addr)
 {
     Syscall::SC_getsockname_params params;
     mmu().copy_from_vm(&params, params_addr, sizeof(params));
-    struct sockaddr addr = {};
-    socklen_t addrlen = {};
-    auto rc = getsockname(params.sockfd, &addr, &addrlen);
-    mmu().copy_to_vm((FlatPtr)params.addr, &addr, sizeof(addr));
-    mmu().copy_to_vm((FlatPtr)params.addrlen, &addrlen, sizeof(addrlen));
-    return rc;
+    sockaddr_storage addr = {};
+    socklen_t addrlen;
+    mmu().copy_from_vm(&addrlen, (FlatPtr)params.addrlen, sizeof(socklen_t));
+    VERIFY(addrlen <= sizeof(addr));
+    auto rc = getsockname(params.sockfd, (sockaddr*)&addr, &addrlen);
+    if (rc == 0) {
+        mmu().copy_to_vm((FlatPtr)params.addr, &addr, sizeof(addr));
+        mmu().copy_to_vm((FlatPtr)params.addrlen, &addrlen, sizeof(addrlen));
+    }
+    return rc < 0 ? -errno : rc;
 }
 
 int Emulator::virt$getpeername(FlatPtr params_addr)
 {
     Syscall::SC_getpeername_params params;
     mmu().copy_from_vm(&params, params_addr, sizeof(params));
-    struct sockaddr addr = {};
-    socklen_t addrlen = {};
-    auto rc = getpeername(params.sockfd, &addr, &addrlen);
-    mmu().copy_to_vm((FlatPtr)params.addr, &addr, sizeof(addr));
-    mmu().copy_to_vm((FlatPtr)params.addrlen, &addrlen, sizeof(addrlen));
-    return rc;
+    sockaddr_storage addr = {};
+    socklen_t addrlen;
+    mmu().copy_from_vm(&addrlen, (FlatPtr)params.addrlen, sizeof(socklen_t));
+    VERIFY(addrlen <= sizeof(addr));
+    auto rc = getpeername(params.sockfd, (sockaddr*)&addr, &addrlen);
+    if (rc == 0) {
+        mmu().copy_to_vm((FlatPtr)params.addr, &addr, sizeof(addr));
+        mmu().copy_to_vm((FlatPtr)params.addrlen, &addrlen, sizeof(addrlen));
+    }
+    return rc < 0 ? -errno : rc;
 }
 
 int Emulator::virt$getgroups(ssize_t count, FlatPtr groups)
@@ -746,7 +797,10 @@ int Emulator::virt$getgroups(ssize_t count, FlatPtr groups)
     if (!count)
         return syscall(SC_getgroups, 0, nullptr);
 
-    auto buffer = ByteBuffer::create_uninitialized(count * sizeof(gid_t));
+    auto buffer_result = ByteBuffer::create_uninitialized(count * sizeof(gid_t));
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& buffer = buffer_result.value();
     int rc = syscall(SC_getgroups, count, buffer.data());
     if (rc < 0)
         return rc;
@@ -816,6 +870,8 @@ static void round_to_page_size(FlatPtr& address, size_t& size)
 
 u32 Emulator::virt$munmap(FlatPtr address, size_t size)
 {
+    if (is_profiling())
+        emit_profile_event(profile_stream(), "munmap", String::formatted("\"ptr\": {}, \"size\": {}", address, size));
     round_to_page_size(address, size);
     Vector<Region*, 4> marked_for_deletion;
     bool has_non_mmap_region = false;
@@ -856,7 +912,7 @@ u32 Emulator::virt$mmap(u32 params_addr)
         else {
             // mmap(nullptr, …, MAP_FIXED) is technically okay, but tends to be a bug.
             // Therefore, refuse to be helpful.
-            reportln("\n=={}==  \033[31;1mTried to mmap at nullptr with MAP_FIXED.\033[0m, 0x{:x} bytes.", getpid(), params.size);
+            reportln("\n=={}==  \033[31;1mTried to mmap at nullptr with MAP_FIXED.\033[0m, {:#x} bytes.", getpid(), params.size);
             dump_backtrace();
         }
     } else {
@@ -869,21 +925,22 @@ u32 Emulator::virt$mmap(u32 params_addr)
 
     String name_str;
     if (params.name.characters) {
-        auto name = ByteBuffer::create_uninitialized(params.name.length);
+        auto buffer_result = ByteBuffer::create_uninitialized(params.name.length);
+        if (!buffer_result.has_value())
+            return -ENOMEM;
+        auto& name = buffer_result.value();
         mmu().copy_from_vm(name.data(), (FlatPtr)params.name.characters, params.name.length);
         name_str = { name.data(), name.size() };
     }
+
+    if (is_profiling())
+        emit_profile_event(profile_stream(), "mmap", String::formatted(R"("ptr": {}, "size": {}, "name": "{}")", final_address, final_size, name_str));
 
     if (params.flags & MAP_ANONYMOUS) {
         mmu().add_region(MmapRegion::create_anonymous(final_address, final_size, params.prot, move(name_str)));
     } else {
         auto region = MmapRegion::create_file_backed(final_address, final_size, params.prot, params.flags, params.fd, params.offset, move(name_str));
-        if (region->name() == "libc.so: .text" && !m_libc_start) {
-            m_libc_start = final_address;
-            m_libc_end = final_address + final_size;
-            bool rc = find_malloc_symbols(*region);
-            VERIFY(rc);
-        } else if (region->name() == "libsystem.so: .text" && !m_libsystem_start) {
+        if (region->name() == "libsystem.so: .text" && !m_libsystem_start) {
             m_libsystem_start = final_address;
             m_libsystem_end = final_address + final_size;
         }
@@ -1015,7 +1072,10 @@ u32 Emulator::virt$read(int fd, FlatPtr buffer, ssize_t size)
 {
     if (size < 0)
         return -EINVAL;
-    auto local_buffer = ByteBuffer::create_uninitialized(size);
+    auto buffer_result = ByteBuffer::create_uninitialized(size);
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& local_buffer = buffer_result.value();
     int nread = syscall(SC_read, fd, local_buffer.data(), local_buffer.size());
     if (nread < 0) {
         if (nread == -EPERM) {
@@ -1042,7 +1102,10 @@ void Emulator::virt$exit(int status)
 
 ssize_t Emulator::virt$getrandom(FlatPtr buffer, size_t buffer_size, unsigned int flags)
 {
-    auto host_buffer = ByteBuffer::create_uninitialized(buffer_size);
+    auto buffer_result = ByteBuffer::create_uninitialized(buffer_size);
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& host_buffer = buffer_result.value();
     int rc = syscall(SC_getrandom, host_buffer.data(), host_buffer.size(), flags);
     if (rc < 0)
         return rc;
@@ -1052,7 +1115,10 @@ ssize_t Emulator::virt$getrandom(FlatPtr buffer, size_t buffer_size, unsigned in
 
 int Emulator::virt$get_dir_entries(int fd, FlatPtr buffer, ssize_t size)
 {
-    auto host_buffer = ByteBuffer::create_uninitialized(size);
+    auto buffer_result = ByteBuffer::create_uninitialized(size);
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& host_buffer = buffer_result.value();
     int rc = syscall(SC_get_dir_entries, fd, host_buffer.data(), host_buffer.size());
     if (rc < 0)
         return rc;
@@ -1089,20 +1155,20 @@ int Emulator::virt$ioctl([[maybe_unused]] int fd, unsigned request, [[maybe_unus
     if (request == TIOCNOTTY || request == TIOCSCTTY) {
         return syscall(SC_ioctl, fd, request, 0);
     }
-    if (request == FB_IOCTL_GET_SIZE_IN_BYTES) {
+    if (request == FB_IOCTL_GET_PROPERTIES) {
         size_t size = 0;
         auto rc = syscall(SC_ioctl, fd, request, &size);
         mmu().copy_to_vm(arg, &size, sizeof(size));
         return rc;
     }
-    if (request == FB_IOCTL_SET_RESOLUTION) {
-        FBResolution user_resolution;
+    if (request == FB_IOCTL_SET_HEAD_RESOLUTION) {
+        FBHeadResolution user_resolution;
         mmu().copy_from_vm(&user_resolution, arg, sizeof(user_resolution));
         auto rc = syscall(SC_ioctl, fd, request, &user_resolution);
         mmu().copy_to_vm(arg, &user_resolution, sizeof(user_resolution));
         return rc;
     }
-    if (request == FB_IOCTL_SET_BUFFER) {
+    if (request == FB_IOCTL_SET_HEAD_VERTICAL_OFFSET_BUFFER) {
         return syscall(SC_ioctl, fd, request, arg);
     }
     reportln("Unsupported ioctl: {}", request);
@@ -1113,7 +1179,7 @@ int Emulator::virt$ioctl([[maybe_unused]] int fd, unsigned request, [[maybe_unus
 int Emulator::virt$emuctl(FlatPtr arg1, FlatPtr arg2, FlatPtr arg3)
 {
     auto* tracer = malloc_tracer();
-    if (!tracer)
+    if (arg1 <= 4 && !tracer)
         return 0;
     switch (arg1) {
     case 1:
@@ -1124,6 +1190,23 @@ int Emulator::virt$emuctl(FlatPtr arg1, FlatPtr arg2, FlatPtr arg3)
         return 0;
     case 3:
         tracer->target_did_realloc({}, arg3, arg2);
+        return 0;
+    case 4:
+        tracer->target_did_change_chunk_size({}, arg3, arg2);
+        return 0;
+    case 5: // mark ROI start
+        if (is_in_region_of_interest())
+            return -EINVAL;
+        m_is_in_region_of_interest = true;
+        return 0;
+    case 6: // mark ROI end
+        m_is_in_region_of_interest = false;
+        return 0;
+    case 7:
+        m_is_memory_auditing_suppressed = true;
+        return 0;
+    case 8:
+        m_is_memory_auditing_suppressed = false;
         return 0;
     default:
         return -EINVAL;
@@ -1211,7 +1294,10 @@ int Emulator::virt$realpath(FlatPtr params_addr)
     mmu().copy_from_vm(&params, params_addr, sizeof(params));
 
     auto path = mmu().copy_buffer_from_vm((FlatPtr)params.path.characters, params.path.length);
-    auto host_buffer = ByteBuffer::create_zeroed(params.buffer.size);
+    auto buffer_result = ByteBuffer::create_zeroed(params.buffer.size);
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& host_buffer = buffer_result.value();
 
     Syscall::SC_realpath_params host_params;
     host_params.path = { (const char*)path.data(), path.size() };
@@ -1227,7 +1313,10 @@ int Emulator::virt$gethostname(FlatPtr buffer, ssize_t buffer_size)
 {
     if (buffer_size < 0)
         return -EINVAL;
-    auto host_buffer = ByteBuffer::create_zeroed(buffer_size);
+    auto buffer_result = ByteBuffer::create_zeroed(buffer_size);
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& host_buffer = buffer_result.value();
     int rc = syscall(SC_gethostname, host_buffer.data(), host_buffer.size());
     if (rc < 0)
         return rc;
@@ -1312,7 +1401,10 @@ int Emulator::virt$setpgid(pid_t pid, pid_t pgid)
 
 int Emulator::virt$ttyname(int fd, FlatPtr buffer, size_t buffer_size)
 {
-    auto host_buffer = ByteBuffer::create_zeroed(buffer_size);
+    auto buffer_result = ByteBuffer::create_zeroed(buffer_size);
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& host_buffer = buffer_result.value();
     int rc = syscall(SC_ttyname, fd, host_buffer.data(), host_buffer.size());
     if (rc < 0)
         return rc;
@@ -1322,7 +1414,10 @@ int Emulator::virt$ttyname(int fd, FlatPtr buffer, size_t buffer_size)
 
 int Emulator::virt$getcwd(FlatPtr buffer, size_t buffer_size)
 {
-    auto host_buffer = ByteBuffer::create_zeroed(buffer_size);
+    auto buffer_result = ByteBuffer::create_zeroed(buffer_size);
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& host_buffer = buffer_result.value();
     int rc = syscall(SC_getcwd, host_buffer.data(), host_buffer.size());
     if (rc < 0)
         return rc;
@@ -1405,10 +1500,21 @@ pid_t Emulator::virt$setsid()
     return syscall(SC_setsid);
 }
 
-int Emulator::virt$watch_file(FlatPtr user_path_addr, size_t path_length)
+int Emulator::virt$create_inode_watcher(unsigned flags)
 {
-    auto user_path = mmu().copy_buffer_from_vm(user_path_addr, path_length);
-    return syscall(SC_watch_file, user_path.data(), user_path.size());
+    return syscall(SC_create_inode_watcher, flags);
+}
+
+int Emulator::virt$inode_watcher_add_watch(FlatPtr params_addr)
+{
+    Syscall::SC_inode_watcher_add_watch_params params;
+    mmu().copy_from_vm(&params, params_addr, sizeof(params));
+    return syscall(SC_inode_watcher_add_watch, &params);
+}
+
+int Emulator::virt$inode_watcher_remove_watch(int fd, int wd)
+{
+    return syscall(SC_inode_watcher_add_watch, fd, wd);
 }
 
 int Emulator::virt$clock_nanosleep(FlatPtr params_addr)
@@ -1421,12 +1527,12 @@ int Emulator::virt$clock_nanosleep(FlatPtr params_addr)
     params.requested_sleep = &requested_sleep;
 
     auto remaining_vm_addr = params.remaining_sleep;
-    auto remaining = ByteBuffer::create_zeroed(sizeof(timespec));
-    params.remaining_sleep = (timespec*)remaining.data();
+    timespec remaining { 0, 0 };
+    params.remaining_sleep = &remaining;
 
     int rc = syscall(SC_clock_nanosleep, &params);
     if (remaining_vm_addr)
-        mmu().copy_to_vm((FlatPtr)remaining_vm_addr, remaining.data(), sizeof(timespec));
+        mmu().copy_to_vm((FlatPtr)remaining_vm_addr, &remaining, sizeof(timespec));
 
     return rc;
 }
@@ -1437,7 +1543,10 @@ int Emulator::virt$readlink(FlatPtr params_addr)
     mmu().copy_from_vm(&params, params_addr, sizeof(params));
 
     auto path = mmu().copy_buffer_from_vm((FlatPtr)params.path.characters, params.path.length);
-    auto host_buffer = ByteBuffer::create_zeroed(params.buffer.size);
+    auto buffer_result = ByteBuffer::create_zeroed(params.buffer.size);
+    if (!buffer_result.has_value())
+        return -ENOMEM;
+    auto& host_buffer = buffer_result.value();
 
     Syscall::SC_readlink_params host_params;
     host_params.path = { (const char*)path.data(), path.size() };
@@ -1449,12 +1558,21 @@ int Emulator::virt$readlink(FlatPtr params_addr)
     return rc;
 }
 
-u32 Emulator::virt$allocate_tls(size_t size)
+u32 Emulator::virt$allocate_tls(FlatPtr initial_data, size_t size)
 {
-    // TODO: Why is this needed? without this, the loader overflows the bounds of the TLS region.
-    constexpr size_t TLS_SIZE_HACK = 8;
-    auto tcb_region = make<SimpleRegion>(0x20000000, size + TLS_SIZE_HACK);
-    bzero(tcb_region->data(), size);
+    // TODO: This matches what Thread::make_thread_specific_region does. The kernel
+    // ends up allocating one more page. Figure out if this is intentional.
+    auto region_size = align_up_to(size, PAGE_SIZE) + PAGE_SIZE;
+    auto tcb_region = make<SimpleRegion>(0x20000000, region_size);
+
+    size_t offset = 0;
+    while (size - offset > 0) {
+        u8 buffer[512];
+        size_t read_bytes = min(sizeof(buffer), size - offset);
+        mmu().copy_from_vm(buffer, initial_data + offset, read_bytes);
+        memcpy(tcb_region->data() + offset, buffer, read_bytes);
+        offset += read_bytes;
+    }
     memset(tcb_region->shadow_data(), 0x01, size);
 
     auto tls_region = make<SimpleRegion>(0, 4);
@@ -1484,4 +1602,12 @@ int Emulator::virt$msyscall(FlatPtr)
     return 0;
 }
 
+int Emulator::virt$futex(FlatPtr params_addr)
+{
+    Syscall::SC_futex_params params;
+    mmu().copy_from_vm(&params, params_addr, sizeof(params));
+
+    // FIXME: Implement this.
+    return 0;
+}
 }

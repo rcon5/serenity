@@ -1,32 +1,12 @@
 /*
  * Copyright (c) 2021, Cesar Torres <shortanemoia@protonmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "AudioAlgorithms.h"
 #include <AK/Complex.h>
-#include <math.h>
+#include <AK/Math.h>
 
 // This function uses the input vector as output too. therefore, if you wish to
 // leave it intact, pass a copy to this function
@@ -58,8 +38,8 @@ void fft(Vector<Complex<double>>& sample_data, bool invert)
     }
 
     for (int len = 2; len <= n; len <<= 1) {
-        double ang = 2 * M_PI / len * (invert ? -1 : 1);
-        Complex<double> wlen(cos(ang), sin(ang));
+        double ang = 2 * AK::Pi<double> / len * (invert ? -1 : 1);
+        Complex<double> wlen(AK::cos(ang), AK::sin(ang));
         for (int i = 0; i < n; i += len) {
             Complex<double> w = { 1., 0. };
             for (int j = 0; j < len / 2; j++) {

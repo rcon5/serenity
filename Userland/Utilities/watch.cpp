@@ -1,34 +1,18 @@
 /*
  * Copyright (c) 2020, Sahan Fernando <sahan.h.fernando@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/Assertions.h>
 #include <AK/String.h>
 #include <AK/StringBuilder.h>
 #include <AK/Time.h>
 #include <AK/Vector.h>
 #include <LibCore/ArgsParser.h>
+#include <LibCore/File.h>
+#include <LibCore/FileWatcher.h>
+#include <errno.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <sys/time.h>
@@ -42,11 +26,19 @@ static bool flag_beep_on_fail = false;
 static volatile int exit_code = 0;
 static volatile pid_t child_pid = -1;
 
-static String build_header_string(const Vector<const char*>& command, const struct timeval& interval)
+static String build_header_string(Vector<char const*> const& command, struct timeval const& interval)
 {
     StringBuilder builder;
-    builder.appendff("Every {}", interval.tv_sec);
-    builder.appendf(".%ds: \x1b[1m", interval.tv_usec / 100000);
+    builder.appendff("Every {}.{}s: \x1b[1m", interval.tv_sec, interval.tv_usec / 100000);
+    builder.join(' ', command);
+    builder.append("\x1b[0m");
+    return builder.build();
+}
+
+static String build_header_string(Vector<char const*> const& command, Vector<String> const& filenames)
+{
+    StringBuilder builder;
+    builder.appendff("Every time any of {} changes: \x1b[1m", filenames);
     builder.join(' ', command);
     builder.append("\x1b[0m");
     return builder.build();
@@ -61,7 +53,7 @@ static struct timeval get_current_time()
     return tv;
 }
 
-static int64_t usecs_from(const struct timeval& start, const struct timeval& end)
+static int64_t usecs_from(struct timeval const& start, struct timeval const& end)
 {
     struct timeval diff;
     timeval_sub(end, start, diff);
@@ -84,8 +76,10 @@ static void handle_signal(int signal)
     exit(exit_code);
 }
 
-static int run_command(const Vector<const char*>& command)
+static int run_command(Vector<char const*> const& command)
 {
+    VERIFY(command[command.size() - 1] == nullptr);
+
     if ((errno = posix_spawnp(const_cast<pid_t*>(&child_pid), command[0], nullptr, nullptr, const_cast<char**>(command.data()), environ))) {
         exit_code = 1;
         perror("posix_spawn");
@@ -114,59 +108,114 @@ static int run_command(const Vector<const char*>& command)
 int main(int argc, char** argv)
 {
     signal(SIGINT, handle_signal);
-    if (pledge("stdio proc exec", nullptr) < 0) {
+    if (pledge("stdio proc exec rpath", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
-    Vector<const char*> command;
+    Vector<String> files_to_watch;
+    Vector<char const*> command;
     Core::ArgsParser args_parser;
+    args_parser.set_stop_on_first_non_option(true);
     args_parser.set_general_help("Execute a command repeatedly, and watch its output over time.");
     args_parser.add_option(opt_interval, "Amount of time between updates", "interval", 'n', "seconds");
     args_parser.add_option(flag_noheader, "Turn off the header describing the command and interval", "no-title", 't');
     args_parser.add_option(flag_beep_on_fail, "Beep if the command has a non-zero exit code", "beep", 'b');
+    Core::ArgsParser::Option file_arg {
+        .requires_argument = true,
+        .help_string = "Run command whenever this file changes. Can be used multiple times.",
+        .long_name = "file",
+        .short_name = 'f',
+        .value_name = "file",
+        .accept_value = [&files_to_watch](auto filename) {
+            files_to_watch.append(filename);
+            return true;
+        }
+    };
+    args_parser.add_option(move(file_arg));
     args_parser.add_positional_argument(command, "Command to run", "command");
     args_parser.parse(argc, argv);
 
-    struct timeval interval;
-    if (opt_interval <= 0) {
-        interval = { 0, 100000 };
-    } else {
-        interval = { opt_interval, 0 };
-    }
-
-    auto header = build_header_string(command, interval);
     command.append(nullptr);
 
-    auto now = get_current_time();
-    auto next_run_time = now;
-    while (true) {
-        int usecs_to_sleep = usecs_from(now, next_run_time);
-        while (usecs_to_sleep > 0) {
-            usleep(usecs_to_sleep);
-            now = get_current_time();
-            usecs_to_sleep = usecs_from(now, next_run_time);
-        }
+    String header;
+
+    auto watch_callback = [&] {
         // Clear the screen, then reset the cursor position to the top left.
-        fprintf(stderr, "\033[H\033[2J");
+        warn("\033[H\033[2J");
         // Print the header.
         if (!flag_noheader) {
-            fprintf(stderr, "%s\n\n", header.characters());
+            warnln("{}", header);
+            warnln();
         } else {
             fflush(stderr);
         }
         if (run_command(command) != 0) {
             exit_code = 1;
             if (flag_beep_on_fail) {
-                fprintf(stderr, "\a");
+                warnln("\a");
                 fflush(stderr);
             }
         }
-        now = get_current_time();
-        timeval_add(next_run_time, interval, next_run_time);
-        if (usecs_from(now, next_run_time) < 0) {
-            // The next execution is overdue, so we set next_run_time to now to prevent drift.
-            next_run_time = now;
+    };
+
+    if (!files_to_watch.is_empty()) {
+        header = build_header_string(command, files_to_watch);
+
+        auto file_watcher = Core::BlockingFileWatcher();
+        for (auto const& file : files_to_watch) {
+            if (!Core::File::exists(file)) {
+                warnln("Cannot watch '{}', it does not exist.", file);
+                return 1;
+            }
+            if (!file_watcher.is_watching(file)) {
+                auto success_or_error = file_watcher.add_watch(file, Core::FileWatcherEvent::Type::MetadataModified);
+                if (success_or_error.is_error() && !success_or_error.value()) {
+                    warnln("Could not add '{}' to watch list.", file);
+                    return 1;
+                }
+            }
+        }
+
+        watch_callback();
+        while (true) {
+            auto maybe_event = file_watcher.wait_for_event();
+            if (maybe_event.has_value()) {
+                watch_callback();
+            }
+        }
+    } else {
+        if (pledge("stdio proc exec", nullptr) < 0) {
+            perror("pledge");
+            return 1;
+        }
+
+        struct timeval interval;
+        if (opt_interval <= 0) {
+            interval = { 0, 100000 };
+        } else {
+            interval = { opt_interval, 0 };
+        }
+
+        auto now = get_current_time();
+        auto next_run_time = now;
+        header = build_header_string(command, interval);
+        while (true) {
+            int usecs_to_sleep = usecs_from(now, next_run_time);
+            while (usecs_to_sleep > 0) {
+                usleep(usecs_to_sleep);
+                now = get_current_time();
+                usecs_to_sleep = usecs_from(now, next_run_time);
+            }
+
+            watch_callback();
+
+            now = get_current_time();
+            timeval_add(next_run_time, interval, next_run_time);
+            if (usecs_from(now, next_run_time) < 0) {
+                // The next execution is overdue, so we set next_run_time to now to prevent drift.
+                next_run_time = now;
+            }
         }
     }
 }

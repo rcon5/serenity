@@ -1,56 +1,69 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
+
+#include <LibGfx/Rect.h>
 
 namespace GUI {
 
 class Margins {
 public:
-    Margins() { }
-    Margins(int left, int top, int right, int bottom)
-        : m_left(left)
-        , m_top(top)
-        , m_right(right)
-        , m_bottom(bottom)
+    Margins() = default;
+    Margins(int all)
+        : m_top(all)
+        , m_right(all)
+        , m_bottom(all)
+        , m_left(all)
     {
     }
-    ~Margins() { }
+    Margins(int vertical, int horizontal)
+        : m_top(vertical)
+        , m_right(horizontal)
+        , m_bottom(vertical)
+        , m_left(horizontal)
+    {
+    }
+    Margins(int top, int horizontal, int bottom)
+        : m_top(top)
+        , m_right(horizontal)
+        , m_bottom(bottom)
+        , m_left(horizontal)
+    {
+    }
+    Margins(int top, int right, int bottom, int left)
+        : m_top(top)
+        , m_right(right)
+        , m_bottom(bottom)
+        , m_left(left)
+    {
+    }
+    ~Margins() = default;
+
+    [[nodiscard]] Gfx::IntRect applied_to(Gfx::IntRect const& input) const
+    {
+        Gfx::IntRect output = input;
+        output.take_from_left(left());
+        output.take_from_top(top());
+        output.take_from_right(right());
+        output.take_from_bottom(bottom());
+        return output;
+    }
 
     bool is_null() const { return !m_left && !m_top && !m_right && !m_bottom; }
 
-    int left() const { return m_left; }
     int top() const { return m_top; }
     int right() const { return m_right; }
     int bottom() const { return m_bottom; }
+    int left() const { return m_left; }
 
-    void set_left(int value) { m_left = value; }
     void set_top(int value) { m_top = value; }
     void set_right(int value) { m_right = value; }
     void set_bottom(int value) { m_bottom = value; }
+    void set_left(int value) { m_left = value; }
 
     bool operator==(const Margins& other) const
     {
@@ -60,10 +73,46 @@ public:
             && m_bottom == other.m_bottom;
     }
 
+    Margins operator+(Margins const& other) const
+    {
+        return Margins { top() + other.top(), right() + other.right(), bottom() + other.bottom(), left() + other.left() };
+    }
+
 private:
-    int m_left { 0 };
     int m_top { 0 };
     int m_right { 0 };
     int m_bottom { 0 };
+    int m_left { 0 };
 };
+
 }
+
+#define REGISTER_MARGINS_PROPERTY(property_name, getter, setter) \
+    register_property(                                           \
+        property_name, [this]() {                                  \
+            auto m = getter();                                     \
+            JsonObject margins_object;                             \
+            margins_object.set("left", m.left());                  \
+            margins_object.set("right", m.right());                \
+            margins_object.set("top", m.top());                    \
+            margins_object.set("bottom", m.bottom());              \
+            return margins_object; },                             \
+        [this](auto& value) {                                    \
+            if (!value.is_array())                               \
+                return false;                                    \
+            auto size = value.as_array().size();                 \
+            if (size == 0 || size > 4)                           \
+                return false;                                    \
+            int m[4];                                            \
+            for (size_t i = 0; i < size; ++i)                    \
+                m[i] = value.as_array().at(i).to_i32();          \
+            if (size == 1)                                       \
+                setter({ m[0] });                                \
+            else if (size == 2)                                  \
+                setter({ m[0], m[1] });                          \
+            else if (size == 3)                                  \
+                setter({ m[0], m[1], m[2] });                    \
+            else                                                 \
+                setter({ m[0], m[1], m[2], m[3] });              \
+            return true;                                         \
+        });

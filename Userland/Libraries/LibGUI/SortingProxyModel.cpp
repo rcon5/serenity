@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/QuickSort.h>
@@ -34,7 +14,7 @@ SortingProxyModel::SortingProxyModel(NonnullRefPtr<Model> source)
     : m_source(move(source))
 {
     m_source->register_client(*this);
-    invalidate();
+    update_sort();
 }
 
 SortingProxyModel::~SortingProxyModel()
@@ -42,9 +22,15 @@ SortingProxyModel::~SortingProxyModel()
     m_source->unregister_client(*this);
 }
 
-void SortingProxyModel::invalidate(unsigned int flags)
+void SortingProxyModel::invalidate()
 {
-    if (flags == UpdateFlag::DontInvalidateIndexes) {
+    source().invalidate();
+    Model::invalidate();
+}
+
+void SortingProxyModel::update_sort(unsigned flags)
+{
+    if (flags == UpdateFlag::DontInvalidateIndices) {
         sort(m_last_key_column, m_last_sort_order);
     } else {
         m_mappings.clear();
@@ -60,25 +46,25 @@ void SortingProxyModel::invalidate(unsigned int flags)
 
 void SortingProxyModel::model_did_update(unsigned flags)
 {
-    invalidate(flags);
+    update_sort(flags);
 }
 
-bool SortingProxyModel::accepts_drag(const ModelIndex& proxy_index, const Vector<String>& mime_types) const
+bool SortingProxyModel::accepts_drag(ModelIndex const& proxy_index, Vector<String> const& mime_types) const
 {
     return source().accepts_drag(map_to_source(proxy_index), mime_types);
 }
 
-int SortingProxyModel::row_count(const ModelIndex& proxy_index) const
+int SortingProxyModel::row_count(ModelIndex const& proxy_index) const
 {
     return source().row_count(map_to_source(proxy_index));
 }
 
-int SortingProxyModel::column_count(const ModelIndex& proxy_index) const
+int SortingProxyModel::column_count(ModelIndex const& proxy_index) const
 {
     return source().column_count(map_to_source(proxy_index));
 }
 
-ModelIndex SortingProxyModel::map_to_source(const ModelIndex& proxy_index) const
+ModelIndex SortingProxyModel::map_to_source(ModelIndex const& proxy_index) const
 {
     if (!proxy_index.is_valid())
         return {};
@@ -98,7 +84,7 @@ ModelIndex SortingProxyModel::map_to_source(const ModelIndex& proxy_index) const
     return source().index(source_row, source_column, it->key);
 }
 
-ModelIndex SortingProxyModel::map_to_proxy(const ModelIndex& source_index) const
+ModelIndex SortingProxyModel::map_to_proxy(ModelIndex const& source_index) const
 {
     if (!source_index.is_valid())
         return {};
@@ -125,14 +111,9 @@ String SortingProxyModel::column_name(int column) const
     return source().column_name(column);
 }
 
-Variant SortingProxyModel::data(const ModelIndex& proxy_index, ModelRole role) const
+Variant SortingProxyModel::data(ModelIndex const& proxy_index, ModelRole role) const
 {
     return source().data(map_to_source(proxy_index), role);
-}
-
-void SortingProxyModel::update()
-{
-    source().update();
 }
 
 StringView SortingProxyModel::drag_data_type() const
@@ -140,7 +121,7 @@ StringView SortingProxyModel::drag_data_type() const
     return source().drag_data_type();
 }
 
-bool SortingProxyModel::less_than(const ModelIndex& index1, const ModelIndex& index2) const
+bool SortingProxyModel::less_than(ModelIndex const& index1, ModelIndex const& index2) const
 {
     auto data1 = index1.data(m_sort_role);
     auto data2 = index2.data(m_sort_role);
@@ -149,7 +130,7 @@ bool SortingProxyModel::less_than(const ModelIndex& index1, const ModelIndex& in
     return data1 < data2;
 }
 
-ModelIndex SortingProxyModel::index(int row, int column, const ModelIndex& parent) const
+ModelIndex SortingProxyModel::index(int row, int column, ModelIndex const& parent) const
 {
     if (row < 0 || column < 0)
         return {};
@@ -165,7 +146,7 @@ ModelIndex SortingProxyModel::index(int row, int column, const ModelIndex& paren
     return create_index(row, column, &mapping);
 }
 
-ModelIndex SortingProxyModel::parent_index(const ModelIndex& proxy_index) const
+ModelIndex SortingProxyModel::parent_index(ModelIndex const& proxy_index) const
 {
     if (!proxy_index.is_valid())
         return {};
@@ -182,8 +163,11 @@ ModelIndex SortingProxyModel::parent_index(const ModelIndex& proxy_index) const
 
 void SortingProxyModel::sort_mapping(Mapping& mapping, int column, SortOrder sort_order)
 {
+    int row_count = source().row_count(mapping.source_parent);
+    mapping.source_rows.resize(row_count);
+    mapping.proxy_rows.resize(row_count);
+
     if (column == -1) {
-        int row_count = source().row_count(mapping.source_parent);
         for (int i = 0; i < row_count; ++i) {
             mapping.source_rows[i] = i;
             mapping.proxy_rows[i] = i;
@@ -193,7 +177,6 @@ void SortingProxyModel::sort_mapping(Mapping& mapping, int column, SortOrder sor
 
     auto old_source_rows = mapping.source_rows;
 
-    int row_count = source().row_count(mapping.source_parent);
     for (int i = 0; i < row_count; ++i)
         mapping.source_rows[i] = i;
 
@@ -221,20 +204,20 @@ void SortingProxyModel::sort_mapping(Mapping& mapping, int column, SortOrder sor
 
         // Update the view's selection.
         view.selection().change_from_model({}, [&](ModelSelection& selection) {
-            Vector<ModelIndex> selected_indexes_in_source;
-            Vector<ModelIndex> stale_indexes_in_selection;
-            selection.for_each_index([&](const ModelIndex& index) {
+            Vector<ModelIndex> selected_indices_in_source;
+            Vector<ModelIndex> stale_indices_in_selection;
+            selection.for_each_index([&](ModelIndex const& index) {
                 if (index.parent() == mapping.source_parent) {
-                    stale_indexes_in_selection.append(index);
-                    selected_indexes_in_source.append(source().index(old_source_rows[index.row()], index.column(), mapping.source_parent));
+                    stale_indices_in_selection.append(index);
+                    selected_indices_in_source.append(source().index(old_source_rows[index.row()], index.column(), mapping.source_parent));
                 }
             });
 
-            for (auto& index : stale_indexes_in_selection) {
+            for (auto& index : stale_indices_in_selection) {
                 selection.remove(index);
             }
 
-            for (auto& index : selected_indexes_in_source) {
+            for (auto& index : selected_indices_in_source) {
                 for (size_t i = 0; i < mapping.source_rows.size(); ++i) {
                     if (mapping.source_rows[i] == index.row()) {
                         auto new_source_index = this->index(i, index.column(), mapping.source_parent);
@@ -257,10 +240,10 @@ void SortingProxyModel::sort(int column, SortOrder sort_order)
     m_last_key_column = column;
     m_last_sort_order = sort_order;
 
-    did_update(UpdateFlag::DontInvalidateIndexes);
+    did_update(UpdateFlag::DontInvalidateIndices);
 }
 
-SortingProxyModel::InternalMapIterator SortingProxyModel::build_mapping(const ModelIndex& source_parent)
+SortingProxyModel::InternalMapIterator SortingProxyModel::build_mapping(ModelIndex const& source_parent)
 {
     auto it = m_mappings.find(source_parent);
     if (it != m_mappings.end())
@@ -290,12 +273,12 @@ bool SortingProxyModel::is_column_sortable(int column_index) const
     return source().is_column_sortable(column_index);
 }
 
-bool SortingProxyModel::is_editable(const ModelIndex& proxy_index) const
+bool SortingProxyModel::is_editable(ModelIndex const& proxy_index) const
 {
     return source().is_editable(map_to_source(proxy_index));
 }
 
-void SortingProxyModel::set_data(const ModelIndex& proxy_index, const Variant& data)
+void SortingProxyModel::set_data(ModelIndex const& proxy_index, Variant const& data)
 {
     source().set_data(map_to_source(proxy_index), data);
 }
@@ -305,12 +288,12 @@ bool SortingProxyModel::is_searchable() const
     return source().is_searchable();
 }
 
-Vector<ModelIndex, 1> SortingProxyModel::matches(const StringView& searching, unsigned flags, const ModelIndex& proxy_index)
+Vector<ModelIndex> SortingProxyModel::matches(StringView const& searching, unsigned flags, ModelIndex const& proxy_index)
 {
-    auto found_indexes = source().matches(searching, flags, map_to_source(proxy_index));
-    for (size_t i = 0; i < found_indexes.size(); i++)
-        found_indexes[i] = map_to_proxy(found_indexes[i]);
-    return found_indexes;
+    auto found_indices = source().matches(searching, flags, map_to_source(proxy_index));
+    for (size_t i = 0; i < found_indices.size(); i++)
+        found_indices[i] = map_to_proxy(found_indices[i]);
+    return found_indices;
 }
 
 }

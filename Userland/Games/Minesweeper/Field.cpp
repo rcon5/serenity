@@ -1,52 +1,32 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Field.h"
 #include <AK/HashTable.h>
 #include <AK/Queue.h>
-#include <LibCore/ConfigFile.h>
+#include <AK/Random.h>
+#include <LibConfig/Client.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/Button.h>
 #include <LibGUI/Label.h>
 #include <LibGUI/Painter.h>
 #include <LibGfx/Palette.h>
-#include <time.h>
 
 class SquareButton final : public GUI::Button {
     C_OBJECT(SquareButton);
 
 public:
-    Function<void()> on_right_click;
+    Function<void()> on_secondary_click;
     Function<void()> on_middle_click;
 
     virtual void mousedown_event(GUI::MouseEvent& event) override
     {
-        if (event.button() == GUI::MouseButton::Right) {
-            if (on_right_click)
-                on_right_click();
+        if (event.button() == GUI::MouseButton::Secondary) {
+            if (on_secondary_click)
+                on_secondary_click();
         }
         if (event.button() == GUI::MouseButton::Middle) {
             if (on_middle_click)
@@ -70,8 +50,8 @@ public:
 
     virtual void mousedown_event(GUI::MouseEvent& event) override
     {
-        if (event.button() == GUI::MouseButton::Right || event.button() == GUI::MouseButton::Left) {
-            if (event.buttons() == (GUI::MouseButton::Right | GUI::MouseButton::Left) || m_square.field->is_single_chording()) {
+        if (event.button() == GUI::MouseButton::Secondary || event.button() == GUI::MouseButton::Primary) {
+            if (event.buttons() == (GUI::MouseButton::Secondary | GUI::MouseButton::Primary) || m_square.field->is_single_chording()) {
                 m_chord = true;
                 m_square.field->set_chord_preview(m_square, true);
             }
@@ -102,7 +82,7 @@ public:
     virtual void mouseup_event(GUI::MouseEvent& event) override
     {
         if (m_chord) {
-            if (event.button() == GUI::MouseButton::Left || event.button() == GUI::MouseButton::Right) {
+            if (event.button() == GUI::MouseButton::Primary || event.button() == GUI::MouseButton::Secondary) {
                 if (rect().contains(event.position())) {
                     if (on_chord_click)
                         on_chord_click();
@@ -131,22 +111,21 @@ Field::Field(GUI::Label& flag_label, GUI::Label& time_label, GUI::Button& face_b
     , m_time_label(time_label)
     , m_on_size_changed(move(on_size_changed))
 {
-    srand(time(nullptr));
     m_timer = add<Core::Timer>();
     m_timer->on_timeout = [this] {
         ++m_time_elapsed;
         m_time_label.set_text(String::formatted("{}.{}", m_time_elapsed / 10, m_time_elapsed % 10));
     };
     m_timer->set_interval(100);
-    m_mine_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/mine.png");
-    m_flag_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/flag.png");
-    m_badflag_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/badflag.png");
-    m_consider_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/consider.png");
-    m_default_face_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/face-default.png");
-    m_good_face_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/face-good.png");
-    m_bad_face_bitmap = Gfx::Bitmap::load_from_file("/res/icons/minesweeper/face-bad.png");
+    m_mine_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/mine.png");
+    m_flag_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/flag.png");
+    m_badflag_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/badflag.png");
+    m_consider_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/consider.png");
+    m_default_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-default.png");
+    m_good_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-good.png");
+    m_bad_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-bad.png");
     for (int i = 0; i < 8; ++i)
-        m_number_bitmap[i] = Gfx::Bitmap::load_from_file(String::formatted("/res/icons/minesweeper/{}.png", i + 1));
+        m_number_bitmap[i] = Gfx::Bitmap::try_load_from_file(String::formatted("/res/icons/minesweeper/{}.png", i + 1));
     // Square with mine will be filled with background color later, i.e. red
     m_mine_palette.set_color(Gfx::ColorRole::Base, Color::from_rgb(0xff4040));
 
@@ -157,11 +136,10 @@ Field::Field(GUI::Label& flag_label, GUI::Label& time_label, GUI::Button& face_b
     set_face(Face::Default);
 
     {
-        auto config = Core::ConfigFile::get_for_app("Minesweeper");
-        bool single_chording = config->read_num_entry("Minesweeper", "SingleChording", false);
-        int mine_count = config->read_num_entry("Game", "MineCount", 10);
-        int rows = config->read_num_entry("Game", "Rows", 9);
-        int columns = config->read_num_entry("Game", "Columns", 9);
+        bool single_chording = Config::read_bool("Minesweeper", "Game", "SingleChording", false);
+        int mine_count = Config::read_i32("Minesweeper", "Game", "MineCount", 10);
+        int rows = Config::read_i32("Minesweeper", "Game", "Rows", 9);
+        int columns = Config::read_i32("Minesweeper", "Game", "Columns", 9);
 
         // Do a quick sanity check to make sure the user hasn't tried anything crazy
         if (mine_count > rows * columns || rows <= 0 || columns <= 0 || mine_count <= 0)
@@ -237,7 +215,7 @@ void Field::reset()
 
     HashTable<int> mines;
     while (mines.size() != m_mine_count) {
-        int location = rand() % (rows() * columns());
+        int location = get_random_uniform(rows() * columns());
         if (!mines.contains(location))
             mines.set(location);
     }
@@ -270,8 +248,8 @@ void Field::reset()
                 square.button->on_click = [this, &square](auto) {
                     on_square_clicked(square);
                 };
-                square.button->on_right_click = [this, &square] {
-                    on_square_right_clicked(square);
+                square.button->on_secondary_click = [this, &square] {
+                    on_square_secondary_clicked(square);
                 };
                 square.button->on_middle_click = [this, &square] {
                     on_square_middle_clicked(square);
@@ -407,7 +385,7 @@ void Field::on_square_chorded(Square& square)
     });
 }
 
-void Field::on_square_right_clicked(Square& square)
+void Field::on_square_secondary_clicked(Square& square)
 {
     if (square.is_swept)
         return;
@@ -508,10 +486,9 @@ void Field::set_field_size(size_t rows, size_t columns, size_t mine_count)
     if (m_rows == rows && m_columns == columns && m_mine_count == mine_count)
         return;
     {
-        auto config = Core::ConfigFile::get_for_app("Minesweeper");
-        config->write_num_entry("Game", "MineCount", mine_count);
-        config->write_num_entry("Game", "Rows", rows);
-        config->write_num_entry("Game", "Columns", columns);
+        Config::write_i32("Minesweeper", "Game", "MineCount", mine_count);
+        Config::write_i32("Minesweeper", "Game", "Rows", rows);
+        Config::write_i32("Minesweeper", "Game", "Columns", columns);
     }
     m_rows = rows;
     m_columns = columns;
@@ -523,9 +500,8 @@ void Field::set_field_size(size_t rows, size_t columns, size_t mine_count)
 
 void Field::set_single_chording(bool enabled)
 {
-    auto config = Core::ConfigFile::get_for_app("Minesweeper");
     m_single_chording = enabled;
-    config->write_bool_entry("Minesweeper", "SingleChording", m_single_chording);
+    Config::write_bool("Minesweeper", "Game", "SingleChording", m_single_chording);
 }
 
 Square::Square()

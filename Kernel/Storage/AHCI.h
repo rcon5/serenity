@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2021, Liav A. <liavalb@hotmail.co.il>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -164,8 +144,8 @@ public:
 
     void set_at(u8 index) const
     {
-        VERIFY(((1 << index) & m_bit_mask) != 0);
-        m_bitfield = m_bitfield | ((1 << index) & m_bit_mask);
+        VERIFY(((1u << index) & m_bit_mask) != 0);
+        m_bitfield = m_bitfield | ((1u << index) & m_bit_mask);
     }
 
     void set_all() const
@@ -173,23 +153,28 @@ public:
         m_bitfield = m_bitfield | (0xffffffff & m_bit_mask);
     }
 
-    bool is_set_at(u32 port_index) const
+    bool is_set_at(u8 port_index) const
     {
-        return m_bitfield & ((1 << port_index) & m_bit_mask);
+        return m_bitfield & ((1u << port_index) & m_bit_mask);
+    }
+
+    bool is_zeroed() const
+    {
+        return (m_bitfield & m_bit_mask) == 0;
     }
 
     Vector<u8> to_vector() const
     {
         // FIXME: Add a sync mechanism!
-        Vector<u8> indexes;
+        Vector<u8> indices;
         u32 bitfield = m_bitfield & m_bit_mask;
         for (size_t index = 0; index < 32; index++) {
             if (bitfield & 1) {
-                indexes.append(index);
+                indices.append(index);
             }
             bitfield >>= 1;
         }
-        return indexes;
+        return indices;
     }
 
     u32 bit_mask() const { return m_bit_mask; };

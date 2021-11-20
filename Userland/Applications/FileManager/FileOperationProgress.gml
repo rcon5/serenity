@@ -2,7 +2,7 @@
     fill_with_background_color: true
 
     layout: @GUI::VerticalBoxLayout {
-        margins: [4, 4, 4, 4]
+        margins: [4]
     }
 
     @GUI::Widget {
@@ -47,6 +47,7 @@
             font_weight: "Bold"
             text_alignment: "CenterLeft"
             fixed_width: 80
+            name: "current_file_action_label"
         }
 
         @GUI::Label {

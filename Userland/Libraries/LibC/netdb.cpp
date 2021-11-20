@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Assertions.h>
@@ -30,6 +10,7 @@
 #include <AK/String.h>
 #include <Kernel/Net/IPv4.h>
 #include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <stdio.h>
@@ -46,6 +27,11 @@ static in_addr_t* __gethostbyname_address_list_buffer[2];
 
 static hostent __gethostbyaddr_buffer;
 static in_addr_t* __gethostbyaddr_address_list_buffer[2];
+// XXX: IPCCompiler depends on LibC. Because of this, it cannot be compiled
+// before LibC is. However, the lookup magic can only be obtained from the
+// endpoint itself if IPCCompiler has compiled the IPC file, so this creates
+// a chicken-and-egg situation. Because of this, the LookupServer endpoint magic
+// is hardcoded here.
 static constexpr i32 lookup_server_endpoint_magic = 9001;
 
 // Get service entry buffers and file information for the getservent() family of functions.
@@ -206,7 +192,6 @@ static String gethostbyaddr_name_buffer;
 
 hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 {
-
     if (type != AF_INET) {
         errno = EAFNOSUPPORT;
         return nullptr;
@@ -297,7 +282,7 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 
 struct servent* getservent()
 {
-    //If the services file is not open, attempt to open it and return null if it fails.
+    // If the services file is not open, attempt to open it and return null if it fails.
     if (!services_file) {
         services_file = fopen(services_path, "r");
 
@@ -439,23 +424,21 @@ void endservent()
 // false if failure occurs.
 static bool fill_getserv_buffers(const char* line, ssize_t read)
 {
-    //Splitting the line by tab delimiter and filling the servent buffers name, port, and protocol members.
-    String string_line = String(line, read);
-    string_line.replace(" ", "\t", true);
-    auto split_line = string_line.split('\t');
+    // Splitting the line by tab delimiter and filling the servent buffers name, port, and protocol members.
+    auto split_line = StringView(line, read).replace(" ", "\t", true).split('\t');
 
     // This indicates an incorrect file format.
     // Services file entries should always at least contain
     // name and port/protocol, separated by tabs.
     if (split_line.size() < 2) {
-        fprintf(stderr, "getservent(): malformed services file\n");
+        warnln("getservent(): malformed services file");
         return false;
     }
     __getserv_name_buffer = split_line[0];
 
     auto port_protocol_split = String(split_line[1]).split('/');
     if (port_protocol_split.size() < 2) {
-        fprintf(stderr, "getservent(): malformed services file\n");
+        warnln("getservent(): malformed services file");
         return false;
     }
     auto number = port_protocol_split[0].to_int();
@@ -465,11 +448,7 @@ static bool fill_getserv_buffers(const char* line, ssize_t read)
     __getserv_port_buffer = number.value();
 
     // Remove any annoying whitespace at the end of the protocol.
-    port_protocol_split[1].replace(" ", "", true);
-    port_protocol_split[1].replace("\t", "", true);
-    port_protocol_split[1].replace("\n", "", true);
-
-    __getserv_protocol_buffer = port_protocol_split[1];
+    __getserv_protocol_buffer = port_protocol_split[1].replace(" ", "", true).replace("\t", "", true).replace("\n", "", true);
     __getserv_alias_list_buffer.clear();
 
     // If there are aliases for the service, we will fill the alias list buffer.
@@ -480,8 +459,9 @@ static bool fill_getserv_buffers(const char* line, ssize_t read)
                 break;
             }
             auto alias = split_line[i].to_byte_buffer();
-            alias.append("\0", sizeof(char));
-            __getserv_alias_list_buffer.append(alias);
+            if (!alias.try_append("\0", sizeof(char)))
+                return false;
+            __getserv_alias_list_buffer.append(move(alias));
         }
     }
 
@@ -624,13 +604,12 @@ void endprotoent()
 static bool fill_getproto_buffers(const char* line, ssize_t read)
 {
     String string_line = String(line, read);
-    string_line.replace(" ", "\t", true);
-    auto split_line = string_line.split('\t');
+    auto split_line = string_line.replace(" ", "\t", true).split('\t');
 
     // This indicates an incorrect file format. Protocols file entries should
     // always have at least a name and a protocol.
     if (split_line.size() < 2) {
-        fprintf(stderr, "getprotoent(): malformed protocols file\n");
+        warnln("getprotoent(): malformed protocols file");
         return false;
     }
     __getproto_name_buffer = split_line[0];
@@ -650,8 +629,9 @@ static bool fill_getproto_buffers(const char* line, ssize_t read)
             if (split_line[i].starts_with('#'))
                 break;
             auto alias = split_line[i].to_byte_buffer();
-            alias.append("\0", sizeof(char));
-            __getproto_alias_list_buffer.append(alias);
+            if (!alias.try_append("\0", sizeof(char)))
+                return false;
+            __getproto_alias_list_buffer.append(move(alias));
         }
     }
 

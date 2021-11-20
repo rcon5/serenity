@@ -1,31 +1,12 @@
 /*
- * Copyright (c) 2021, Linus Groh <mail@linusgroh.de>
- * All rights reserved.
+ * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Function.h>
 #include <LibJS/Interpreter.h>
+#include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/GlobalObject.h>
 #include <LibJS/Runtime/Promise.h>
@@ -36,7 +17,7 @@
 namespace JS {
 
 PromisePrototype::PromisePrototype(GlobalObject& global_object)
-    : Object(*global_object.object_prototype())
+    : PrototypeObject(*global_object.object_prototype())
 {
 }
 
@@ -49,56 +30,35 @@ void PromisePrototype::initialize(GlobalObject& global_object)
     define_native_function(vm.names.then, then, 2, attr);
     define_native_function(vm.names.catch_, catch_, 1, attr);
     define_native_function(vm.names.finally, finally, 1, attr);
+
+    // 27.2.5.5 Promise.prototype [ @@toStringTag ], https://tc39.es/ecma262/#sec-promise.prototype-@@tostringtag
+    define_direct_property(*vm.well_known_symbol_to_string_tag(), js_string(vm, vm.names.Promise.as_string()), Attribute::Configurable);
 }
 
-static Promise* promise_from(VM& vm, GlobalObject& global_object)
-{
-    auto* this_object = vm.this_value(global_object).to_object(global_object);
-    if (!this_object)
-        return nullptr;
-    if (!is<Promise>(this_object)) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::NotA, vm.names.Promise);
-        return nullptr;
-    }
-    return static_cast<Promise*>(this_object);
-}
-
-// 27.2.5.4 Promise.prototype.then, https://tc39.es/ecma262/#sec-promise.prototype.then
+// 27.2.5.4 Promise.prototype.then ( onFulfilled, onRejected ), https://tc39.es/ecma262/#sec-promise.prototype.then
 JS_DEFINE_NATIVE_FUNCTION(PromisePrototype::then)
 {
-    auto* promise = promise_from(vm, global_object);
-    if (!promise)
-        return {};
+    auto* promise = TRY(typed_this_object(global_object));
     auto on_fulfilled = vm.argument(0);
     auto on_rejected = vm.argument(1);
-    auto* constructor = species_constructor(global_object, *promise, *global_object.promise_constructor());
-    if (vm.exception())
-        return {};
-    auto result_capability = new_promise_capability(global_object, constructor);
-    if (vm.exception())
-        return {};
+    auto* constructor = TRY(species_constructor(global_object, *promise, *global_object.promise_constructor()));
+    auto result_capability = TRY(new_promise_capability(global_object, constructor));
     return promise->perform_then(on_fulfilled, on_rejected, result_capability);
 }
 
-// 27.2.5.1 Promise.prototype.catch, https://tc39.es/ecma262/#sec-promise.prototype.catch
+// 27.2.5.1 Promise.prototype.catch ( onRejected ), https://tc39.es/ecma262/#sec-promise.prototype.catch
 JS_DEFINE_NATIVE_FUNCTION(PromisePrototype::catch_)
 {
-    auto* this_object = vm.this_value(global_object).to_object(global_object);
-    if (!this_object)
-        return {};
+    auto this_value = vm.this_value(global_object);
     auto on_rejected = vm.argument(0);
-    return this_object->invoke(vm.names.then, js_undefined(), on_rejected);
+    return TRY(this_value.invoke(global_object, vm.names.then, js_undefined(), on_rejected));
 }
 
-// 27.2.5.3 Promise.prototype.finally, https://tc39.es/ecma262/#sec-promise.prototype.finally
+// 27.2.5.3 Promise.prototype.finally ( onFinally ), https://tc39.es/ecma262/#sec-promise.prototype.finally
 JS_DEFINE_NATIVE_FUNCTION(PromisePrototype::finally)
 {
-    auto* promise = vm.this_value(global_object).to_object(global_object);
-    if (!promise)
-        return {};
-    auto* constructor = species_constructor(global_object, *promise, *global_object.promise_constructor());
-    if (vm.exception())
-        return {};
+    auto* promise = TRY(vm.this_value(global_object).to_object(global_object));
+    auto* constructor = TRY(species_constructor(global_object, *promise, *global_object.promise_constructor()));
     Value then_finally;
     Value catch_finally;
     auto on_finally = vm.argument(0);
@@ -107,46 +67,38 @@ JS_DEFINE_NATIVE_FUNCTION(PromisePrototype::finally)
         catch_finally = on_finally;
     } else {
         // 27.2.5.3.1 Then Finally Functions, https://tc39.es/ecma262/#sec-thenfinallyfunctions
-        auto* then_finally_function = NativeFunction::create(global_object, "", [constructor_handle = make_handle(constructor), on_finally_handle = make_handle(&on_finally.as_function())](auto& vm, auto& global_object) -> Value {
-            auto& constructor = const_cast<Object&>(*constructor_handle.cell());
-            auto& on_finally = const_cast<Function&>(*on_finally_handle.cell());
+        auto* then_finally_function = NativeFunction::create(global_object, "", [constructor_handle = make_handle(constructor), on_finally_handle = make_handle(&on_finally.as_function())](auto& vm, auto& global_object) -> ThrowCompletionOr<Value> {
+            auto& constructor = const_cast<FunctionObject&>(*constructor_handle.cell());
+            auto& on_finally = const_cast<FunctionObject&>(*on_finally_handle.cell());
             auto value = vm.argument(0);
-            auto result = vm.call(on_finally, js_undefined());
-            if (vm.exception())
-                return {};
-            auto* promise = promise_resolve(global_object, constructor, result);
-            if (vm.exception())
-                return {};
-            auto* value_thunk = NativeFunction::create(global_object, "", [value](auto&, auto&) -> Value {
+            auto result = TRY(vm.call(on_finally, js_undefined()));
+            auto* promise = TRY(promise_resolve(global_object, constructor, result));
+            auto* value_thunk = NativeFunction::create(global_object, "", [value](auto&, auto&) -> ThrowCompletionOr<Value> {
                 return value;
             });
-            return promise->invoke(vm.names.then, value_thunk);
+            return TRY(Value(promise).invoke(global_object, vm.names.then, value_thunk));
         });
-        then_finally_function->define_property(vm.names.length, Value(1));
+        then_finally_function->define_direct_property(vm.names.length, Value(1), Attribute::Configurable);
 
         // 27.2.5.3.2 Catch Finally Functions, https://tc39.es/ecma262/#sec-catchfinallyfunctions
-        auto* catch_finally_function = NativeFunction::create(global_object, "", [constructor_handle = make_handle(constructor), on_finally_handle = make_handle(&on_finally.as_function())](auto& vm, auto& global_object) -> Value {
-            auto& constructor = const_cast<Object&>(*constructor_handle.cell());
-            auto& on_finally = const_cast<Function&>(*on_finally_handle.cell());
+        auto* catch_finally_function = NativeFunction::create(global_object, "", [constructor_handle = make_handle(constructor), on_finally_handle = make_handle(&on_finally.as_function())](auto& vm, auto& global_object) -> ThrowCompletionOr<Value> {
+            auto& constructor = const_cast<FunctionObject&>(*constructor_handle.cell());
+            auto& on_finally = const_cast<FunctionObject&>(*on_finally_handle.cell());
             auto reason = vm.argument(0);
-            auto result = vm.call(on_finally, js_undefined());
-            if (vm.exception())
-                return {};
-            auto* promise = promise_resolve(global_object, constructor, result);
-            if (vm.exception())
-                return {};
-            auto* thrower = NativeFunction::create(global_object, "", [reason](auto& vm, auto& global_object) -> Value {
+            auto result = TRY(vm.call(on_finally, js_undefined()));
+            auto* promise = TRY(promise_resolve(global_object, constructor, result));
+            auto* thrower = NativeFunction::create(global_object, "", [reason](auto& vm, auto& global_object) -> ThrowCompletionOr<Value> {
                 vm.throw_exception(global_object, reason);
-                return {};
+                return throw_completion(reason);
             });
-            return promise->invoke(vm.names.then, thrower);
+            return TRY(Value(promise).invoke(global_object, vm.names.then, thrower));
         });
-        catch_finally_function->define_property(vm.names.length, Value(1));
+        catch_finally_function->define_direct_property(vm.names.length, Value(1), Attribute::Configurable);
 
         then_finally = Value(then_finally_function);
         catch_finally = Value(catch_finally_function);
     }
-    return promise->invoke(vm.names.then, then_finally, catch_finally);
+    return TRY(Value(promise).invoke(global_object, vm.names.then, then_finally, catch_finally));
 }
 
 }

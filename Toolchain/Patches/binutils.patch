@@ -1,39 +1,42 @@
 diff --git a/bfd/config.bfd b/bfd/config.bfd
-index e7b55b0d..27c54fa4 100644
+index 30087e3b..8b192b2e 100644
 --- a/bfd/config.bfd
 +++ b/bfd/config.bfd
-@@ -225,6 +225,26 @@ esac
+@@ -223,7 +223,29 @@ esac
+ 
  case "${targ}" in
  # START OF targmatch.h
- #ifdef BFD64
 +
 +  i[3-7]86-*-serenity*)
 +    targ_defvec=i386_elf32_vec
 +    targ_selvecs=
-+    targ64_selvecs=x86_64_elf64_vec
 +    ;;
-+#ifdef BFD64
+ #ifdef BFD64
 +  x86_64-*-serenity*)
 +    targ_defvec=x86_64_elf64_vec
 +    targ_selvecs=i386_elf32_vec
 +    want64=true
 +    ;;
-+#endif
 +
 +  arm-*-serenity*)
 +    targ_defvec=arm_elf32_le_vec
 +    targ_selvecs=
 +    targ64_selvecs=
 +    ;;
++  aarch64-*-serenity*)
++    targ_defvec=aarch64_elf64_le_vec
++    targ_selvecs=
++    want64=true
++    ;;
 +
    aarch64-*-darwin*)
      targ_defvec=aarch64_mach_o_vec
      targ_selvecs="arm_mach_o_vec mach_o_le_vec mach_o_be_vec mach_o_fat_vec"
 diff --git a/config.sub b/config.sub
-index b0f84923..41eb9993 100755
+index 7384e919..aa02c3f6 100755
 --- a/config.sub
 +++ b/config.sub
-@@ -1693,6 +1693,7 @@ case $os in
+@@ -1700,6 +1700,7 @@ case $os in
  	# The portable systems comes first.
  	# Each alternative MUST end in a * to match a version number.
  	gnu* | android* | bsd* | mach* | minix* | genix* | ultrix* | irix* \
@@ -42,20 +45,21 @@ index b0f84923..41eb9993 100755
  	     | hpux* | unos* | osf* | luna* | dgux* | auroraux* | solaris* \
  	     | sym* |  plan9* | psp* | sim* | xray* | os68k* | v88r* \
 diff --git a/gas/configure.tgt b/gas/configure.tgt
-index 6f46e0a6..a563a572 100644
+index 338892ad..3c03ee8b 100644
 --- a/gas/configure.tgt
 +++ b/gas/configure.tgt
-@@ -123,6 +123,8 @@ esac
+@@ -123,6 +123,9 @@ esac
  generic_target=${cpu_type}-$vendor-$os
  # Note: This table is alpha-sorted, please try to keep it that way.
  case ${generic_target} in
 +  i386-*-serenity*)                     fmt=elf;;
 +  arm-*-serenity*)                      fmt=elf;;
++  aarch64-*-serenity*)                  fmt=elf;;
    aarch64*-*-elf*)			fmt=elf;;
    aarch64*-*-fuchsia*)			fmt=elf;;
-   aarch64*-*-linux*)			fmt=elf em=linux
+   aarch64*-*-genode*)			fmt=elf;;
 diff --git a/ld/Makefile.am b/ld/Makefile.am
-index 2c9a4873..1e1c97c2 100644
+index f8e99325..bc55fd2b 100644
 --- a/ld/Makefile.am
 +++ b/ld/Makefile.am
 @@ -174,6 +174,7 @@ ALL_EMULATION_SOURCES = \
@@ -67,10 +71,10 @@ index 2c9a4873..1e1c97c2 100644
  	earmelfb_fbsd.c \
  	earmelfb_fuchsia.c \
 diff --git a/ld/Makefile.in b/ld/Makefile.in
-index b41941c8..a5be52e8 100644
+index ef2e99e0..657d24a2 100644
 --- a/ld/Makefile.in
 +++ b/ld/Makefile.in
-@@ -663,6 +663,7 @@ ALL_EMULATION_SOURCES = \
+@@ -664,6 +664,7 @@ ALL_EMULATION_SOURCES = \
  	earmelf_nbsd.c \
  	earmelf_phoenix.c \
  	earmelf_vxworks.c \
@@ -78,7 +82,7 @@ index b41941c8..a5be52e8 100644
  	earmelfb.c \
  	earmelfb_fbsd.c \
  	earmelfb_fuchsia.c \
-@@ -780,6 +781,7 @@ ALL_EMULATION_SOURCES = \
+@@ -774,6 +775,7 @@ ALL_EMULATION_SOURCES = \
  	eelf_i386_vxworks.c \
  	eelf_iamcu.c \
  	eelf_s390.c \
@@ -95,10 +99,10 @@ index b41941c8..a5be52e8 100644
  	ei386pep.c \
  	emmo.c
 diff --git a/ld/configure.tgt b/ld/configure.tgt
-index 0c780b24..d7c187e1 100644
+index 6205d7c9..00d97c37 100644
 --- a/ld/configure.tgt
 +++ b/ld/configure.tgt
-@@ -43,6 +43,19 @@ targ64_extra_libpath=
+@@ -43,6 +43,23 @@ targ64_extra_libpath=
  # Please try to keep this table more or less in alphabetic order - it
  # makes it much easier to lookup a specific archictecture.
  case "${targ}" in
@@ -114,6 +118,10 @@ index 0c780b24..d7c187e1 100644
 +arm-*-serenity*)
 +			targ_emul=armelf_serenity
 +			targ_extra_emuls="armelf_serenity armelf"
++			;;
++aarch64-*-serenity*)
++			targ_emul=aarch64elf
++			targ_extra_emuls=
 +			;;
  aarch64_be-*-elf)	targ_emul=aarch64elfb
  			targ_extra_emuls="aarch64elf aarch64elf32 aarch64elf32b armelfb armelf"
@@ -131,6 +139,13 @@ index 00000000..517cd626
 +
 +unset STACK_ADDR
 +unset EMBEDDED
+diff --git a/ld/emulparams/elf_aarch64_serenity.sh b/ld/emulparams/elf_aarch64_serenity.sh
+new file mode 100644
+index 00000000..45a05bf4
+--- /dev/null
++++ b/ld/emulparams/elf_aarch64_serenity.sh
+@@ -0,0 +1 @@
++. ${srcdir}/emulparams/elf_aarch64.sh
 diff --git a/ld/emulparams/elf_i386_serenity.sh b/ld/emulparams/elf_i386_serenity.sh
 new file mode 100644
 index 00000000..342d5298
@@ -147,3 +162,20 @@ index 00000000..a2af90a6
 +++ b/ld/emulparams/elf_x86_64_serenity.sh
 @@ -0,0 +1 @@
 +. ${srcdir}/emulparams/elf_x86_64.sh
+diff --git a/libiberty/rust-demangle.c b/libiberty/rust-demangle.c
+index df09b7b8..21566f5f 100644
+--- a/libiberty/rust-demangle.c
++++ b/libiberty/rust-demangle.c
+@@ -75,10 +75,10 @@ struct rust_demangler
+   int version;
+ 
+   /* Recursion depth.  */
+-  uint recursion;
++  unsigned int recursion;
+   /* Maximum number of times demangle_path may be called recursively.  */
+ #define RUST_MAX_RECURSION_COUNT  1024
+-#define RUST_NO_RECURSION_LIMIT   ((uint) -1)
++#define RUST_NO_RECURSION_LIMIT   ((unsigned int) -1)
+ 
+   uint64_t bound_lifetime_depth;
+ };

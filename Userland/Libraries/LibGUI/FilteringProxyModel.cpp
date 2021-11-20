@@ -1,34 +1,14 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGUI/FilteringProxyModel.h>
 
 namespace GUI {
 
-ModelIndex FilteringProxyModel::index(int row, int column, const ModelIndex& parent_index) const
+ModelIndex FilteringProxyModel::index(int row, int column, ModelIndex const& parent_index) const
 {
     int parent_row = parent_index.row();
     if (!parent_index.is_valid())
@@ -37,12 +17,12 @@ ModelIndex FilteringProxyModel::index(int row, int column, const ModelIndex& par
     return create_index(parent_row + row, column);
 }
 
-int FilteringProxyModel::row_count(const ModelIndex&) const
+int FilteringProxyModel::row_count(ModelIndex const&) const
 {
     return m_matching_indices.size();
 }
 
-int FilteringProxyModel::column_count(const ModelIndex& index) const
+int FilteringProxyModel::column_count(ModelIndex const& index) const
 {
     if (!index.is_valid())
         return {};
@@ -53,7 +33,7 @@ int FilteringProxyModel::column_count(const ModelIndex& index) const
     return m_model.column_count(m_matching_indices[index.row()]);
 }
 
-Variant FilteringProxyModel::data(const ModelIndex& index, ModelRole role) const
+Variant FilteringProxyModel::data(ModelIndex const& index, ModelRole role) const
 {
     if (!index.is_valid())
         return {};
@@ -64,9 +44,9 @@ Variant FilteringProxyModel::data(const ModelIndex& index, ModelRole role) const
     return m_matching_indices[index.row()].data(role);
 }
 
-void FilteringProxyModel::update()
+void FilteringProxyModel::invalidate()
 {
-    m_model.update();
+    m_model.invalidate();
     filter();
     did_update();
 }
@@ -99,15 +79,15 @@ void FilteringProxyModel::filter()
     add_matching(parent_index);
 }
 
-void FilteringProxyModel::set_filter_term(const StringView& term)
+void FilteringProxyModel::set_filter_term(StringView const& term)
 {
     if (m_filter_term == term)
         return;
     m_filter_term = term;
-    update();
+    invalidate();
 }
 
-ModelIndex FilteringProxyModel::map(const ModelIndex& index) const
+ModelIndex FilteringProxyModel::map(ModelIndex const& index) const
 {
     if (!index.is_valid())
         return {};
@@ -124,12 +104,12 @@ bool FilteringProxyModel::is_searchable() const
     return m_model.is_searchable();
 }
 
-Vector<ModelIndex, 1> FilteringProxyModel::matches(const StringView& searching, unsigned flags, const ModelIndex& index)
+Vector<ModelIndex> FilteringProxyModel::matches(StringView const& searching, unsigned flags, ModelIndex const& index)
 {
-    auto found_indexes = m_model.matches(searching, flags, index);
-    for (size_t i = 0; i < found_indexes.size(); i++)
-        found_indexes[i] = map(found_indexes[i]);
-    return found_indexes;
+    auto found_indices = m_model.matches(searching, flags, index);
+    for (size_t i = 0; i < found_indices.size(); i++)
+        found_indices[i] = map(found_indices[i]);
+    return found_indices;
 }
 
 }

@@ -1,31 +1,10 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <Kernel/FileSystem/FileDescription.h>
-#include <Kernel/Net/IPv4Socket.h>
+#include <Kernel/FileSystem/OpenFileDescription.h>
 #include <Kernel/Net/LocalSocket.h>
 #include <Kernel/Process.h>
 #include <Kernel/UnixTypes.h>
@@ -40,37 +19,36 @@ namespace Kernel {
             REQUIRE_PROMISE(unix);                \
     } while (0)
 
-KResultOr<int> Process::sys$socket(int domain, int type, int protocol)
+void Process::setup_socket_fd(int fd, NonnullRefPtr<OpenFileDescription> description, int type)
 {
-    REQUIRE_PROMISE_FOR_SOCKET_DOMAIN(domain);
-
-    if ((type & SOCK_TYPE_MASK) == SOCK_RAW && !is_superuser())
-        return EACCES;
-    int fd = alloc_fd();
-    if (fd < 0)
-        return fd;
-    auto result = Socket::create(domain, type, protocol);
-    if (result.is_error())
-        return result.error();
-    auto description_result = FileDescription::create(*result.value());
-    if (description_result.is_error())
-        return description_result.error();
-    description_result.value()->set_readable(true);
-    description_result.value()->set_writable(true);
+    description->set_readable(true);
+    description->set_writable(true);
     unsigned flags = 0;
     if (type & SOCK_CLOEXEC)
         flags |= FD_CLOEXEC;
     if (type & SOCK_NONBLOCK)
-        description_result.value()->set_blocking(false);
-    m_fds[fd].set(description_result.release_value(), flags);
-    return fd;
+        description->set_blocking(false);
+    m_fds[fd].set(*description, flags);
 }
 
-KResultOr<int> Process::sys$bind(int sockfd, Userspace<const sockaddr*> address, socklen_t address_length)
+KResultOr<FlatPtr> Process::sys$socket(int domain, int type, int protocol)
 {
-    auto description = file_description(sockfd);
-    if (!description)
-        return EBADF;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    REQUIRE_PROMISE_FOR_SOCKET_DOMAIN(domain);
+
+    if ((type & SOCK_TYPE_MASK) == SOCK_RAW && !is_superuser())
+        return EACCES;
+    auto fd_allocation = TRY(m_fds.allocate());
+    auto socket = TRY(Socket::create(domain, type, protocol));
+    auto description = TRY(OpenFileDescription::try_create(socket));
+    setup_socket_fd(fd_allocation.fd, move(description), type);
+    return fd_allocation.fd;
+}
+
+KResultOr<FlatPtr> Process::sys$bind(int sockfd, Userspace<const sockaddr*> address, socklen_t address_length)
+{
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto description = TRY(fds().open_file_description(sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
     auto& socket = *description->socket();
@@ -78,13 +56,12 @@ KResultOr<int> Process::sys$bind(int sockfd, Userspace<const sockaddr*> address,
     return socket.bind(address, address_length);
 }
 
-KResultOr<int> Process::sys$listen(int sockfd, int backlog)
+KResultOr<FlatPtr> Process::sys$listen(int sockfd, int backlog)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     if (backlog < 0)
         return EINVAL;
-    auto description = file_description(sockfd);
-    if (!description)
-        return EBADF;
+    auto description = TRY(fds().open_file_description(sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
     auto& socket = *description->socket();
@@ -94,20 +71,24 @@ KResultOr<int> Process::sys$listen(int sockfd, int backlog)
     return socket.listen(backlog);
 }
 
-KResultOr<int> Process::sys$accept(int accepting_socket_fd, Userspace<sockaddr*> user_address, Userspace<socklen_t*> user_address_size)
+KResultOr<FlatPtr> Process::sys$accept4(Userspace<const Syscall::SC_accept4_params*> user_params)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(accept);
+    auto params = TRY(copy_typed_from_user(user_params));
+
+    int accepting_socket_fd = params.sockfd;
+    Userspace<sockaddr*> user_address((FlatPtr)params.addr);
+    Userspace<socklen_t*> user_address_size((FlatPtr)params.addrlen);
+    int flags = params.flags;
 
     socklen_t address_size = 0;
-    if (user_address && !copy_from_user(&address_size, static_ptr_cast<const socklen_t*>(user_address_size)))
-        return EFAULT;
+    if (user_address) {
+        TRY(copy_from_user(&address_size, static_ptr_cast<const socklen_t*>(user_address_size)));
+    }
 
-    int accepted_socket_fd = alloc_fd();
-    if (accepted_socket_fd < 0)
-        return accepted_socket_fd;
-    auto accepting_socket_description = file_description(accepting_socket_fd);
-    if (!accepting_socket_description)
-        return EBADF;
+    auto fd_allocation = TRY(m_fds.allocate());
+    auto accepting_socket_description = TRY(fds().open_file_description(accepting_socket_fd));
     if (!accepting_socket_description->is_socket())
         return ENOTSOCK;
     auto& socket = *accepting_socket_description->socket();
@@ -125,84 +106,74 @@ KResultOr<int> Process::sys$accept(int accepting_socket_fd, Userspace<sockaddr*>
     VERIFY(accepted_socket);
 
     if (user_address) {
-        u8 address_buffer[sizeof(sockaddr_un)];
+        sockaddr_un address_buffer;
         address_size = min(sizeof(sockaddr_un), static_cast<size_t>(address_size));
-        accepted_socket->get_peer_address((sockaddr*)address_buffer, &address_size);
-        if (!copy_to_user(user_address, address_buffer, address_size))
-            return EFAULT;
-        if (!copy_to_user(user_address_size, &address_size))
-            return EFAULT;
+        accepted_socket->get_peer_address((sockaddr*)&address_buffer, &address_size);
+        TRY(copy_to_user(user_address, &address_buffer, address_size));
+        TRY(copy_to_user(user_address_size, &address_size));
     }
 
-    auto accepted_socket_description_result = FileDescription::create(*accepted_socket);
-    if (accepted_socket_description_result.is_error())
-        return accepted_socket_description_result.error();
+    auto accepted_socket_description = TRY(OpenFileDescription::try_create(*accepted_socket));
 
-    accepted_socket_description_result.value()->set_readable(true);
-    accepted_socket_description_result.value()->set_writable(true);
-    // NOTE: The accepted socket inherits fd flags from the accepting socket.
-    //       I'm not sure if this matches other systems but it makes sense to me.
-    accepted_socket_description_result.value()->set_blocking(accepting_socket_description->is_blocking());
-    m_fds[accepted_socket_fd].set(accepted_socket_description_result.release_value(), m_fds[accepting_socket_fd].flags());
+    accepted_socket_description->set_readable(true);
+    accepted_socket_description->set_writable(true);
+    if (flags & SOCK_NONBLOCK)
+        accepted_socket_description->set_blocking(false);
+    int fd_flags = 0;
+    if (flags & SOCK_CLOEXEC)
+        fd_flags |= FD_CLOEXEC;
+    m_fds[fd_allocation.fd].set(move(accepted_socket_description), fd_flags);
 
     // NOTE: Moving this state to Completed is what causes connect() to unblock on the client side.
     accepted_socket->set_setup_state(Socket::SetupState::Completed);
-    return accepted_socket_fd;
+    return fd_allocation.fd;
 }
 
-KResultOr<int> Process::sys$connect(int sockfd, Userspace<const sockaddr*> user_address, socklen_t user_address_size)
+KResultOr<FlatPtr> Process::sys$connect(int sockfd, Userspace<const sockaddr*> user_address, socklen_t user_address_size)
 {
-    int fd = alloc_fd();
-    if (fd < 0)
-        return fd;
-    auto description = file_description(sockfd);
-    if (!description)
-        return EBADF;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto description = TRY(fds().open_file_description(sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
-
     auto& socket = *description->socket();
     REQUIRE_PROMISE_FOR_SOCKET_DOMAIN(socket.domain());
-
     return socket.connect(*description, user_address, user_address_size, description->is_blocking() ? ShouldBlock::Yes : ShouldBlock::No);
 }
 
-KResultOr<int> Process::sys$shutdown(int sockfd, int how)
+KResultOr<FlatPtr> Process::sys$shutdown(int sockfd, int how)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
     if (how & ~SHUT_RDWR)
         return EINVAL;
-    auto description = file_description(sockfd);
-    if (!description)
-        return EBADF;
+    auto description = TRY(fds().open_file_description(sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
-
     auto& socket = *description->socket();
     REQUIRE_PROMISE_FOR_SOCKET_DOMAIN(socket.domain());
     return socket.shutdown(how);
 }
 
-KResultOr<ssize_t> Process::sys$sendmsg(int sockfd, Userspace<const struct msghdr*> user_msg, int flags)
+KResultOr<FlatPtr> Process::sys$sendmsg(int sockfd, Userspace<const struct msghdr*> user_msg, int flags)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
-    struct msghdr msg;
-    if (!copy_from_user(&msg, user_msg))
-        return EFAULT;
+    struct msghdr msg = {};
+    TRY(copy_from_user(&msg, user_msg));
 
     if (msg.msg_iovlen != 1)
         return ENOTSUP; // FIXME: Support this :)
     Vector<iovec, 1> iovs;
-    iovs.resize(msg.msg_iovlen);
-    if (!copy_n_from_user(iovs.data(), msg.msg_iov, msg.msg_iovlen))
-        return EFAULT;
+    if (!iovs.try_resize(msg.msg_iovlen))
+        return ENOMEM;
+    TRY(copy_n_from_user(iovs.data(), msg.msg_iov, msg.msg_iovlen));
+    if (iovs[0].iov_len > NumericLimits<ssize_t>::max())
+        return EINVAL;
 
     Userspace<const sockaddr*> user_addr((FlatPtr)msg.msg_name);
     socklen_t addr_length = msg.msg_namelen;
 
-    auto description = file_description(sockfd);
-    if (!description)
-        return EBADF;
+    auto description = TRY(fds().open_file_description(sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
     auto& socket = *description->socket();
@@ -214,30 +185,29 @@ KResultOr<ssize_t> Process::sys$sendmsg(int sockfd, Userspace<const struct msghd
     auto result = socket.sendto(*description, data_buffer.value(), iovs[0].iov_len, flags, user_addr, addr_length);
     if (result.is_error())
         return result.error();
-    return result.value();
+    else
+        return result.release_value();
 }
 
-KResultOr<ssize_t> Process::sys$recvmsg(int sockfd, Userspace<struct msghdr*> user_msg, int flags)
+KResultOr<FlatPtr> Process::sys$recvmsg(int sockfd, Userspace<struct msghdr*> user_msg, int flags)
 {
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
 
     struct msghdr msg;
-    if (!copy_from_user(&msg, user_msg))
-        return EFAULT;
+    TRY(copy_from_user(&msg, user_msg));
 
     if (msg.msg_iovlen != 1)
         return ENOTSUP; // FIXME: Support this :)
     Vector<iovec, 1> iovs;
-    iovs.resize(msg.msg_iovlen);
-    if (!copy_n_from_user(iovs.data(), msg.msg_iov, msg.msg_iovlen))
-        return EFAULT;
+    if (!iovs.try_resize(msg.msg_iovlen))
+        return ENOMEM;
+    TRY(copy_n_from_user(iovs.data(), msg.msg_iov, msg.msg_iovlen));
 
     Userspace<sockaddr*> user_addr((FlatPtr)msg.msg_name);
     Userspace<socklen_t*> user_addr_length(msg.msg_name ? (FlatPtr)&user_msg.unsafe_userspace_ptr()->msg_namelen : 0);
 
-    auto description = file_description(sockfd);
-    if (!description)
-        return EBADF;
+    auto description = TRY(fds().open_file_description(sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
     auto& socket = *description->socket();
@@ -277,73 +247,59 @@ KResultOr<ssize_t> Process::sys$recvmsg(int sockfd, Userspace<struct msghdr*> us
             msg_flags |= MSG_CTRUNC;
         } else {
             cmsg_timestamp = { { control_length, SOL_SOCKET, SCM_TIMESTAMP }, timestamp.to_timeval() };
-            if (!copy_to_user(msg.msg_control, &cmsg_timestamp, control_length))
-                return EFAULT;
+            TRY(copy_to_user(msg.msg_control, &cmsg_timestamp, control_length));
         }
-        if (!copy_to_user(&user_msg.unsafe_userspace_ptr()->msg_controllen, &control_length))
-            return EFAULT;
+        TRY(copy_to_user(&user_msg.unsafe_userspace_ptr()->msg_controllen, &control_length));
     }
 
-    if (!copy_to_user(&user_msg.unsafe_userspace_ptr()->msg_flags, &msg_flags))
-        return EFAULT;
-
+    TRY(copy_to_user(&user_msg.unsafe_userspace_ptr()->msg_flags, &msg_flags));
     return result.value();
 }
 
 template<bool sockname, typename Params>
-int Process::get_sock_or_peer_name(const Params& params)
+KResult Process::get_sock_or_peer_name(const Params& params)
 {
     socklen_t addrlen_value;
-    if (!copy_from_user(&addrlen_value, params.addrlen, sizeof(socklen_t)))
-        return EFAULT;
+    TRY(copy_from_user(&addrlen_value, params.addrlen, sizeof(socklen_t)));
 
     if (addrlen_value <= 0)
         return EINVAL;
 
-    auto description = file_description(params.sockfd);
-    if (!description)
-        return EBADF;
-
+    auto description = TRY(fds().open_file_description(params.sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
 
     auto& socket = *description->socket();
     REQUIRE_PROMISE_FOR_SOCKET_DOMAIN(socket.domain());
 
-    u8 address_buffer[sizeof(sockaddr_un)];
+    sockaddr_un address_buffer;
     addrlen_value = min(sizeof(sockaddr_un), static_cast<size_t>(addrlen_value));
     if constexpr (sockname)
-        socket.get_local_address((sockaddr*)address_buffer, &addrlen_value);
+        socket.get_local_address((sockaddr*)&address_buffer, &addrlen_value);
     else
-        socket.get_peer_address((sockaddr*)address_buffer, &addrlen_value);
-    if (!copy_to_user(params.addr, address_buffer, addrlen_value))
-        return EFAULT;
-    if (!copy_to_user(params.addrlen, &addrlen_value))
-        return EFAULT;
-    return 0;
+        socket.get_peer_address((sockaddr*)&address_buffer, &addrlen_value);
+    TRY(copy_to_user(params.addr, &address_buffer, addrlen_value));
+    return copy_to_user(params.addrlen, &addrlen_value);
 }
 
-KResultOr<int> Process::sys$getsockname(Userspace<const Syscall::SC_getsockname_params*> user_params)
+KResultOr<FlatPtr> Process::sys$getsockname(Userspace<const Syscall::SC_getsockname_params*> user_params)
 {
-    Syscall::SC_getsockname_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto params = TRY(copy_typed_from_user(user_params));
     return get_sock_or_peer_name<true>(params);
 }
 
-KResultOr<int> Process::sys$getpeername(Userspace<const Syscall::SC_getpeername_params*> user_params)
+KResultOr<FlatPtr> Process::sys$getpeername(Userspace<const Syscall::SC_getpeername_params*> user_params)
 {
-    Syscall::SC_getpeername_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto params = TRY(copy_typed_from_user(user_params));
     return get_sock_or_peer_name<false>(params);
 }
 
-KResultOr<int> Process::sys$getsockopt(Userspace<const Syscall::SC_getsockopt_params*> user_params)
+KResultOr<FlatPtr> Process::sys$getsockopt(Userspace<const Syscall::SC_getsockopt_params*> user_params)
 {
-    Syscall::SC_getsockopt_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto params = TRY(copy_typed_from_user(user_params));
 
     int sockfd = params.sockfd;
     int level = params.level;
@@ -352,29 +308,23 @@ KResultOr<int> Process::sys$getsockopt(Userspace<const Syscall::SC_getsockopt_pa
     Userspace<socklen_t*> user_value_size((FlatPtr)params.value_size);
 
     socklen_t value_size;
-    if (!copy_from_user(&value_size, params.value_size, sizeof(socklen_t)))
-        return EFAULT;
+    TRY(copy_from_user(&value_size, params.value_size, sizeof(socklen_t)));
 
-    auto description = file_description(sockfd);
-    if (!description)
-        return EBADF;
+    auto description = TRY(fds().open_file_description(sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
     auto& socket = *description->socket();
-
     REQUIRE_PROMISE_FOR_SOCKET_DOMAIN(socket.domain());
     return socket.getsockopt(*description, level, option, user_value, user_value_size);
 }
 
-KResultOr<int> Process::sys$setsockopt(Userspace<const Syscall::SC_setsockopt_params*> user_params)
+KResultOr<FlatPtr> Process::sys$setsockopt(Userspace<const Syscall::SC_setsockopt_params*> user_params)
 {
-    Syscall::SC_setsockopt_params params;
-    if (!copy_from_user(&params, user_params))
-        return EFAULT;
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto params = TRY(copy_typed_from_user(user_params));
+
     Userspace<const void*> user_value((FlatPtr)params.value);
-    auto description = file_description(params.sockfd);
-    if (!description)
-        return EBADF;
+    auto description = TRY(fds().open_file_description(params.sockfd));
     if (!description->is_socket())
         return ENOTSOCK;
     auto& socket = *description->socket();
@@ -382,4 +332,34 @@ KResultOr<int> Process::sys$setsockopt(Userspace<const Syscall::SC_setsockopt_pa
     return socket.setsockopt(params.level, params.option, user_value, params.value_size);
 }
 
+KResultOr<FlatPtr> Process::sys$socketpair(Userspace<const Syscall::SC_socketpair_params*> user_params)
+{
+    VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
+    auto params = TRY(copy_typed_from_user(user_params));
+
+    if (params.domain != AF_LOCAL)
+        return EINVAL;
+
+    if (params.protocol != 0 && params.protocol != PF_LOCAL)
+        return EINVAL;
+
+    auto pair = TRY(LocalSocket::try_create_connected_pair(params.type & SOCK_TYPE_MASK));
+
+    auto fd_allocation0 = TRY(m_fds.allocate());
+    auto fd_allocation1 = TRY(m_fds.allocate());
+
+    int fds[2];
+    fds[0] = fd_allocation0.fd;
+    fds[1] = fd_allocation1.fd;
+    setup_socket_fd(fds[0], pair.description0, params.type);
+    setup_socket_fd(fds[1], pair.description1, params.type);
+
+    if (copy_to_user(params.sv, fds, sizeof(fds)).is_error()) {
+        // Avoid leaking both file descriptors on error.
+        m_fds[fds[0]] = {};
+        m_fds[fds[1]] = {};
+        return EFAULT;
+    }
+    return KSuccess;
+}
 }

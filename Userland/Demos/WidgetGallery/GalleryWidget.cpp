@@ -1,27 +1,7 @@
 /*
- * Copyright (c) 2021, the SerenityOS developers
- * All rights reserved.
+ * Copyright (c) 2021, the SerenityOS developers.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "GalleryWidget.h"
@@ -41,11 +21,11 @@
 #include <LibGUI/InputBox.h>
 #include <LibGUI/ItemListModel.h>
 #include <LibGUI/MessageBox.h>
-#include <LibGUI/SeparatorWidget.h>
 #include <LibGUI/SortingProxyModel.h>
 #include <LibGUI/SpinBox.h>
 #include <LibGUI/TabWidget.h>
 #include <LibGUI/TableView.h>
+#include <LibGUI/ValueSlider.h>
 #include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
 
@@ -54,6 +34,7 @@ GalleryWidget::GalleryWidget()
     load_from_gml(window_gml);
 
     auto& tab_widget = *find_descendant_of_type_named<GUI::TabWidget>("tab_widget");
+    tab_widget.set_reorder_allowed(true);
 
     auto& basics_tab = tab_widget.add_tab<GUI::Widget>("Basics");
     basics_tab.load_from_gml(basics_tab_gml);
@@ -92,9 +73,9 @@ GalleryWidget::GalleryWidget()
         m_label_frame->set_frame_thickness(value);
     };
 
-    m_button_icons.append(Gfx::Bitmap::load_from_file("/res/icons/16x16/book-open.png"));
-    m_button_icons.append(Gfx::Bitmap::load_from_file("/res/icons/16x16/inspector-object.png"));
-    m_button_icons.append(Gfx::Bitmap::load_from_file("/res/icons/16x16/ladybug.png"));
+    m_button_icons.append(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/book-open.png"));
+    m_button_icons.append(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/inspector-object.png"));
+    m_button_icons.append(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/ladybug.png"));
 
     m_icon_button = basics_tab.find_descendant_of_type_named<GUI::Button>("icon_button");
     m_icon_button->set_icon(*m_button_icons[2]);
@@ -102,7 +83,7 @@ GalleryWidget::GalleryWidget()
     m_disabled_icon_button = basics_tab.find_descendant_of_type_named<GUI::Button>("disabled_icon_button");
     m_disabled_icon_button->set_icon(*m_button_icons[2]);
 
-    m_icon_button->on_click = [&]() {
+    m_icon_button->on_click = [&](auto) {
         static size_t i;
         if (i >= m_button_icons.size())
             i = 0;
@@ -114,9 +95,9 @@ GalleryWidget::GalleryWidget()
     m_text_editor = basics_tab.find_descendant_of_type_named<GUI::TextEditor>("text_editor");
 
     m_font_button = basics_tab.find_descendant_of_type_named<GUI::Button>("font_button");
-    m_font_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-font-editor.png"));
+    m_font_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-font-editor.png"));
 
-    m_font_button->on_click = [&]() {
+    m_font_button->on_click = [&](auto) {
         auto picker = GUI::FontPicker::construct(window(), &m_text_editor->font(), false);
         if (picker->exec() == GUI::Dialog::ExecOK) {
             m_text_editor->set_font(picker->font());
@@ -124,9 +105,9 @@ GalleryWidget::GalleryWidget()
     };
 
     m_file_button = basics_tab.find_descendant_of_type_named<GUI::Button>("file_button");
-    m_file_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/open.png"));
+    m_file_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png"));
 
-    m_file_button->on_click = [&]() {
+    m_file_button->on_click = [&](auto) {
         Optional<String> open_path = GUI::FilePicker::get_open_filepath(window());
         if (!open_path.has_value())
             return;
@@ -134,9 +115,9 @@ GalleryWidget::GalleryWidget()
     };
 
     m_input_button = basics_tab.find_descendant_of_type_named<GUI::Button>("input_button");
-    m_input_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/properties.png"));
+    m_input_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/properties.png"));
 
-    m_input_button->on_click = [&]() {
+    m_input_button->on_click = [&](auto) {
         String value;
         if (GUI::InputBox::show(window(), value, "Enter input:", "Input") == GUI::InputBox::ExecOK && !value.is_empty())
             m_text_editor->set_text(value);
@@ -152,7 +133,7 @@ GalleryWidget::GalleryWidget()
     };
 
     m_msgbox_button = basics_tab.find_descendant_of_type_named<GUI::Button>("msgbox_button");
-    m_msgbox_button->set_icon(Gfx::Bitmap::load_from_file("/res/icons/16x16/app-irc-client.png"));
+    m_msgbox_button->set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-browser.png"));
 
     m_msgbox_type = GUI::MessageBox::Type::None;
     m_msgbox_input_type = GUI::MessageBox::InputType::OK;
@@ -184,7 +165,7 @@ GalleryWidget::GalleryWidget()
         m_msgbox_input_type = static_cast<GUI::MessageBox::InputType>(index.row());
     };
 
-    m_msgbox_button->on_click = [&]() {
+    m_msgbox_button->on_click = [&](auto) {
         GUI::MessageBox::show(window(), m_text_editor->text(), "Message", m_msgbox_type, m_msgbox_input_type);
     };
 
@@ -238,6 +219,15 @@ GalleryWidget::GalleryWidget()
 
     m_opacity_slider->on_change = [&](auto percent) {
         m_opacity_imagewidget->set_opacity_percent(percent);
+        m_opacity_value_slider->set_value(percent);
+    };
+
+    m_opacity_value_slider = sliders_tab.find_descendant_of_type_named<GUI::ValueSlider>("opacity_value_slider");
+    m_opacity_value_slider->set_range(0, 100);
+
+    m_opacity_value_slider->on_change = [&](auto percent) {
+        m_opacity_imagewidget->set_opacity_percent(percent);
+        m_opacity_slider->set_value(percent);
     };
 
     auto& wizards_tab = tab_widget.add_tab<GUI::Widget>("Wizards");
@@ -279,11 +269,9 @@ GalleryWidget::GalleryWidget()
         " _||_-\n"
     };
 
-    StringBuilder sb;
-    sb.appendf("%s%s", serenityos_ascii, wizard_ascii);
-    m_wizard_output->set_text(sb.to_string());
+    m_wizard_output->set_text(String::formatted("{}{}", serenityos_ascii, wizard_ascii));
 
-    m_wizard_button->on_click = [&]() {
+    m_wizard_button->on_click = [&](auto) {
         StringBuilder sb;
         sb.append(m_wizard_output->get_text());
         sb.append("\nWizard started.");
@@ -313,62 +301,12 @@ GalleryWidget::GalleryWidget()
 
     m_cursors_tableview->set_model(sorting_proxy_model);
     m_cursors_tableview->set_key_column_and_sort_order(MouseCursorModel::Column::Name, GUI::SortOrder::Ascending);
-    m_cursors_tableview->model()->update();
+    m_cursors_tableview->model()->invalidate();
     m_cursors_tableview->set_column_width(0, 25);
 
     m_cursors_tableview->on_activation = [&](const GUI::ModelIndex& index) {
-        switch (index.row()) {
-        case 0:
-            window()->set_cursor(Gfx::StandardCursor::Arrow);
-            break;
-        case 1:
-            window()->set_cursor(Gfx::StandardCursor::Crosshair);
-            break;
-        case 2:
-            window()->set_cursor(Gfx::StandardCursor::Disallowed);
-            break;
-        case 3:
-            window()->set_cursor(Gfx::StandardCursor::Drag);
-            break;
-        case 4:
-            window()->set_cursor(Gfx::StandardCursor::Hand);
-            break;
-        case 5:
-            window()->set_cursor(Gfx::StandardCursor::Help);
-            break;
-        case 6:
-            window()->set_cursor(Gfx::StandardCursor::Hidden);
-            break;
-        case 7:
-            window()->set_cursor(Gfx::StandardCursor::IBeam);
-            break;
-        case 8:
-            window()->set_cursor(Gfx::StandardCursor::Move);
-            break;
-        case 9:
-            window()->set_cursor(Gfx::StandardCursor::ResizeColumn);
-            break;
-        case 10:
-            window()->set_cursor(Gfx::StandardCursor::ResizeDiagonalBLTR);
-            break;
-        case 11:
-            window()->set_cursor(Gfx::StandardCursor::ResizeDiagonalTLBR);
-            break;
-        case 12:
-            window()->set_cursor(Gfx::StandardCursor::ResizeHorizontal);
-            break;
-        case 13:
-            window()->set_cursor(Gfx::StandardCursor::ResizeRow);
-            break;
-        case 14:
-            window()->set_cursor(Gfx::StandardCursor::ResizeVertical);
-            break;
-        case 15:
-            window()->set_cursor(Gfx::StandardCursor::Wait);
-            break;
-        default:
-            window()->set_cursor(Gfx::StandardCursor::Arrow);
-        }
+        auto icon_index = index.model()->index(index.row(), MouseCursorModel::Column::Bitmap);
+        window()->set_cursor(icon_index.data().as_bitmap());
     };
 
     auto& icons_tab = tab_widget.add_tab<GUI::Widget>("Icons");
@@ -386,7 +324,7 @@ GalleryWidget::GalleryWidget()
 
     m_icons_tableview->set_model(sorting_proxy_icons_model);
     m_icons_tableview->set_key_column_and_sort_order(FileIconsModel::Column::Name, GUI::SortOrder::Ascending);
-    m_icons_tableview->model()->update();
+    m_icons_tableview->model()->invalidate();
     m_icons_tableview->set_column_width(0, 36);
     m_icons_tableview->set_column_width(1, 20);
 }

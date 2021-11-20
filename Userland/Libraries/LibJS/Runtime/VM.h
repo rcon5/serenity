@@ -1,28 +1,9 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2020-2021, Linus Groh <mail@linusgroh.de>
- * All rights reserved.
+ * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021, David Tuin <davidot@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -32,16 +13,22 @@
 #include <AK/HashMap.h>
 #include <AK/RefCounted.h>
 #include <AK/StackInfo.h>
+#include <AK/Variant.h>
 #include <LibJS/Heap/Heap.h>
 #include <LibJS/Runtime/CommonPropertyNames.h>
+#include <LibJS/Runtime/Completion.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/ErrorTypes.h>
 #include <LibJS/Runtime/Exception.h>
+#include <LibJS/Runtime/ExecutionContext.h>
 #include <LibJS/Runtime/MarkedValueList.h>
 #include <LibJS/Runtime/Promise.h>
 #include <LibJS/Runtime/Value.h>
 
 namespace JS {
+
+class Identifier;
+struct BindingPattern;
 
 enum class ScopeType {
     None,
@@ -52,30 +39,14 @@ enum class ScopeType {
     Continuable,
 };
 
-struct ScopeFrame {
-    ScopeType type;
-    NonnullRefPtr<ScopeNode> scope_node;
-    bool pushed_environment { false };
-};
-
-struct CallFrame {
-    const ASTNode* current_node;
-    FlyString function_name;
-    Value callee;
-    Value this_value;
-    Vector<Value> arguments;
-    Array* arguments_object { nullptr };
-    ScopeObject* scope { nullptr };
-    bool is_strict_mode { false };
-};
-
 class VM : public RefCounted<VM> {
 public:
-    static NonnullRefPtr<VM> create();
-    ~VM();
+    struct CustomData {
+        virtual ~CustomData();
+    };
 
-    bool should_log_exceptions() const { return m_should_log_exceptions; }
-    void set_should_log_exceptions(bool b) { m_should_log_exceptions = b; }
+    static NonnullRefPtr<VM> create(OwnPtr<CustomData> = {});
+    ~VM();
 
     Heap& heap() { return m_heap; }
     const Heap& heap() const { return m_heap; }
@@ -89,6 +60,8 @@ public:
     Exception* exception() { return m_exception; }
     void set_exception(Exception& exception) { m_exception = &exception; }
     void clear_exception() { m_exception = nullptr; }
+
+    void dump_backtrace() const;
 
     class InterpreterExecutionScope {
     public:
@@ -108,6 +81,7 @@ public:
 
     Symbol* get_global_symbol(const String& description);
 
+    HashMap<String, PrimitiveString*>& string_cache() { return m_string_cache; }
     PrimitiveString& empty_string() { return *m_empty_string; }
     PrimitiveString& single_ascii_character_string(u8 character)
     {
@@ -115,61 +89,76 @@ public:
         return *m_single_ascii_character_strings[character];
     }
 
-    void push_call_frame(CallFrame& call_frame, GlobalObject& global_object)
+    bool did_reach_stack_space_limit() const
+    {
+#ifdef HAS_ADDRESS_SANITIZER
+        return m_stack_info.size_free() < 32 * KiB;
+#else
+        return m_stack_info.size_free() < 16 * KiB;
+#endif
+    }
+
+    void push_execution_context(ExecutionContext& context, GlobalObject& global_object)
     {
         VERIFY(!exception());
         // Ensure we got some stack space left, so the next function call doesn't kill us.
-        // This value is merely a guess and might need tweaking at a later point.
-        if (m_stack_info.size_free() < 16 * KiB)
-            throw_exception<Error>(global_object, "Call stack size limit exceeded");
+        if (did_reach_stack_space_limit())
+            throw_exception<Error>(global_object, ErrorType::CallStackSizeExceeded);
         else
-            m_call_stack.append(&call_frame);
+            m_execution_context_stack.append(&context);
     }
 
-    void pop_call_frame() { m_call_stack.take_last(); }
+    void pop_execution_context()
+    {
+        m_execution_context_stack.take_last();
+        if (m_execution_context_stack.is_empty() && on_call_stack_emptied)
+            on_call_stack_emptied();
+    }
 
-    CallFrame& call_frame() { return *m_call_stack.last(); }
-    const CallFrame& call_frame() const { return *m_call_stack.last(); }
-    const Vector<CallFrame*>& call_stack() const { return m_call_stack; }
-    Vector<CallFrame*>& call_stack() { return m_call_stack; }
+    ExecutionContext& running_execution_context() { return *m_execution_context_stack.last(); }
+    ExecutionContext const& running_execution_context() const { return *m_execution_context_stack.last(); }
+    Vector<ExecutionContext*> const& execution_context_stack() const { return m_execution_context_stack; }
+    Vector<ExecutionContext*>& execution_context_stack() { return m_execution_context_stack; }
 
-    const ScopeObject* current_scope() const { return call_frame().scope; }
-    ScopeObject* current_scope() { return call_frame().scope; }
+    Environment const* lexical_environment() const { return running_execution_context().lexical_environment; }
+    Environment* lexical_environment() { return running_execution_context().lexical_environment; }
+
+    Environment const* variable_environment() const { return running_execution_context().variable_environment; }
+    Environment* variable_environment() { return running_execution_context().variable_environment; }
+
+    // https://tc39.es/ecma262/#current-realm
+    // The value of the Realm component of the running execution context is also called the current Realm Record.
+    Realm const* current_realm() const { return running_execution_context().realm; }
+    Realm* current_realm() { return running_execution_context().realm; }
 
     bool in_strict_mode() const;
 
-    template<typename Callback>
-    void for_each_argument(Callback callback)
-    {
-        if (m_call_stack.is_empty())
-            return;
-        for (auto& value : call_frame().arguments)
-            callback(value);
-    }
-
     size_t argument_count() const
     {
-        if (m_call_stack.is_empty())
+        if (m_execution_context_stack.is_empty())
             return 0;
-        return call_frame().arguments.size();
+        return running_execution_context().arguments.size();
     }
 
     Value argument(size_t index) const
     {
-        if (m_call_stack.is_empty())
+        if (m_execution_context_stack.is_empty())
             return {};
-        auto& arguments = call_frame().arguments;
+        auto& arguments = running_execution_context().arguments;
         return index < arguments.size() ? arguments[index] : js_undefined();
     }
 
     Value this_value(Object& global_object) const
     {
-        if (m_call_stack.is_empty())
+        if (m_execution_context_stack.is_empty())
             return &global_object;
-        return call_frame().this_value;
+        return running_execution_context().this_value;
     }
 
+    Value resolve_this_binding(GlobalObject&);
+
     Value last_value() const { return m_last_value; }
+    void set_last_value(Badge<Bytecode::Interpreter>, Value value) { m_last_value = value; }
     void set_last_value(Badge<Interpreter>, Value value) { m_last_value = value; }
 
     const StackInfo& stack_info() const { return m_stack_info; };
@@ -177,30 +166,34 @@ public:
     bool underscore_is_last_value() const { return m_underscore_is_last_value; }
     void set_underscore_is_last_value(bool b) { m_underscore_is_last_value = b; }
 
+    u32 execution_generation() const { return m_execution_generation; }
+    void finish_execution_generation() { ++m_execution_generation; }
+
     void unwind(ScopeType type, FlyString label = {})
     {
         m_unwind_until = type;
-        m_unwind_until_label = label;
+        m_unwind_until_label = move(label);
     }
     void stop_unwind()
     {
         m_unwind_until = ScopeType::None;
         m_unwind_until_label = {};
     }
-    bool should_unwind_until(ScopeType type, FlyString label = {}) const
+    bool should_unwind_until(ScopeType type, Vector<FlyString> const& labels) const
     {
         if (m_unwind_until_label.is_null())
             return m_unwind_until == type;
-        return m_unwind_until == type && m_unwind_until_label == label;
+        return m_unwind_until == type && any_of(labels.begin(), labels.end(), [&](FlyString const& label) {
+            return m_unwind_until_label == label;
+        });
     }
     bool should_unwind() const { return m_unwind_until != ScopeType::None; }
 
     ScopeType unwind_until() const { return m_unwind_until; }
+    FlyString unwind_until_label() const { return m_unwind_until_label; }
 
-    Value get_variable(const FlyString& name, GlobalObject&);
-    void set_variable(const FlyString& name, Value, GlobalObject&, bool first_assignment = false);
-
-    Reference get_reference(const FlyString& name);
+    Reference resolve_binding(FlyString const&, Environment* = nullptr);
+    Reference get_identifier_reference(Environment*, FlyString, bool strict, size_t hops = 0);
 
     template<typename T, typename... Args>
     void throw_exception(GlobalObject& global_object, Args&&... args)
@@ -220,21 +213,35 @@ public:
         return throw_exception(global_object, T::create(global_object, String::formatted(type.message(), forward<Args>(args)...)));
     }
 
-    Value construct(Function&, Function& new_target, Optional<MarkedValueList> arguments, GlobalObject&);
+    // 5.2.3.2 Throw an Exception, https://tc39.es/ecma262/#sec-throw-an-exception
+    template<typename T, typename... Args>
+    Completion throw_completion(GlobalObject& global_object, Args&&... args)
+    {
+        auto* error = T::create(global_object, forward<Args>(args)...);
+        // NOTE: This is temporary until we remove VM::exception().
+        throw_exception(global_object, error);
+        return JS::throw_completion(error);
+    }
+
+    template<typename T, typename... Args>
+    Completion throw_completion(GlobalObject& global_object, ErrorType type, Args&&... args)
+    {
+        return throw_completion<T>(global_object, String::formatted(type.message(), forward<Args>(args)...));
+    }
+
+    Value construct(FunctionObject&, FunctionObject& new_target, Optional<MarkedValueList> arguments);
 
     String join_arguments(size_t start_index = 0) const;
 
-    Value resolve_this_binding(GlobalObject&) const;
-    const ScopeObject* find_this_scope() const;
-    Value get_new_target() const;
+    Value get_new_target();
 
     template<typename... Args>
-    [[nodiscard]] ALWAYS_INLINE Value call(Function& function, Value this_value, Args... args)
+    [[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> call(FunctionObject& function, Value this_value, Args... args)
     {
         if constexpr (sizeof...(Args) > 0) {
-            MarkedValueList arglist { heap() };
-            (..., arglist.append(move(args)));
-            return call(function, this_value, move(arglist));
+            MarkedValueList arguments_list { heap() };
+            (..., arguments_list.append(move(args)));
+            return call(function, this_value, move(arguments_list));
         }
 
         return call(function, this_value);
@@ -242,27 +249,51 @@ public:
 
     CommonPropertyNames names;
 
-    Shape& scope_object_shape() { return *m_scope_object_shape; }
-
     void run_queued_promise_jobs();
     void enqueue_promise_job(NativeFunction&);
 
+    void run_queued_finalization_registry_cleanup_jobs();
+    void enqueue_finalization_registry_cleanup_job(FinalizationRegistry&);
+
     void promise_rejection_tracker(const Promise&, Promise::RejectionOperation) const;
 
-    AK::Function<void(const Promise&)> on_promise_unhandled_rejection;
-    AK::Function<void(const Promise&)> on_promise_rejection_handled;
+    Function<void()> on_call_stack_emptied;
+    Function<void(const Promise&)> on_promise_unhandled_rejection;
+    Function<void(const Promise&)> on_promise_rejection_handled;
+
+    ThrowCompletionOr<void> initialize_instance_elements(Object& object, ECMAScriptFunctionObject& constructor);
+
+    CustomData* custom_data() { return m_custom_data; }
+
+    ThrowCompletionOr<void> destructuring_assignment_evaluation(NonnullRefPtr<BindingPattern> const& target, Value value, GlobalObject& global_object);
+    ThrowCompletionOr<void> binding_initialization(FlyString const& target, Value value, Environment* environment, GlobalObject& global_object);
+    ThrowCompletionOr<void> binding_initialization(NonnullRefPtr<BindingPattern> const& target, Value value, Environment* environment, GlobalObject& global_object);
+
+    ThrowCompletionOr<Value> named_evaluation_if_anonymous_function(GlobalObject& global_object, ASTNode const& expression, FlyString const& name);
+
+    void save_execution_context_stack();
+    void restore_execution_context_stack();
 
 private:
-    VM();
+    explicit VM(OwnPtr<CustomData>);
 
-    [[nodiscard]] Value call_internal(Function&, Value this_value, Optional<MarkedValueList> arguments);
+    [[nodiscard]] ThrowCompletionOr<Value> call_internal(FunctionObject&, Value this_value, Optional<MarkedValueList> arguments);
+
+    ThrowCompletionOr<Object*> copy_data_properties(Object& rest_object, Object const& source, HashTable<PropertyKey> const& seen_names, GlobalObject& global_object);
+
+    ThrowCompletionOr<void> property_binding_initialization(BindingPattern const& binding, Value value, Environment* environment, GlobalObject& global_object);
+    ThrowCompletionOr<void> iterator_binding_initialization(BindingPattern const& binding, Object* iterator, bool& iterator_done, Environment* environment, GlobalObject& global_object);
 
     Exception* m_exception { nullptr };
+
+    HashMap<String, PrimitiveString*> m_string_cache;
 
     Heap m_heap;
     Vector<Interpreter*> m_interpreters;
 
-    Vector<CallFrame*> m_call_stack;
+    Vector<ExecutionContext*> m_execution_context_stack;
+
+    Vector<Vector<ExecutionContext*>> m_saved_execution_context_stacks;
 
     Value m_last_value;
     ScopeType m_unwind_until { ScopeType::None };
@@ -274,6 +305,8 @@ private:
 
     Vector<NativeFunction*> m_promise_jobs;
 
+    Vector<FinalizationRegistry*> m_finalization_registry_cleanup_jobs;
+
     PrimitiveString* m_empty_string { nullptr };
     PrimitiveString* m_single_ascii_character_strings[128] {};
 
@@ -282,20 +315,21 @@ private:
     JS_ENUMERATE_WELL_KNOWN_SYMBOLS
 #undef __JS_ENUMERATE
 
-    Shape* m_scope_object_shape { nullptr };
-
     bool m_underscore_is_last_value { false };
-    bool m_should_log_exceptions { false };
+
+    u32 m_execution_generation { 0 };
+
+    OwnPtr<CustomData> m_custom_data;
 };
 
 template<>
-[[nodiscard]] ALWAYS_INLINE Value VM::call(Function& function, Value this_value, MarkedValueList arguments) { return call_internal(function, this_value, move(arguments)); }
+[[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> VM::call(FunctionObject& function, Value this_value, MarkedValueList arguments) { return call_internal(function, this_value, move(arguments)); }
 
 template<>
-[[nodiscard]] ALWAYS_INLINE Value VM::call(Function& function, Value this_value, Optional<MarkedValueList> arguments) { return call_internal(function, this_value, move(arguments)); }
+[[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> VM::call(FunctionObject& function, Value this_value, Optional<MarkedValueList> arguments) { return call_internal(function, this_value, move(arguments)); }
 
 template<>
-[[nodiscard]] ALWAYS_INLINE Value VM::call(Function& function, Value this_value) { return call(function, this_value, Optional<MarkedValueList> {}); }
+[[nodiscard]] ALWAYS_INLINE ThrowCompletionOr<Value> VM::call(FunctionObject& function, Value this_value) { return call(function, this_value, Optional<MarkedValueList> {}); }
 
 ALWAYS_INLINE Heap& Cell::heap() const
 {

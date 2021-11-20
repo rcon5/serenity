@@ -1,44 +1,27 @@
 /*
- * Copyright (c) 2020, Ali Mohammad Pur <ali.mpfard@gmail.com>
- * All rights reserved.
+ * Copyright (c) 2020, Ali Mohammad Pur <mpfard@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Debug.h>
 #include <LibCore/DateTime.h>
 #include <LibCore/Timer.h>
-#include <LibCrypto/ASN1/DER.h>
 #include <LibCrypto/PK/Code/EMSA_PSS.h>
 #include <LibTLS/TLSv12.h>
+
+// Each record can hold at most 18432 bytes, leaving some headroom and rounding down to
+// a nice number gives us a maximum of 16 KiB for user-supplied application data,
+// which will be sent as a single record containing a single ApplicationData message.
+constexpr static size_t MaximumApplicationDataChunkSize = 16 * KiB;
 
 namespace TLS {
 
 Optional<ByteBuffer> TLSv12::read()
 {
     if (m_context.application_buffer.size()) {
-        auto buf = m_context.application_buffer.slice(0, m_context.application_buffer.size());
-        m_context.application_buffer.clear();
-        return buf;
+        auto buf = move(m_context.application_buffer);
+        return { move(buf) };
     }
     return {};
 }
@@ -68,27 +51,27 @@ String TLSv12::read_line(size_t max_size)
     if (offset > max_size)
         return {};
 
-    auto buffer = ByteBuffer::copy(start, offset);
+    String line { bit_cast<char const*>(start), offset, Chomp };
     m_context.application_buffer = m_context.application_buffer.slice(offset + 1, m_context.application_buffer.size() - offset - 1);
 
-    return String::copy(buffer, Chomp);
+    return line;
 }
 
 bool TLSv12::write(ReadonlyBytes buffer)
 {
     if (m_context.connection_status != ConnectionStatus::Established) {
-#if TLS_DEBUG
-        dbgln("write request while not connected");
-#endif
+        dbgln_if(TLS_DEBUG, "write request while not connected");
         return false;
     }
 
-    PacketBuilder builder { MessageType::ApplicationData, m_context.options.version, buffer.size() };
-    builder.append(buffer);
-    auto packet = builder.build();
+    for (size_t offset = 0; offset < buffer.size(); offset += MaximumApplicationDataChunkSize) {
+        PacketBuilder builder { MessageType::ApplicationData, m_context.options.version, buffer.size() - offset };
+        builder.append(buffer.slice(offset, min(buffer.size() - offset, MaximumApplicationDataChunkSize)));
+        auto packet = builder.build();
 
-    update_packet(packet);
-    write_packet(packet);
+        update_packet(packet);
+        write_packet(packet);
+    }
 
     return true;
 }
@@ -120,7 +103,7 @@ bool TLSv12::common_connect(const struct sockaddr* saddr, socklen_t length)
         auto packet = build_hello();
         write_packet(packet);
 
-        deferred_invoke([&](auto&) {
+        deferred_invoke([&] {
             m_handshake_timeout_timer = Core::Timer::create_single_shot(
                 m_max_wait_time_for_handshake_in_seconds * 1000, [&] {
                     auto timeout_diff = Core::DateTime::now().timestamp() - m_context.handshake_initiation_timestamp;
@@ -158,18 +141,42 @@ bool TLSv12::common_connect(const struct sockaddr* saddr, socklen_t length)
     return true;
 }
 
-void TLSv12::read_from_socket()
+void TLSv12::notify_client_for_app_data()
 {
     if (m_context.application_buffer.size() > 0) {
-        deferred_invoke([&](auto&) { read_from_socket(); });
+        if (!m_has_scheduled_app_data_flush) {
+            deferred_invoke([this] { notify_client_for_app_data(); });
+            m_has_scheduled_app_data_flush = true;
+        }
         if (on_tls_ready_to_read)
             on_tls_ready_to_read(*this);
+    } else {
+        if (m_context.connection_finished && !m_context.has_invoked_finish_or_error_callback) {
+            m_context.has_invoked_finish_or_error_callback = true;
+            if (on_tls_finished)
+                on_tls_finished();
+        }
     }
+    m_has_scheduled_app_data_flush = false;
+}
+
+void TLSv12::read_from_socket()
+{
+    // If there's anything before we consume stuff, let the client know
+    // since we won't be consuming things if the connection is terminated.
+    notify_client_for_app_data();
+
+    ScopeGuard notify_guard {
+        [this] {
+            // If anything new shows up, tell the client about the event.
+            notify_client_for_app_data();
+        }
+    };
 
     if (!check_connection_state(true))
         return;
 
-    consume(Core::Socket::read(4096));
+    consume(Core::Socket::read(4 * MiB));
 }
 
 void TLSv12::write_into_socket()
@@ -191,22 +198,41 @@ void TLSv12::write_into_socket()
 
 bool TLSv12::check_connection_state(bool read)
 {
-    if (!Core::Socket::is_open() || !Core::Socket::is_connected() || Core::Socket::eof()) {
+    if (m_context.connection_finished)
+        return false;
+
+    if (!Core::Socket::is_open() || !Core::Socket::is_connected()) {
         // an abrupt closure (the server is a jerk)
-#if TLS_DEBUG
-        dbgln("Socket not open, assuming abrupt closure");
-#endif
+        dbgln_if(TLS_DEBUG, "Socket not open, assuming abrupt closure");
         m_context.connection_finished = true;
+        m_context.connection_status = ConnectionStatus::Disconnected;
+        Core::Socket::close();
+        return false;
     }
+
+    if (read && Core::Socket::eof()) {
+        if (m_context.application_buffer.size() == 0 && m_context.connection_status != ConnectionStatus::Disconnected) {
+            m_context.has_invoked_finish_or_error_callback = true;
+            if (on_tls_finished)
+                on_tls_finished();
+        }
+        return false;
+    }
+
     if (m_context.critical_error) {
         dbgln_if(TLS_DEBUG, "CRITICAL ERROR {} :(", m_context.critical_error);
 
+        m_context.has_invoked_finish_or_error_callback = true;
         if (on_tls_error)
             on_tls_error((AlertDescription)m_context.critical_error);
+        m_context.connection_finished = true;
+        m_context.connection_status = ConnectionStatus::Disconnected;
+        Core::Socket::close();
         return false;
     }
     if (((read && m_context.application_buffer.size() == 0) || !read) && m_context.connection_finished) {
-        if (m_context.application_buffer.size() == 0) {
+        if (m_context.application_buffer.size() == 0 && m_context.connection_status != ConnectionStatus::Disconnected) {
+            m_context.has_invoked_finish_or_error_callback = true;
             if (on_tls_finished)
                 on_tls_finished();
         }
@@ -214,14 +240,8 @@ bool TLSv12::check_connection_state(bool read)
             dbgln_if(TLS_DEBUG, "connection closed without finishing data transfer, {} bytes still in buffer and {} bytes in application buffer",
                 m_context.tls_buffer.size(),
                 m_context.application_buffer.size());
-        } else {
-            m_context.connection_finished = false;
-#if TLS_DEBUG
-            dbgln("FINISHED");
-#endif
         }
         if (!m_context.application_buffer.size()) {
-            m_context.connection_status = ConnectionStatus::Disconnected;
             return false;
         }
     }
@@ -237,10 +257,10 @@ bool TLSv12::flush()
     if (out_buffer_length == 0)
         return true;
 
-#if TLS_DEBUG
-    dbgln("SENDING...");
-    print_buffer(out_buffer, out_buffer_length);
-#endif
+    if constexpr (TLS_DEBUG) {
+        dbgln("SENDING...");
+        print_buffer(out_buffer, out_buffer_length);
+    }
     if (Core::Socket::write(&out_buffer[out_buffer_index], out_buffer_length)) {
         write_buffer().clear();
         return true;

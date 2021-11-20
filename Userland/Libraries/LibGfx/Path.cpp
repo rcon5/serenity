@@ -1,36 +1,16 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Function.h>
 #include <AK/HashTable.h>
+#include <AK/Math.h>
 #include <AK/QuickSort.h>
 #include <AK/StringBuilder.h>
 #include <LibGfx/Painter.h>
 #include <LibGfx/Path.h>
-#include <math.h>
 
 namespace Gfx {
 
@@ -41,8 +21,8 @@ void Path::elliptical_arc_to(const FloatPoint& point, const FloatPoint& radii, d
     double rx = radii.x();
     double ry = radii.y();
 
-    double x_axis_rotation_c = cos(x_axis_rotation);
-    double x_axis_rotation_s = sin(x_axis_rotation);
+    double x_axis_rotation_c = AK::cos(x_axis_rotation);
+    double x_axis_rotation_s = AK::sin(x_axis_rotation);
 
     // Find the last point
     FloatPoint last_point { 0, 0 };
@@ -70,7 +50,7 @@ void Path::elliptical_arc_to(const FloatPoint& point, const FloatPoint& radii, d
         }
 
         // Move the endpoint by a small amount to avoid division by zero.
-        next_point.move_by(0.01f, 0.01f);
+        next_point.translate_by(0.01f, 0.01f);
     }
 
     // Find (cx, cy), theta_1, theta_delta
@@ -81,24 +61,24 @@ void Path::elliptical_arc_to(const FloatPoint& point, const FloatPoint& radii, d
     auto y1p = -x_axis_rotation_s * x_avg + x_axis_rotation_c * y_avg;
 
     // Step 2: Compute (cx', cy')
-    double x1p_sq = pow(x1p, 2.0);
-    double y1p_sq = pow(y1p, 2.0);
-    double rx_sq = pow(rx, 2.0);
-    double ry_sq = pow(ry, 2.0);
+    double x1p_sq = x1p * x1p;
+    double y1p_sq = y1p * y1p;
+    double rx_sq = rx * rx;
+    double ry_sq = ry * ry;
 
     // Step 3 of out-of-range radii correction
     double lambda = x1p_sq / rx_sq + y1p_sq / ry_sq;
     double multiplier;
 
     if (lambda > 1.0) {
-        auto lambda_sqrt = sqrt(lambda);
+        auto lambda_sqrt = AK::sqrt(lambda);
         rx *= lambda_sqrt;
         ry *= lambda_sqrt;
         multiplier = 0.0;
     } else {
         double numerator = rx_sq * ry_sq - rx_sq * y1p_sq - ry_sq * x1p_sq;
         double denominator = rx_sq * y1p_sq + ry_sq * x1p_sq;
-        multiplier = sqrt(numerator / denominator);
+        multiplier = AK::sqrt(numerator / denominator);
     }
 
     if (large_arc == sweep)
@@ -113,8 +93,8 @@ void Path::elliptical_arc_to(const FloatPoint& point, const FloatPoint& radii, d
     double cx = x_axis_rotation_c * cxp - x_axis_rotation_s * cyp + x_avg;
     double cy = x_axis_rotation_s * cxp + x_axis_rotation_c * cyp + y_avg;
 
-    double theta_1 = atan2((y1p - cyp) / ry, (x1p - cxp) / rx);
-    double theta_2 = atan2((-y1p - cyp) / ry, (-x1p - cxp) / rx);
+    double theta_1 = AK::atan2((y1p - cyp) / ry, (x1p - cxp) / rx);
+    double theta_2 = AK::atan2((-y1p - cyp) / ry, (-x1p - cxp) / rx);
 
     auto theta_delta = theta_2 - theta_1;
 
@@ -138,8 +118,6 @@ void Path::close()
     if (m_segments.size() <= 1)
         return;
 
-    invalidate_split_lines();
-
     auto& last_point = m_segments.last().point();
 
     for (ssize_t i = m_segments.size() - 1; i >= 0; --i) {
@@ -148,6 +126,7 @@ void Path::close()
             if (last_point == segment.point())
                 return;
             append_segment<LineSegment>(segment.point());
+            invalidate_split_lines();
             return;
         }
     }
@@ -181,6 +160,7 @@ void Path::close_all_subpaths()
         }
         case Segment::Type::LineTo:
         case Segment::Type::QuadraticBezierCurveTo:
+        case Segment::Type::CubicBezierCurveTo:
         case Segment::Type::EllipticalArcTo:
             if (is_first_point_in_subpath) {
                 start_of_subpath = cursor;
@@ -210,6 +190,9 @@ String Path::to_string() const
         case Segment::Type::QuadraticBezierCurveTo:
             builder.append("QuadraticBezierCurveTo");
             break;
+        case Segment::Type::CubicBezierCurveTo:
+            builder.append("CubicBezierCurveTo");
+            break;
         case Segment::Type::EllipticalArcTo:
             builder.append("EllipticalArcTo");
             break;
@@ -217,12 +200,18 @@ String Path::to_string() const
             builder.append("Invalid");
             break;
         }
-        builder.appendf("(%s", segment.point().to_string().characters());
+        builder.appendff("({}", segment.point());
 
         switch (segment.type()) {
         case Segment::Type::QuadraticBezierCurveTo:
             builder.append(", ");
             builder.append(static_cast<const QuadraticBezierCurveSegment&>(segment).through().to_string());
+            break;
+        case Segment::Type::CubicBezierCurveTo:
+            builder.append(", ");
+            builder.append(static_cast<const CubicBezierCurveSegment&>(segment).through_0().to_string());
+            builder.append(", ");
+            builder.append(static_cast<const CubicBezierCurveSegment&>(segment).through_1().to_string());
             break;
         case Segment::Type::EllipticalArcTo: {
             auto& arc = static_cast<const EllipticalArcSegment&>(segment);
@@ -302,6 +291,16 @@ void Path::segmentize_path()
         case Segment::Type::QuadraticBezierCurveTo: {
             auto& control = static_cast<QuadraticBezierCurveSegment&>(segment).through();
             Painter::for_each_line_segment_on_bezier_curve(control, cursor, segment.point(), [&](const FloatPoint& p0, const FloatPoint& p1) {
+                add_line(p0, p1);
+            });
+            cursor = segment.point();
+            break;
+        }
+        case Segment::Type::CubicBezierCurveTo: {
+            auto& curve = static_cast<CubicBezierCurveSegment const&>(segment);
+            auto& control_0 = curve.through_0();
+            auto& control_1 = curve.through_1();
+            Painter::for_each_line_segment_on_cubic_bezier_curve(control_0, control_1, cursor, segment.point(), [&](const FloatPoint& p0, const FloatPoint& p1) {
                 add_line(p0, p1);
             });
             cursor = segment.point();

@@ -1,50 +1,37 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/Concepts.h>
 #include <AK/EnumBits.h>
-#include <AK/Function.h>
 #include <AK/HashMap.h>
 #include <AK/IntrusiveList.h>
 #include <AK/Optional.h>
 #include <AK/OwnPtr.h>
 #include <AK/String.h>
+#include <AK/TemporaryChange.h>
 #include <AK/Time.h>
+#include <AK/Variant.h>
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
 #include <AK/Weakable.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/API/KResult.h>
 #include <Kernel/Arch/x86/SafeMem.h>
 #include <Kernel/Debug.h>
+#include <Kernel/FileSystem/InodeIdentifier.h>
 #include <Kernel/Forward.h>
-#include <Kernel/KResult.h>
-#include <Kernel/LockMode.h>
+#include <Kernel/KString.h>
+#include <Kernel/Library/ListedRefCounted.h>
+#include <Kernel/Locking/LockLocation.h>
+#include <Kernel/Locking/LockMode.h>
+#include <Kernel/Locking/LockRank.h>
+#include <Kernel/Locking/SpinlockProtected.h>
+#include <Kernel/Memory/VirtualRange.h>
 #include <Kernel/Scheduler.h>
-#include <Kernel/ThreadTracer.h>
 #include <Kernel/TimerQueue.h>
 #include <Kernel/UnixTypes.h>
 #include <LibC/fd_set.h>
@@ -52,7 +39,9 @@
 
 namespace Kernel {
 
-extern RecursiveSpinLock s_mm_lock;
+namespace Memory {
+extern RecursiveSpinlock s_mm_lock;
+}
 
 enum class DispatchSignalResult {
     Deferred = 0,
@@ -79,27 +68,99 @@ struct ThreadSpecificData {
 
 #define THREAD_AFFINITY_DEFAULT 0xffffffff
 
+struct ThreadRegisters {
+#if ARCH(I386)
+    FlatPtr ss;
+    FlatPtr gs;
+    FlatPtr fs;
+    FlatPtr es;
+    FlatPtr ds;
+    FlatPtr edi;
+    FlatPtr esi;
+    FlatPtr ebp;
+    FlatPtr esp;
+    FlatPtr ebx;
+    FlatPtr edx;
+    FlatPtr ecx;
+    FlatPtr eax;
+    FlatPtr eip;
+    FlatPtr esp0;
+    FlatPtr ss0;
+#else
+    FlatPtr rdi;
+    FlatPtr rsi;
+    FlatPtr rbp;
+    FlatPtr rsp;
+    FlatPtr rbx;
+    FlatPtr rdx;
+    FlatPtr rcx;
+    FlatPtr rax;
+    FlatPtr r8;
+    FlatPtr r9;
+    FlatPtr r10;
+    FlatPtr r11;
+    FlatPtr r12;
+    FlatPtr r13;
+    FlatPtr r14;
+    FlatPtr r15;
+    FlatPtr rip;
+    FlatPtr rsp0;
+#endif
+    FlatPtr cs;
+
+#if ARCH(I386)
+    FlatPtr eflags;
+    FlatPtr flags() const { return eflags; }
+    void set_flags(FlatPtr value) { eflags = value; }
+    void set_sp(FlatPtr value) { esp = value; }
+    void set_sp0(FlatPtr value) { esp0 = value; }
+    void set_ip(FlatPtr value) { eip = value; }
+#else
+    FlatPtr rflags;
+    FlatPtr flags() const { return rflags; }
+    void set_flags(FlatPtr value) { rflags = value; }
+    void set_sp(FlatPtr value) { rsp = value; }
+    void set_sp0(FlatPtr value) { rsp0 = value; }
+    void set_ip(FlatPtr value) { rip = value; }
+#endif
+
+    FlatPtr cr3;
+
+    FlatPtr ip() const
+    {
+#if ARCH(I386)
+        return eip;
+#else
+        return rip;
+#endif
+    }
+
+    FlatPtr sp() const
+    {
+#if ARCH(I386)
+        return esp;
+#else
+        return rsp;
+#endif
+    }
+};
+
 class Thread
-    : public RefCounted<Thread>
+    : public ListedRefCounted<Thread>
     , public Weakable<Thread> {
     AK_MAKE_NONCOPYABLE(Thread);
     AK_MAKE_NONMOVABLE(Thread);
 
+    friend class Mutex;
     friend class Process;
-    friend class ProtectedProcessBase;
     friend class Scheduler;
     friend struct ThreadReadyQueue;
-
-    static SpinLock<u8> g_tid_map_lock;
-    static HashMap<ThreadID, Thread*>* g_tid_map;
 
 public:
     inline static Thread* current()
     {
         return Processor::current_thread();
     }
-
-    static void initialize();
 
     static KResultOr<NonnullRefPtr<Thread>> try_create(NonnullRefPtr<Process>);
     ~Thread();
@@ -115,34 +176,30 @@ public:
 
     void detach()
     {
-        ScopedSpinLock lock(m_lock);
+        SpinlockLocker lock(m_lock);
         m_is_joinable = false;
     }
 
     [[nodiscard]] bool is_joinable() const
     {
-        ScopedSpinLock lock(m_lock);
+        SpinlockLocker lock(m_lock);
         return m_is_joinable;
     }
 
     Process& process() { return m_process; }
     const Process& process() const { return m_process; }
 
-    String name() const
+    // NOTE: This returns a null-terminated string.
+    StringView name() const
     {
-        // Because the name can be changed, we can't return a const
-        // reference here. We must make a copy
-        ScopedSpinLock lock(m_lock);
-        return m_name;
+        // NOTE: Whoever is calling this needs to be holding our lock while reading the name.
+        VERIFY(m_lock.is_locked_by_current_processor());
+        return m_name->view();
     }
-    void set_name(const StringView& s)
+
+    void set_name(NonnullOwnPtr<KString> name)
     {
-        ScopedSpinLock lock(m_lock);
-        m_name = s;
-    }
-    void set_name(String&& name)
-    {
-        ScopedSpinLock lock(m_lock);
+        SpinlockLocker lock(m_lock);
         m_name = move(name);
     }
 
@@ -195,11 +252,6 @@ public:
             }
         }
 
-        [[nodiscard]] bool timed_out() const
-        {
-            return m_type == InterruptedByTimeout;
-        }
-
     private:
         Type m_type;
     };
@@ -216,19 +268,20 @@ public:
         const Time* start_time() const { return !m_infinite ? &m_start_time : nullptr; }
         clockid_t clock_id() const { return m_clock_id; }
         bool is_infinite() const { return m_infinite; }
-        bool should_block() const { return m_infinite || m_should_block; };
 
     private:
         Time m_time {};
         Time m_start_time {};
         clockid_t m_clock_id { CLOCK_MONOTONIC_COARSE };
         bool m_infinite { false };
-        bool m_should_block { false };
     };
 
-    class BlockCondition;
+    class BlockerSet;
 
     class Blocker {
+        AK_MAKE_NONMOVABLE(Blocker);
+        AK_MAKE_NONCOPYABLE(Blocker);
+
     public:
         enum class Type {
             Unknown = 0,
@@ -242,37 +295,46 @@ public:
             Wait
         };
         virtual ~Blocker();
-        virtual const char* state_string() const = 0;
-        virtual bool should_block() { return true; }
+        virtual StringView state_string() const = 0;
         virtual Type blocker_type() const = 0;
         virtual const BlockTimeout& override_timeout(const BlockTimeout& timeout) { return timeout; }
         virtual bool can_be_interrupted() const { return true; }
-        virtual void not_blocking(bool) = 0;
+        virtual bool setup_blocker();
+
+        Thread& thread() { return m_thread; }
+
+        enum class UnblockImmediatelyReason {
+            UnblockConditionAlreadyMet,
+            TimeoutInThePast,
+        };
+
+        virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) = 0;
+
         virtual void was_unblocked(bool did_timeout)
         {
             if (did_timeout) {
-                ScopedSpinLock lock(m_lock);
+                SpinlockLocker lock(m_lock);
                 m_did_timeout = true;
             }
         }
         void set_interrupted_by_death()
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             do_set_interrupted_by_death();
         }
         void set_interrupted_by_signal(u8 signal)
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             do_set_interrupted_by_signal(signal);
         }
         u8 was_interrupted_by_signal() const
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             return do_get_interrupted_by_signal();
         }
         virtual Thread::BlockResult block_result()
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             if (m_was_interrupted_by_death)
                 return Thread::BlockResult::InterruptedByDeath;
             if (m_was_interrupted_by_signal != 0)
@@ -286,6 +348,11 @@ public:
         BlockResult end_blocking(Badge<Thread>, bool);
 
     protected:
+        Blocker()
+            : m_thread(*Thread::current())
+        {
+        }
+
         void do_set_interrupted_by_death()
         {
             m_was_interrupted_by_death = true;
@@ -309,101 +376,92 @@ public:
         }
         void unblock_from_blocker()
         {
-            RefPtr<Thread> thread;
-
             {
-                ScopedSpinLock lock(m_lock);
-                if (m_is_blocking) {
-                    m_is_blocking = false;
-                    VERIFY(m_blocked_thread);
-                    thread = m_blocked_thread;
-                }
+                SpinlockLocker lock(m_lock);
+                if (!m_is_blocking)
+                    return;
+                m_is_blocking = false;
             }
 
-            if (thread)
-                thread->unblock_from_blocker(*this);
+            m_thread->unblock_from_blocker(*this);
         }
 
-        bool set_block_condition(BlockCondition&, void* = nullptr);
-        void set_block_condition_raw_locked(BlockCondition* block_condition)
-        {
-            m_block_condition = block_condition;
-        }
+        bool add_to_blocker_set(BlockerSet&, void* = nullptr);
+        void set_blocker_set_raw_locked(BlockerSet* blocker_set) { m_blocker_set = blocker_set; }
 
-        mutable RecursiveSpinLock m_lock;
+        mutable RecursiveSpinlock m_lock;
 
     private:
-        BlockCondition* m_block_condition { nullptr };
-        void* m_block_data { nullptr };
-        Thread* m_blocked_thread { nullptr };
+        BlockerSet* m_blocker_set { nullptr };
+        NonnullRefPtr<Thread> m_thread;
         u8 m_was_interrupted_by_signal { 0 };
         bool m_is_blocking { false };
         bool m_was_interrupted_by_death { false };
         bool m_did_timeout { false };
     };
 
-    class BlockCondition {
-        AK_MAKE_NONCOPYABLE(BlockCondition);
-        AK_MAKE_NONMOVABLE(BlockCondition);
+    class BlockerSet {
+        AK_MAKE_NONCOPYABLE(BlockerSet);
+        AK_MAKE_NONMOVABLE(BlockerSet);
 
     public:
-        BlockCondition() = default;
+        BlockerSet() = default;
 
-        virtual ~BlockCondition()
+        virtual ~BlockerSet()
         {
-            ScopedSpinLock lock(m_lock);
+            VERIFY(!m_lock.is_locked());
             VERIFY(m_blockers.is_empty());
         }
 
         bool add_blocker(Blocker& blocker, void* data)
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             if (!should_add_blocker(blocker, data))
                 return false;
             m_blockers.append({ &blocker, data });
             return true;
         }
 
-        void remove_blocker(Blocker& blocker, void* data)
+        void remove_blocker(Blocker& blocker)
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             // NOTE: it's possible that the blocker is no longer present
-            m_blockers.remove_first_matching([&](auto& info) {
-                return info.blocker == &blocker && info.data == data;
+            m_blockers.remove_all_matching([&](auto& info) {
+                return info.blocker == &blocker;
             });
         }
 
         bool is_empty() const
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             return is_empty_locked();
         }
 
     protected:
-        template<typename UnblockOne>
-        bool unblock(UnblockOne unblock_one)
+        template<typename Callback>
+        bool unblock_all_blockers_whose_conditions_are_met(Callback try_to_unblock_one)
         {
-            ScopedSpinLock lock(m_lock);
-            return do_unblock(unblock_one);
+            SpinlockLocker lock(m_lock);
+            return unblock_all_blockers_whose_conditions_are_met_locked(try_to_unblock_one);
         }
 
-        template<typename UnblockOne>
-        bool do_unblock(UnblockOne unblock_one)
+        template<typename Callback>
+        bool unblock_all_blockers_whose_conditions_are_met_locked(Callback try_to_unblock_one)
         {
             VERIFY(m_lock.is_locked());
             bool stop_iterating = false;
-            bool did_unblock = false;
+            bool did_unblock_any = false;
             for (size_t i = 0; i < m_blockers.size() && !stop_iterating;) {
                 auto& info = m_blockers[i];
-                if (unblock_one(*info.blocker, info.data, stop_iterating)) {
+                if (bool did_unblock = try_to_unblock_one(*info.blocker, info.data, stop_iterating)) {
                     m_blockers.remove(i);
-                    did_unblock = true;
+                    did_unblock_any = true;
                     continue;
                 }
 
                 i++;
             }
-            return did_unblock;
+            return did_unblock_any;
         }
 
         bool is_empty_locked() const
@@ -449,7 +507,7 @@ public:
             blockers_to_append.clear();
         }
 
-        mutable SpinLock<u8> m_lock;
+        mutable Spinlock m_lock;
 
     private:
         Vector<BlockerInfo, 4> m_blockers;
@@ -460,56 +518,48 @@ public:
     public:
         explicit JoinBlocker(Thread& joinee, KResult& try_join_result, void*& joinee_exit_value);
         virtual Type blocker_type() const override { return Type::Join; }
-        virtual const char* state_string() const override { return "Joining"; }
+        virtual StringView state_string() const override { return "Joining"sv; }
         virtual bool can_be_interrupted() const override { return false; }
-        virtual bool should_block() override { return !m_join_error && m_should_block; }
-        virtual void not_blocking(bool) override;
+        virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) override;
+
+        virtual bool setup_blocker() override;
 
         bool unblock(void*, bool);
 
     private:
         NonnullRefPtr<Thread> m_joinee;
         void*& m_joinee_exit_value;
-        bool m_join_error { false };
+        KResult& m_try_join_result;
         bool m_did_unblock { false };
-        bool m_should_block { true };
     };
 
-    class QueueBlocker : public Blocker {
+    class WaitQueueBlocker final : public Blocker {
     public:
-        explicit QueueBlocker(WaitQueue&, const char* block_reason = nullptr);
-        virtual ~QueueBlocker();
+        explicit WaitQueueBlocker(WaitQueue&, StringView block_reason = {});
+        virtual ~WaitQueueBlocker();
 
         virtual Type blocker_type() const override { return Type::Queue; }
-        virtual const char* state_string() const override { return m_block_reason ? m_block_reason : "Queue"; }
-        virtual void not_blocking(bool) override { }
-
-        virtual bool should_block() override
-        {
-            return m_should_block;
-        }
+        virtual StringView state_string() const override { return m_block_reason.is_null() ? m_block_reason : "Queue"sv; }
+        virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) override { }
+        virtual bool setup_blocker() override;
 
         bool unblock();
 
     protected:
-        const char* const m_block_reason;
-        bool m_should_block { true };
+        WaitQueue& m_wait_queue;
+        StringView m_block_reason;
         bool m_did_unblock { false };
     };
 
-    class FutexBlocker : public Blocker {
+    class FutexBlocker final : public Blocker {
     public:
         explicit FutexBlocker(FutexQueue&, u32);
         virtual ~FutexBlocker();
 
         virtual Type blocker_type() const override { return Type::Futex; }
-        virtual const char* state_string() const override { return "Futex"; }
-        virtual void not_blocking(bool) override { }
-
-        virtual bool should_block() override
-        {
-            return m_should_block;
-        }
+        virtual StringView state_string() const override { return "Futex"sv; }
+        virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) override { }
+        virtual bool setup_blocker() override;
 
         u32 bitset() const { return m_bitset; }
 
@@ -524,9 +574,9 @@ public:
         bool unblock(bool force = false);
 
     protected:
-        u32 m_bitset;
+        FutexQueue& m_futex_queue;
+        u32 m_bitset { 0 };
         u32 m_relock_flags { 0 };
-        bool m_should_block { true };
         bool m_did_unblock { false };
     };
 
@@ -552,61 +602,53 @@ public:
 
         virtual Type blocker_type() const override { return Type::File; }
 
-        virtual bool should_block() override
-        {
-            return m_should_block;
-        }
-
-        virtual bool unblock(bool, void*) = 0;
-
-    protected:
-        bool m_should_block { true };
+        virtual bool unblock_if_conditions_are_met(bool, void*) = 0;
     };
 
-    class FileDescriptionBlocker : public FileBlocker {
+    class OpenFileDescriptionBlocker : public FileBlocker {
     public:
-        const FileDescription& blocked_description() const;
+        const OpenFileDescription& blocked_description() const;
 
-        virtual bool unblock(bool, void*) override;
-        virtual void not_blocking(bool) override;
+        virtual bool unblock_if_conditions_are_met(bool, void*) override;
+        virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) override;
+        virtual bool setup_blocker() override;
 
     protected:
-        explicit FileDescriptionBlocker(FileDescription&, BlockFlags, BlockFlags&);
+        explicit OpenFileDescriptionBlocker(OpenFileDescription&, BlockFlags, BlockFlags&);
 
     private:
-        NonnullRefPtr<FileDescription> m_blocked_description;
+        NonnullRefPtr<OpenFileDescription> m_blocked_description;
         const BlockFlags m_flags;
         BlockFlags& m_unblocked_flags;
         bool m_did_unblock { false };
-        bool m_should_block { true };
     };
 
-    class AcceptBlocker final : public FileDescriptionBlocker {
+    class AcceptBlocker final : public OpenFileDescriptionBlocker {
     public:
-        explicit AcceptBlocker(FileDescription&, BlockFlags&);
-        virtual const char* state_string() const override { return "Accepting"; }
+        explicit AcceptBlocker(OpenFileDescription&, BlockFlags&);
+        virtual StringView state_string() const override { return "Accepting"sv; }
     };
 
-    class ConnectBlocker final : public FileDescriptionBlocker {
+    class ConnectBlocker final : public OpenFileDescriptionBlocker {
     public:
-        explicit ConnectBlocker(FileDescription&, BlockFlags&);
-        virtual const char* state_string() const override { return "Connecting"; }
+        explicit ConnectBlocker(OpenFileDescription&, BlockFlags&);
+        virtual StringView state_string() const override { return "Connecting"sv; }
     };
 
-    class WriteBlocker final : public FileDescriptionBlocker {
+    class WriteBlocker final : public OpenFileDescriptionBlocker {
     public:
-        explicit WriteBlocker(FileDescription&, BlockFlags&);
-        virtual const char* state_string() const override { return "Writing"; }
+        explicit WriteBlocker(OpenFileDescription&, BlockFlags&);
+        virtual StringView state_string() const override { return "Writing"sv; }
         virtual const BlockTimeout& override_timeout(const BlockTimeout&) override;
 
     private:
         BlockTimeout m_timeout;
     };
 
-    class ReadBlocker final : public FileDescriptionBlocker {
+    class ReadBlocker final : public OpenFileDescriptionBlocker {
     public:
-        explicit ReadBlocker(FileDescription&, BlockFlags&);
-        virtual const char* state_string() const override { return "Reading"; }
+        explicit ReadBlocker(OpenFileDescription&, BlockFlags&);
+        virtual StringView state_string() const override { return "Reading"sv; }
         virtual const BlockTimeout& override_timeout(const BlockTimeout&) override;
 
     private:
@@ -616,10 +658,10 @@ public:
     class SleepBlocker final : public Blocker {
     public:
         explicit SleepBlocker(const BlockTimeout&, Time* = nullptr);
-        virtual const char* state_string() const override { return "Sleeping"; }
+        virtual StringView state_string() const override { return "Sleeping"sv; }
         virtual Type blocker_type() const override { return Type::Sleep; }
         virtual const BlockTimeout& override_timeout(const BlockTimeout&) override;
-        virtual void not_blocking(bool) override;
+        virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) override;
         virtual void was_unblocked(bool) override;
         virtual Thread::BlockResult block_result() override;
 
@@ -633,19 +675,20 @@ public:
     class SelectBlocker final : public FileBlocker {
     public:
         struct FDInfo {
-            NonnullRefPtr<FileDescription> description;
+            NonnullRefPtr<OpenFileDescription> description;
             BlockFlags block_flags { BlockFlags::None };
             BlockFlags unblocked_flags { BlockFlags::None };
         };
 
-        typedef Vector<FDInfo, FD_SETSIZE> FDVector;
-        SelectBlocker(FDVector& fds);
+        using FDVector = Vector<FDInfo, FD_SETSIZE>;
+        explicit SelectBlocker(FDVector&);
         virtual ~SelectBlocker();
 
-        virtual bool unblock(bool, void*) override;
-        virtual void not_blocking(bool) override;
+        virtual bool unblock_if_conditions_are_met(bool, void*) override;
+        virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) override;
         virtual void was_unblocked(bool) override;
-        virtual const char* state_string() const override { return "Selecting"; }
+        virtual StringView state_string() const override { return "Selecting"sv; }
+        virtual bool setup_blocker() override;
 
     private:
         size_t collect_unblocked_flags();
@@ -663,12 +706,12 @@ public:
             Disowned
         };
 
-        WaitBlocker(int wait_options, idtype_t id_type, pid_t id, KResultOr<siginfo_t>& result);
-        virtual const char* state_string() const override { return "Waiting"; }
+        WaitBlocker(int wait_options, Variant<Empty, NonnullRefPtr<Process>, NonnullRefPtr<ProcessGroup>> waitee, KResultOr<siginfo_t>& result);
+        virtual StringView state_string() const override { return "Waiting"sv; }
         virtual Type blocker_type() const override { return Type::Wait; }
-        virtual bool should_block() override { return m_should_block; }
-        virtual void not_blocking(bool) override;
+        virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) override;
         virtual void was_unblocked(bool) override;
+        virtual bool setup_blocker() override;
 
         bool unblock(Process& process, UnblockFlags flags, u8 signal, bool from_add_blocker);
         bool is_wait() const { return !(m_wait_options & WNOWAIT); }
@@ -678,22 +721,17 @@ public:
         void do_set_result(const siginfo_t&);
 
         const int m_wait_options;
-        const idtype_t m_id_type;
-        const pid_t m_waitee_id;
         KResultOr<siginfo_t>& m_result;
-        RefPtr<Process> m_waitee;
-        RefPtr<ProcessGroup> m_waitee_group;
+        Variant<Empty, NonnullRefPtr<Process>, NonnullRefPtr<ProcessGroup>> m_waitee;
         bool m_did_unblock { false };
-        bool m_error { false };
         bool m_got_sigchild { false };
-        bool m_should_block;
     };
 
-    class WaitBlockCondition final : public BlockCondition {
+    class WaitBlockerSet final : public BlockerSet {
         friend class WaitBlocker;
 
     public:
-        WaitBlockCondition(Process& process)
+        explicit WaitBlockerSet(Process& process)
             : m_process(process)
         {
         }
@@ -728,7 +766,7 @@ public:
         if (Thread::current() == this)
             return EDEADLK;
 
-        ScopedSpinLock lock(m_lock);
+        SpinlockLocker lock(m_lock);
         if (!m_is_joinable || state() == Dead)
             return EINVAL;
 
@@ -751,7 +789,7 @@ public:
     [[nodiscard]] bool is_blocked() const { return m_state == Blocked; }
     [[nodiscard]] bool is_in_block() const
     {
-        ScopedSpinLock lock(m_block_lock);
+        SpinlockLocker lock(m_block_lock);
         return m_in_block;
     }
 
@@ -766,10 +804,11 @@ public:
     DebugRegisterState& debug_register_state() { return m_debug_register_state; }
     const DebugRegisterState& debug_register_state() const { return m_debug_register_state; }
 
-    TSS& tss() { return m_tss; }
-    const TSS& tss() const { return m_tss; }
+    ThreadRegisters& regs() { return m_regs; }
+    ThreadRegisters const& regs() const { return m_regs; }
+
     State state() const { return m_state; }
-    const char* state_string() const;
+    StringView state_string() const;
 
     VirtualAddress thread_specific_data() const { return m_thread_specific_data; }
     size_t thread_specific_region_size() const;
@@ -783,82 +822,81 @@ public:
         // tick or entering the next system call, or if it's in kernel
         // mode then we will intercept prior to returning back to user
         // mode.
-        ScopedSpinLock lock(m_lock);
+        SpinlockLocker lock(m_lock);
         while (state() == Thread::Stopped) {
             lock.unlock();
             // We shouldn't be holding the big lock here
-            yield_while_not_holding_big_lock();
+            yield_without_releasing_big_lock();
             lock.lock();
         }
     }
 
+    void block(Kernel::Mutex&, SpinlockLocker<Spinlock>&, u32);
+
     template<typename BlockerType, class... Args>
     [[nodiscard]] BlockResult block(const BlockTimeout& timeout, Args&&... args)
     {
-        VERIFY(!Processor::current().in_irq());
+        VERIFY(!Processor::current_in_irq());
         VERIFY(this == Thread::current());
         ScopedCritical critical;
-        VERIFY(!s_mm_lock.own_lock());
+        VERIFY(!Memory::s_mm_lock.is_locked_by_current_processor());
 
-        ScopedSpinLock block_lock(m_block_lock);
+        SpinlockLocker block_lock(m_block_lock);
         // We need to hold m_block_lock so that nobody can unblock a blocker as soon
         // as it is constructed and registered elsewhere
-        m_in_block = true;
+        VERIFY(!m_in_block);
+        TemporaryChange in_block_change(m_in_block, true);
+
         BlockerType blocker(forward<Args>(args)...);
 
-        ScopedSpinLock scheduler_lock(g_scheduler_lock);
+        if (!blocker.setup_blocker()) {
+            blocker.will_unblock_immediately_without_blocking(Blocker::UnblockImmediatelyReason::UnblockConditionAlreadyMet);
+            return BlockResult::NotBlocked;
+        }
+
+        SpinlockLocker scheduler_lock(g_scheduler_lock);
         // Relaxed semantics are fine for timeout_unblocked because we
         // synchronize on the spin locks already.
         Atomic<bool, AK::MemoryOrder::memory_order_relaxed> timeout_unblocked(false);
-        RefPtr<Timer> timer;
-        {
-            switch (state()) {
-            case Thread::Stopped:
-                // It's possible that we were requested to be stopped!
-                break;
-            case Thread::Running:
-                VERIFY(m_blocker == nullptr);
-                break;
-            default:
-                VERIFY_NOT_REACHED();
-            }
+        bool timer_was_added = false;
 
-            m_blocker = &blocker;
-            if (!blocker.should_block()) {
-                // Don't block if the wake condition is already met
-                blocker.not_blocking(false);
-                m_blocker = nullptr;
-                m_in_block = false;
-                return BlockResult::NotBlocked;
-            }
-
-            auto& block_timeout = blocker.override_timeout(timeout);
-            if (!block_timeout.is_infinite()) {
-                // Process::kill_all_threads may be called at any time, which will mark all
-                // threads to die. In that case
-                timer = TimerQueue::the().add_timer_without_id(block_timeout.clock_id(), block_timeout.absolute_time(), [&]() {
-                    VERIFY(!Processor::current().in_irq());
-                    VERIFY(!g_scheduler_lock.own_lock());
-                    VERIFY(!m_block_lock.own_lock());
-                    // NOTE: this may execute on the same or any other processor!
-                    ScopedSpinLock scheduler_lock(g_scheduler_lock);
-                    ScopedSpinLock block_lock(m_block_lock);
-                    if (m_blocker && timeout_unblocked.exchange(true) == false)
-                        unblock();
-                });
-                if (!timer) {
-                    // Timeout is already in the past
-                    blocker.not_blocking(true);
-                    m_blocker = nullptr;
-                    m_in_block = false;
-                    return BlockResult::InterruptedByTimeout;
-                }
-            }
-
-            blocker.begin_blocking({});
-
-            set_state(Thread::Blocked);
+        switch (state()) {
+        case Thread::Stopped:
+            // It's possible that we were requested to be stopped!
+            break;
+        case Thread::Running:
+            VERIFY(m_blocker == nullptr);
+            break;
+        default:
+            VERIFY_NOT_REACHED();
         }
+
+        m_blocker = &blocker;
+
+        if (auto& block_timeout = blocker.override_timeout(timeout); !block_timeout.is_infinite()) {
+            // Process::kill_all_threads may be called at any time, which will mark all
+            // threads to die. In that case
+            timer_was_added = TimerQueue::the().add_timer_without_id(*m_block_timer, block_timeout.clock_id(), block_timeout.absolute_time(), [&]() {
+                VERIFY(!Processor::current_in_irq());
+                VERIFY(!g_scheduler_lock.is_locked_by_current_processor());
+                VERIFY(!m_block_lock.is_locked_by_current_processor());
+                // NOTE: this may execute on the same or any other processor!
+                SpinlockLocker scheduler_lock(g_scheduler_lock);
+                SpinlockLocker block_lock(m_block_lock);
+                if (m_blocker && timeout_unblocked.exchange(true) == false)
+                    unblock();
+            });
+            if (!timer_was_added) {
+                // Timeout is already in the past
+                blocker.will_unblock_immediately_without_blocking(Blocker::UnblockImmediatelyReason::TimeoutInThePast);
+                m_blocker = nullptr;
+                return BlockResult::InterruptedByTimeout;
+            }
+        }
+
+        blocker.begin_blocking({});
+
+        set_state(Thread::Blocked);
 
         scheduler_lock.unlock();
         block_lock.unlock();
@@ -869,12 +907,12 @@ public:
         auto previous_locked = unlock_process_if_locked(lock_count_to_restore);
         for (;;) {
             // Yield to the scheduler, and wait for us to resume unblocked.
-            VERIFY(!g_scheduler_lock.own_lock());
-            VERIFY(Processor::current().in_critical());
-            yield_while_not_holding_big_lock();
-            VERIFY(Processor::current().in_critical());
+            VERIFY(!g_scheduler_lock.is_locked_by_current_processor());
+            VERIFY(Processor::in_critical());
+            yield_without_releasing_big_lock();
+            VERIFY(Processor::in_critical());
 
-            ScopedSpinLock block_lock2(m_block_lock);
+            SpinlockLocker block_lock2(m_block_lock);
             if (should_be_stopped() || state() == Stopped) {
                 dbgln("Thread should be stopped, current state: {}", state_string());
                 set_state(Thread::Blocked);
@@ -895,13 +933,12 @@ public:
                 m_blocker = nullptr;
             }
             dbgln_if(THREAD_DEBUG, "<-- Thread {} unblocked from {} ({})", *this, &blocker, blocker.state_string());
-            m_in_block = false;
             break;
         }
 
         if (blocker.was_interrupted_by_signal()) {
-            ScopedSpinLock scheduler_lock(g_scheduler_lock);
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker scheduler_lock(g_scheduler_lock);
+            SpinlockLocker lock(m_lock);
             dispatch_one_pending_signal();
         }
 
@@ -909,11 +946,11 @@ public:
         // to clean up now while we're still holding m_lock
         auto result = blocker.end_blocking({}, did_timeout); // calls was_unblocked internally
 
-        if (timer && !did_timeout) {
+        if (timer_was_added && !did_timeout) {
             // Cancel the timer while not holding any locks. This allows
             // the timer function to complete before we remove it
             // (e.g. if it's on another processor)
-            TimerQueue::the().cancel_timer(timer.release_nonnull());
+            TimerQueue::the().cancel_timer(*m_block_timer);
         }
         if (previous_locked != LockMode::Unlocked) {
             // NOTE: this may trigger another call to Thread::block(), so
@@ -923,6 +960,7 @@ public:
         return result;
     }
 
+    u32 unblock_from_lock(Kernel::Mutex&);
     void unblock_from_blocker(Blocker&);
     void unblock(u8 signal = 0);
 
@@ -930,7 +968,7 @@ public:
     Thread::BlockResult wait_on(WaitQueue& wait_queue, const Thread::BlockTimeout& timeout, Args&&... args)
     {
         VERIFY(this == Thread::current());
-        return block<Thread::QueueBlocker>(timeout, wait_queue, forward<Args>(args)...);
+        return block<Thread::WaitQueueBlocker>(timeout, wait_queue, forward<Args>(args)...);
     }
 
     BlockResult sleep(clockid_t, const Time&, Time* = nullptr);
@@ -952,12 +990,13 @@ public:
 
     void exit(void* = nullptr);
 
+    void update_time_scheduled(u64, bool, bool);
     bool tick();
     void set_ticks_left(u32 t) { m_ticks_left = t; }
     u32 ticks_left() const { return m_ticks_left; }
 
-    u32 kernel_stack_base() const { return m_kernel_stack_base; }
-    u32 kernel_stack_top() const { return m_kernel_stack_top; }
+    FlatPtr kernel_stack_base() const { return m_kernel_stack_base; }
+    FlatPtr kernel_stack_top() const { return m_kernel_stack_top; }
 
     void set_state(State, u8 = 0);
 
@@ -987,7 +1026,7 @@ public:
     u32 pending_signals() const;
     u32 pending_signals_for_state() const;
 
-    FPUState& fpu_state() { return *m_fpu_state; }
+    FPUState& fpu_state() { return m_fpu_state; }
 
     KResult make_thread_specific_region(Badge<Process>);
 
@@ -1044,6 +1083,9 @@ public:
     u32 saved_critical() const { return m_saved_critical; }
     void save_critical(u32 critical) { m_saved_critical = critical; }
 
+    void track_lock_acquire(LockRank rank);
+    void track_lock_release(LockRank rank);
+
     [[nodiscard]] bool is_active() const { return m_is_active; }
 
     [[nodiscard]] bool is_finalizable() const
@@ -1058,39 +1100,52 @@ public:
         // We can't finalize until the thread is either detached or
         // a join has started. We can't make m_is_joinable atomic
         // because that would introduce a race in try_join.
-        ScopedSpinLock lock(m_lock);
+        SpinlockLocker lock(m_lock);
         return !m_is_joinable;
     }
 
-    RefPtr<Thread> clone(Process&);
+    KResultOr<NonnullRefPtr<Thread>> try_clone(Process&);
 
-    template<typename Callback>
+    template<IteratorFunction<Thread&> Callback>
     static IterationDecision for_each_in_state(State, Callback);
-    template<typename Callback>
+    template<IteratorFunction<Thread&> Callback>
+    static IterationDecision for_each(Callback);
+
+    template<VoidFunction<Thread&> Callback>
+    static IterationDecision for_each_in_state(State, Callback);
+    template<VoidFunction<Thread&> Callback>
     static IterationDecision for_each(Callback);
 
     static constexpr u32 default_kernel_stack_size = 65536;
     static constexpr u32 default_userspace_stack_size = 1 * MiB;
 
-    u32 ticks_in_user() const { return m_ticks_in_user; }
-    u32 ticks_in_kernel() const { return m_ticks_in_kernel; }
+    u64 time_in_user() const { return m_total_time_scheduled_user; }
+    u64 time_in_kernel() const { return m_total_time_scheduled_kernel; }
 
     enum class PreviousMode : u8 {
         KernelMode = 0,
         UserMode
     };
     PreviousMode previous_mode() const { return m_previous_mode; }
-    void set_previous_mode(PreviousMode mode) { m_previous_mode = mode; }
-    TrapFrame*& current_trap() { return m_current_trap; }
+    bool set_previous_mode(PreviousMode mode)
+    {
+        if (m_previous_mode == mode)
+            return false;
+        m_previous_mode = mode;
+        return true;
+    }
 
-    RecursiveSpinLock& get_lock() const { return m_lock; }
+    TrapFrame*& current_trap() { return m_current_trap; }
+    TrapFrame const* const& current_trap() const { return m_current_trap; }
+
+    RecursiveSpinlock& get_lock() const { return m_lock; }
 
 #if LOCK_DEBUG
-    void holding_lock(Lock& lock, int refs_delta, const char* file = nullptr, int line = 0)
+    void holding_lock(Mutex& lock, int refs_delta, LockLocation const& location)
     {
         VERIFY(refs_delta != 0);
         m_holding_locks.fetch_add(refs_delta, AK::MemoryOrder::memory_order_relaxed);
-        ScopedSpinLock list_lock(m_holding_locks_lock);
+        SpinlockLocker list_lock(m_holding_locks_lock);
         if (refs_delta > 0) {
             bool have_existing = false;
             for (size_t i = 0; i < m_holding_locks_list.size(); i++) {
@@ -1102,7 +1157,7 @@ public:
                 }
             }
             if (!have_existing)
-                m_holding_locks_list.append({ &lock, file ? file : "unknown", line, 1 });
+                m_holding_locks_list.append({ &lock, location, 1 });
         } else {
             VERIFY(refs_delta < 0);
             bool found = false;
@@ -1131,20 +1186,40 @@ public:
         return m_handling_page_fault;
     }
     void set_handling_page_fault(bool b) { m_handling_page_fault = b; }
+    void set_idle_thread() { m_is_idle_thread = true; }
+    bool is_idle_thread() const { return m_is_idle_thread; }
+
+    void set_crashing() { m_is_crashing = true; }
+    [[nodiscard]] bool is_crashing() const { return m_is_crashing; }
+
+    ALWAYS_INLINE u32 enter_profiler()
+    {
+        return m_nested_profiler_calls.fetch_add(1, AK::MemoryOrder::memory_order_acq_rel);
+    }
+
+    ALWAYS_INLINE u32 leave_profiler()
+    {
+        return m_nested_profiler_calls.fetch_sub(1, AK::MemoryOrder::memory_order_acquire);
+    }
+
+    bool is_profiling_suppressed() const { return m_is_profiling_suppressed; }
+    void set_profiling_suppressed() { m_is_profiling_suppressed = true; }
+
+    String backtrace();
 
 private:
-    Thread(NonnullRefPtr<Process>, NonnullOwnPtr<Region> kernel_stack_region);
+    Thread(NonnullRefPtr<Process>, NonnullOwnPtr<Memory::Region>, NonnullRefPtr<Timer>, NonnullOwnPtr<KString>);
 
     IntrusiveListNode<Thread> m_process_thread_list_node;
     int m_runnable_priority { -1 };
 
     friend class WaitQueue;
 
-    class JoinBlockCondition : public BlockCondition {
+    class JoinBlockerSet final : public BlockerSet {
     public:
         void thread_did_exit(void* exit_value)
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             VERIFY(!m_thread_did_exit);
             m_thread_did_exit = true;
             m_exit_value.store(exit_value, AK::MemoryOrder::memory_order_release);
@@ -1152,7 +1227,7 @@ private:
         }
         void thread_finalizing()
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             do_unblock_joiner();
         }
         void* exit_value() const
@@ -1163,7 +1238,7 @@ private:
 
         void try_unblock(JoinBlocker& blocker)
         {
-            ScopedSpinLock lock(m_lock);
+            SpinlockLocker lock(m_lock);
             if (m_thread_did_exit)
                 blocker.unblock(exit_value(), false);
         }
@@ -1185,7 +1260,7 @@ private:
     private:
         void do_unblock_joiner()
         {
-            do_unblock([&](Blocker& b, void*, bool&) {
+            unblock_all_blockers_whose_conditions_are_met_locked([&](Blocker& b, void*, bool&) {
                 VERIFY(b.blocker_type() == Blocker::Type::Join);
                 auto& blocker = static_cast<JoinBlocker&>(b);
                 return blocker.unblock(exit_value(), false);
@@ -1198,50 +1273,56 @@ private:
 
     LockMode unlock_process_if_locked(u32&);
     void relock_process(LockMode, u32);
-    String backtrace();
     void reset_fpu_state();
 
-    mutable RecursiveSpinLock m_lock;
-    mutable RecursiveSpinLock m_block_lock;
+    mutable RecursiveSpinlock m_lock { LockRank::Thread };
+    mutable RecursiveSpinlock m_block_lock;
     NonnullRefPtr<Process> m_process;
     ThreadID m_tid { -1 };
-    TSS m_tss {};
+    ThreadRegisters m_regs {};
     DebugRegisterState m_debug_register_state {};
     TrapFrame* m_current_trap { nullptr };
     u32 m_saved_critical { 1 };
     IntrusiveListNode<Thread> m_ready_queue_node;
     Atomic<u32> m_cpu { 0 };
     u32 m_cpu_affinity { THREAD_AFFINITY_DEFAULT };
+    Optional<u64> m_last_time_scheduled;
+    u64 m_total_time_scheduled_user { 0 };
+    u64 m_total_time_scheduled_kernel { 0 };
     u32 m_ticks_left { 0 };
     u32 m_times_scheduled { 0 };
     u32 m_ticks_in_user { 0 };
     u32 m_ticks_in_kernel { 0 };
     u32 m_pending_signals { 0 };
     u32 m_signal_mask { 0 };
-    u32 m_kernel_stack_base { 0 };
-    u32 m_kernel_stack_top { 0 };
-    OwnPtr<Region> m_kernel_stack_region;
+    FlatPtr m_kernel_stack_base { 0 };
+    FlatPtr m_kernel_stack_top { 0 };
+    OwnPtr<Memory::Region> m_kernel_stack_region;
     VirtualAddress m_thread_specific_data;
+    Optional<Memory::VirtualRange> m_thread_specific_range;
     Array<SignalActionData, NSIG> m_signal_action_data;
     Blocker* m_blocker { nullptr };
+    Kernel::Mutex* m_blocking_lock { nullptr };
+    u32 m_lock_requested_count { 0 };
+    IntrusiveListNode<Thread> m_blocked_threads_list_node;
+    LockRank m_lock_rank_mask { LockRank::None };
 
 #if LOCK_DEBUG
     struct HoldingLockInfo {
-        Lock* lock;
-        const char* file;
-        int line;
+        Mutex* lock;
+        LockLocation lock_location;
         unsigned count;
     };
     Atomic<u32> m_holding_locks { 0 };
-    SpinLock<u8> m_holding_locks_lock;
+    Spinlock m_holding_locks_lock;
     Vector<HoldingLockInfo> m_holding_locks_list;
 #endif
 
-    JoinBlockCondition m_join_condition;
+    JoinBlockerSet m_join_blocker_set;
     Atomic<bool, AK::MemoryOrder::memory_order_relaxed> m_is_active { false };
     bool m_is_joinable { true };
     bool m_handling_page_fault { false };
-    PreviousMode m_previous_mode { PreviousMode::UserMode };
+    PreviousMode m_previous_mode { PreviousMode::KernelMode }; // We always start out in kernel mode
 
     unsigned m_syscall_count { 0 };
     unsigned m_inode_faults { 0 };
@@ -1257,9 +1338,9 @@ private:
     unsigned m_ipv4_socket_read_bytes { 0 };
     unsigned m_ipv4_socket_write_bytes { 0 };
 
-    FPUState* m_fpu_state { nullptr };
+    FPUState m_fpu_state {};
     State m_state { Invalid };
-    String m_name;
+    NonnullOwnPtr<KString> m_name;
     u32 m_priority { THREAD_PRIORITY_NORMAL };
 
     State m_stop_state { Invalid };
@@ -1268,41 +1349,83 @@ private:
     bool m_should_die { false };
     bool m_initialized { false };
     bool m_in_block { false };
+    bool m_is_idle_thread { false };
+    bool m_is_crashing { false };
     Atomic<bool> m_have_any_unmasked_pending_signals { false };
+    Atomic<u32> m_nested_profiler_calls { 0 };
 
-    void yield_without_holding_big_lock();
-    void donate_without_holding_big_lock(RefPtr<Thread>&, const char*);
-    void yield_while_not_holding_big_lock();
+    NonnullRefPtr<Timer> m_block_timer;
+
+    bool m_is_profiling_suppressed { false };
+
+    void yield_and_release_relock_big_lock();
+
+    enum class VerifyLockNotHeld {
+        Yes,
+        No
+    };
+
+    void yield_without_releasing_big_lock(VerifyLockNotHeld verify_lock_not_held = VerifyLockNotHeld::Yes);
     void drop_thread_count(bool);
+
+    mutable IntrusiveListNode<Thread> m_global_thread_list_node;
+
+public:
+    using ListInProcess = IntrusiveList<&Thread::m_process_thread_list_node>;
+    using GlobalList = IntrusiveList<&Thread::m_global_thread_list_node>;
+
+    static SpinlockProtected<GlobalList>& all_instances();
 };
 
 AK_ENUM_BITWISE_OPERATORS(Thread::FileBlocker::BlockFlags);
 
-template<typename Callback>
+template<IteratorFunction<Thread&> Callback>
 inline IterationDecision Thread::for_each(Callback callback)
 {
-    ScopedSpinLock lock(g_tid_map_lock);
-    for (auto& it : *g_tid_map) {
-        IterationDecision decision = callback(*it.value);
-        if (decision != IterationDecision::Continue)
-            return decision;
-    }
-    return IterationDecision::Continue;
+    return Thread::all_instances().with([&](auto& list) -> IterationDecision {
+        for (auto& thread : list) {
+            IterationDecision decision = callback(thread);
+            if (decision != IterationDecision::Continue)
+                return decision;
+        }
+        return IterationDecision::Continue;
+    });
 }
 
-template<typename Callback>
+template<IteratorFunction<Thread&> Callback>
 inline IterationDecision Thread::for_each_in_state(State state, Callback callback)
 {
-    ScopedSpinLock lock(g_tid_map_lock);
-    for (auto& it : *g_tid_map) {
-        auto& thread = *it.value;
-        if (thread.state() != state)
-            continue;
-        IterationDecision decision = callback(thread);
-        if (decision != IterationDecision::Continue)
-            return decision;
-    }
-    return IterationDecision::Continue;
+    return Thread::all_instances().with([&](auto& list) -> IterationDecision {
+        for (auto& thread : list) {
+            if (thread.state() != state)
+                continue;
+            IterationDecision decision = callback(thread);
+            if (decision != IterationDecision::Continue)
+                return decision;
+        }
+        return IterationDecision::Continue;
+    });
+}
+
+template<VoidFunction<Thread&> Callback>
+inline IterationDecision Thread::for_each(Callback callback)
+{
+    return Thread::all_instances().with([&](auto& list) {
+        for (auto& thread : list) {
+            if (callback(thread) == IterationDecision::Break)
+                return IterationDecision::Break;
+        }
+        return IterationDecision::Continue;
+    });
+}
+
+template<VoidFunction<Thread&> Callback>
+inline IterationDecision Thread::for_each_in_state(State state, Callback callback)
+{
+    return for_each_in_state(state, [&](auto& thread) {
+        callback(thread);
+        return IterationDecision::Continue;
+    });
 }
 
 }

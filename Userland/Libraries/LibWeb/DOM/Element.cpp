@@ -1,43 +1,29 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/AnyOf.h>
 #include <AK/StringBuilder.h>
-#include <LibWeb/CSS/Parser/DeprecatedCSSParser.h>
+#include <LibWeb/CSS/Parser/Parser.h>
 #include <LibWeb/CSS/PropertyID.h>
+#include <LibWeb/CSS/ResolvedCSSStyleDeclaration.h>
+#include <LibWeb/CSS/SelectorEngine.h>
 #include <LibWeb/CSS/StyleInvalidator.h>
-#include <LibWeb/CSS/StyleResolver.h>
 #include <LibWeb/DOM/DOMException.h>
+#include <LibWeb/DOM/DOMTokenList.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/DOM/ExceptionOr.h>
+#include <LibWeb/DOM/HTMLCollection.h>
 #include <LibWeb/DOM/ShadowRoot.h>
 #include <LibWeb/DOM/Text.h>
-#include <LibWeb/HTML/Parser/HTMLDocumentParser.h>
-#include <LibWeb/Layout/BlockBox.h>
+#include <LibWeb/DOMParsing/InnerHTML.h>
+#include <LibWeb/Geometry/DOMRect.h>
+#include <LibWeb/HTML/EventLoop/EventLoop.h>
+#include <LibWeb/HTML/Parser/HTMLParser.h>
+#include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/InlineNode.h>
 #include <LibWeb/Layout/ListItemBox.h>
 #include <LibWeb/Layout/TableBox.h>
@@ -46,125 +32,140 @@
 #include <LibWeb/Layout/TableRowGroupBox.h>
 #include <LibWeb/Layout/TreeBuilder.h>
 #include <LibWeb/Namespace.h>
+#include <LibWeb/Page/BrowsingContext.h>
 
 namespace Web::DOM {
 
 Element::Element(Document& document, QualifiedName qualified_name)
     : ParentNode(document, NodeType::ELEMENT_NODE)
     , m_qualified_name(move(qualified_name))
+    , m_attributes(NamedNodeMap::create(*this))
 {
+    make_html_uppercased_qualified_name();
 }
 
 Element::~Element()
 {
 }
 
-Attribute* Element::find_attribute(const FlyString& name)
+// https://dom.spec.whatwg.org/#dom-element-getattribute
+String Element::get_attribute(const FlyString& name) const
 {
-    for (auto& attribute : m_attributes) {
-        if (attribute.name() == name)
-            return &attribute;
-    }
-    return nullptr;
+    // 1. Let attr be the result of getting an attribute given qualifiedName and this.
+    auto const* attribute = m_attributes->get_attribute(name);
+
+    // 2. If attr is null, return null.
+    if (!attribute)
+        return {};
+
+    // 3. Return attr’s value.
+    return attribute->value();
 }
 
-const Attribute* Element::find_attribute(const FlyString& name) const
-{
-    for (auto& attribute : m_attributes) {
-        if (attribute.name() == name)
-            return &attribute;
-    }
-    return nullptr;
-}
-
-String Element::attribute(const FlyString& name) const
-{
-    if (auto* attribute = find_attribute(name))
-        return attribute->value();
-    return {};
-}
-
+// https://dom.spec.whatwg.org/#dom-element-setattribute
 ExceptionOr<void> Element::set_attribute(const FlyString& name, const String& value)
 {
+    // 1. If qualifiedName does not match the Name production in XML, then throw an "InvalidCharacterError" DOMException.
     // FIXME: Proper name validation
     if (name.is_empty())
         return InvalidCharacterError::create("Attribute name must not be empty");
 
     CSS::StyleInvalidator style_invalidator(document());
 
-    if (auto* attribute = find_attribute(name))
-        attribute->set_value(value);
-    else
-        m_attributes.empend(name, value);
+    // 2. If this is in the HTML namespace and its node document is an HTML document, then set qualifiedName to qualifiedName in ASCII lowercase.
+    // FIXME: Handle the second condition, assume it is an HTML document for now.
+    bool insert_as_lowercase = namespace_uri() == Namespace::HTML;
 
-    parse_attribute(name, value);
+    // 3. Let attribute be the first attribute in this’s attribute list whose qualified name is qualifiedName, and null otherwise.
+    auto* attribute = m_attributes->get_attribute(name);
+
+    // 4. If attribute is null, create an attribute whose local name is qualifiedName, value is value, and node document is this’s node document, then append this attribute to this, and then return.
+    if (!attribute) {
+        auto new_attribute = Attribute::create(document(), insert_as_lowercase ? name.to_lowercase() : name, value);
+        m_attributes->append_attribute(new_attribute);
+
+        attribute = new_attribute.ptr();
+    }
+
+    // 5. Change attribute to value.
+    else {
+        attribute->set_value(value);
+    }
+
+    parse_attribute(attribute->local_name(), value);
     return {};
 }
 
+// https://dom.spec.whatwg.org/#dom-element-removeattribute
 void Element::remove_attribute(const FlyString& name)
 {
     CSS::StyleInvalidator style_invalidator(document());
+    m_attributes->remove_attribute(name);
+}
 
-    m_attributes.remove_first_matching([&](auto& attribute) { return attribute.name() == name; });
+// https://dom.spec.whatwg.org/#dom-element-hasattribute
+bool Element::has_attribute(const FlyString& name) const
+{
+    return m_attributes->get_attribute(name) != nullptr;
 }
 
 bool Element::has_class(const FlyString& class_name, CaseSensitivity case_sensitivity) const
 {
-    return any_of(m_classes.begin(), m_classes.end(), [&](auto& it) {
+    return any_of(m_classes, [&](auto& it) {
         return case_sensitivity == CaseSensitivity::CaseSensitive
             ? it == class_name
-            : it.to_lowercase() == class_name.to_lowercase();
+            : it.equals_ignoring_case(class_name);
     });
 }
 
 RefPtr<Layout::Node> Element::create_layout_node()
 {
-    auto style = document().style_resolver().resolve_style(*this);
+    auto style = document().style_computer().compute_style(*this);
     const_cast<Element&>(*this).m_specified_css_values = style;
     auto display = style->display();
 
-    if (display == CSS::Display::None)
+    if (display.is_none())
         return nullptr;
 
     if (local_name() == "noscript" && document().is_scripting_enabled())
         return nullptr;
 
-    switch (display) {
-    case CSS::Display::None:
-        VERIFY_NOT_REACHED();
-        break;
-    case CSS::Display::Block:
-        return adopt(*new Layout::BlockBox(document(), this, move(style)));
-    case CSS::Display::Inline:
-        if (style->float_().value_or(CSS::Float::None) != CSS::Float::None)
-            return adopt(*new Layout::BlockBox(document(), this, move(style)));
-        return adopt(*new Layout::InlineNode(document(), *this, move(style)));
-    case CSS::Display::ListItem:
-        return adopt(*new Layout::ListItemBox(document(), *this, move(style)));
-    case CSS::Display::Table:
-        return adopt(*new Layout::TableBox(document(), this, move(style)));
-    case CSS::Display::TableRow:
-        return adopt(*new Layout::TableRowBox(document(), this, move(style)));
-    case CSS::Display::TableCell:
-        return adopt(*new Layout::TableCellBox(document(), this, move(style)));
-    case CSS::Display::TableRowGroup:
-    case CSS::Display::TableHeaderGroup:
-    case CSS::Display::TableFooterGroup:
-        return adopt(*new Layout::TableRowGroupBox(document(), *this, move(style)));
-    case CSS::Display::InlineBlock: {
-        auto inline_block = adopt(*new Layout::BlockBox(document(), this, move(style)));
-        inline_block->set_inline(true);
-        return inline_block;
-    }
-    case CSS::Display::Flex:
-        return adopt(*new Layout::BlockBox(document(), this, move(style)));
-    case CSS::Display::TableColumn:
-    case CSS::Display::TableColumnGroup:
-    case CSS::Display::TableCaption:
+    if (display.is_table_inside())
+        return adopt_ref(*new Layout::TableBox(document(), this, move(style)));
+
+    if (display.is_list_item())
+        return adopt_ref(*new Layout::ListItemBox(document(), *this, move(style)));
+
+    if (display.is_table_row())
+        return adopt_ref(*new Layout::TableRowBox(document(), this, move(style)));
+
+    if (display.is_table_cell())
+        return adopt_ref(*new Layout::TableCellBox(document(), this, move(style)));
+
+    if (display.is_table_row_group() || display.is_table_header_group() || display.is_table_footer_group())
+        return adopt_ref(*new Layout::TableRowGroupBox(document(), *this, move(style)));
+
+    if (display.is_table_column() || display.is_table_column_group() || display.is_table_caption()) {
         // FIXME: This is just an incorrect placeholder until we improve table layout support.
-        return adopt(*new Layout::BlockBox(document(), this, move(style)));
+        return adopt_ref(*new Layout::BlockContainer(document(), this, move(style)));
     }
-    VERIFY_NOT_REACHED();
+
+    if (display.is_inline_outside()) {
+        if (display.is_flow_root_inside()) {
+            auto block = adopt_ref(*new Layout::BlockContainer(document(), this, move(style)));
+            block->set_inline(true);
+            return block;
+        }
+        if (display.is_flow_inside())
+            return adopt_ref(*new Layout::InlineNode(document(), *this, move(style)));
+
+        TODO();
+    }
+
+    if (display.is_flow_inside() || display.is_flow_root_inside() || display.is_flex_inside())
+        return adopt_ref(*new Layout::BlockContainer(document(), this, move(style)));
+
+    TODO();
 }
 
 void Element::parse_attribute(const FlyString& name, const String& value)
@@ -176,9 +177,14 @@ void Element::parse_attribute(const FlyString& name, const String& value)
         for (auto& new_class : new_classes) {
             m_classes.unchecked_append(new_class);
         }
+        if (m_class_list)
+            m_class_list->associated_attribute_changed(value);
     } else if (name == HTML::AttributeNames::style) {
-        m_inline_style = parse_css_declaration(CSS::ParsingContext(document()), value);
-        set_needs_style_update(true);
+        auto parsed_style = parse_css_declaration(CSS::ParsingContext(document()), value);
+        if (!parsed_style.is_null()) {
+            m_inline_style = CSS::ElementInlineCSSStyleDeclaration::create_and_take_properties_from(*this, parsed_style.release_nonnull());
+            set_needs_style_update(true);
+        }
     }
 }
 
@@ -188,7 +194,7 @@ enum class StyleDifference {
     NeedsRelayout,
 };
 
-static StyleDifference compute_style_difference(const CSS::StyleProperties& old_style, const CSS::StyleProperties& new_style, const Document& document)
+static StyleDifference compute_style_difference(CSS::StyleProperties const& old_style, CSS::StyleProperties const& new_style, Layout::NodeWithStyle const& node)
 {
     if (old_style == new_style)
         return StyleDifference::None;
@@ -199,9 +205,9 @@ static StyleDifference compute_style_difference(const CSS::StyleProperties& old_
     if (new_style.display() != old_style.display())
         needs_relayout = true;
 
-    if (new_style.color_or_fallback(CSS::PropertyID::Color, document, Color::Black) != old_style.color_or_fallback(CSS::PropertyID::Color, document, Color::Black))
+    if (new_style.color_or_fallback(CSS::PropertyID::Color, node, Color::Black) != old_style.color_or_fallback(CSS::PropertyID::Color, node, Color::Black))
         needs_repaint = true;
-    else if (new_style.color_or_fallback(CSS::PropertyID::BackgroundColor, document, Color::Black) != old_style.color_or_fallback(CSS::PropertyID::BackgroundColor, document, Color::Black))
+    else if (new_style.color_or_fallback(CSS::PropertyID::BackgroundColor, node, Color::Black) != old_style.color_or_fallback(CSS::PropertyID::BackgroundColor, node, Color::Black))
         needs_repaint = true;
 
     if (needs_relayout)
@@ -216,10 +222,10 @@ void Element::recompute_style()
     set_needs_style_update(false);
     VERIFY(parent());
     auto old_specified_css_values = m_specified_css_values;
-    auto new_specified_css_values = document().style_resolver().resolve_style(*this);
+    auto new_specified_css_values = document().style_computer().compute_style(*this);
     m_specified_css_values = new_specified_css_values;
     if (!layout_node()) {
-        if (new_specified_css_values->display() == CSS::Display::None)
+        if (new_specified_css_values->display().is_none())
             return;
         // We need a new layout tree here!
         Layout::TreeBuilder tree_builder;
@@ -228,13 +234,13 @@ void Element::recompute_style()
     }
 
     auto diff = StyleDifference::NeedsRelayout;
-    if (old_specified_css_values)
-        diff = compute_style_difference(*old_specified_css_values, *new_specified_css_values, document());
+    if (old_specified_css_values && layout_node())
+        diff = compute_style_difference(*old_specified_css_values, *new_specified_css_values, *layout_node());
     if (diff == StyleDifference::None)
         return;
     layout_node()->apply_style(*new_specified_css_values);
     if (diff == StyleDifference::NeedsRelayout) {
-        document().schedule_forced_layout();
+        document().set_needs_layout();
         return;
     }
     if (diff == StyleDifference::NeedsRepaint) {
@@ -244,100 +250,56 @@ void Element::recompute_style()
 
 NonnullRefPtr<CSS::StyleProperties> Element::computed_style()
 {
-    // FIXME: This implementation is not doing anything it's supposed to.
-    auto properties = m_specified_css_values->clone();
-    if (layout_node() && layout_node()->has_style()) {
-        CSS::PropertyID box_model_metrics[] = {
-            CSS::PropertyID::MarginTop,
-            CSS::PropertyID::MarginBottom,
-            CSS::PropertyID::MarginLeft,
-            CSS::PropertyID::MarginRight,
-            CSS::PropertyID::PaddingTop,
-            CSS::PropertyID::PaddingBottom,
-            CSS::PropertyID::PaddingLeft,
-            CSS::PropertyID::PaddingRight,
-            CSS::PropertyID::BorderTopWidth,
-            CSS::PropertyID::BorderBottomWidth,
-            CSS::PropertyID::BorderLeftWidth,
-            CSS::PropertyID::BorderRightWidth,
-        };
-        for (CSS::PropertyID id : box_model_metrics) {
-            auto prop = m_specified_css_values->property(id);
-            if (prop.has_value())
-                properties->set_property(id, prop.value());
-        }
+    auto element_computed_style = CSS::ResolvedCSSStyleDeclaration::create(*this);
+    auto properties = CSS::StyleProperties::create();
+
+    for (auto i = to_underlying(CSS::first_property_id); i <= to_underlying(CSS::last_property_id); ++i) {
+        auto property_id = (CSS::PropertyID)i;
+        auto maybe_value = element_computed_style->property(property_id);
+        if (!maybe_value.has_value())
+            continue;
+        properties->set_property(property_id, maybe_value.release_value().value);
     }
+
     return properties;
 }
 
-void Element::set_inner_html(StringView markup)
+RefPtr<DOMTokenList> const& Element::class_list()
 {
-    auto new_children = HTML::HTMLDocumentParser::parse_html_fragment(*this, markup);
-    remove_all_children();
-    while (!new_children.is_empty()) {
-        append_child(new_children.take_first());
-    }
-
-    set_needs_style_update(true);
-    document().invalidate_layout();
+    if (!m_class_list)
+        m_class_list = DOMTokenList::create(*this, HTML::AttributeNames::class_);
+    return m_class_list;
 }
 
+// https://dom.spec.whatwg.org/#dom-element-matches
+DOM::ExceptionOr<bool> Element::matches(StringView selectors) const
+{
+    auto maybe_selectors = parse_selector(CSS::ParsingContext(static_cast<ParentNode&>(const_cast<Element&>(*this))), selectors);
+    if (!maybe_selectors.has_value())
+        return DOM::SyntaxError::create("Failed to parse selector");
+
+    auto sel = maybe_selectors.value();
+    for (auto& s : sel) {
+        if (SelectorEngine::matches(s, *this))
+            return true;
+    }
+    return false;
+}
+
+ExceptionOr<void> Element::set_inner_html(String const& markup)
+{
+    auto result = DOMParsing::inner_html_setter(*this, markup);
+    if (result.is_exception())
+        return result.exception();
+
+    set_needs_style_update(true);
+    return {};
+}
+
+// https://w3c.github.io/DOM-Parsing/#dom-innerhtml-innerhtml
 String Element::inner_html() const
 {
-    auto escape_string = [](const StringView& string, bool attribute_mode) -> String {
-        // https://html.spec.whatwg.org/multipage/parsing.html#escapingString
-        StringBuilder builder;
-        for (auto& ch : string) {
-            if (ch == '&')
-                builder.append("&amp;");
-            // FIXME: also replace U+00A0 NO-BREAK SPACE with &nbsp;
-            else if (ch == '"' && attribute_mode)
-                builder.append("&quot;");
-            else if (ch == '<' && !attribute_mode)
-                builder.append("&lt;");
-            else if (ch == '>' && !attribute_mode)
-                builder.append("&gt;");
-            else
-                builder.append(ch);
-        }
-        return builder.to_string();
-    };
-
-    StringBuilder builder;
-
-    Function<void(const Node&)> recurse = [&](auto& node) {
-        for (auto* child = node.first_child(); child; child = child->next_sibling()) {
-            if (child->is_element()) {
-                auto& element = downcast<Element>(*child);
-                builder.append('<');
-                builder.append(element.local_name());
-                element.for_each_attribute([&](auto& name, auto& value) {
-                    builder.append(' ');
-                    builder.append(name);
-                    builder.append('=');
-                    builder.append('"');
-                    builder.append(escape_string(value, true));
-                    builder.append('"');
-                });
-                builder.append('>');
-
-                recurse(*child);
-
-                // FIXME: This should be skipped for void elements
-                builder.append("</");
-                builder.append(element.local_name());
-                builder.append('>');
-            }
-            if (child->is_text()) {
-                auto& text = downcast<Text>(*child);
-                builder.append(escape_string(text.data(), false));
-            }
-            // FIXME: Also handle Comment, ProcessingInstruction, DocumentType
-        }
-    };
-    recurse(*this);
-
-    return builder.to_string();
+    return serialize_fragment(/* FIXME: Providing true for the require well-formed flag (which may throw) */);
 }
 
 bool Element::is_focused() const
@@ -345,31 +307,16 @@ bool Element::is_focused() const
     return document().focused_element() == this;
 }
 
-NonnullRefPtrVector<Element> Element::get_elements_by_tag_name(const FlyString& tag_name) const
+bool Element::is_active() const
 {
-    // FIXME: Support "*" for tag_name
-    // https://dom.spec.whatwg.org/#concept-getelementsbytagname
-    NonnullRefPtrVector<Element> elements;
-    for_each_in_inclusive_subtree_of_type<Element>([&](auto& element) {
-        if (element.namespace_() == Namespace::HTML
-                ? element.local_name().to_lowercase() == tag_name.to_lowercase()
-                : element.local_name() == tag_name) {
-            elements.append(element);
-        }
-        return IterationDecision::Continue;
-    });
-    return elements;
+    return document().active_element() == this;
 }
 
-NonnullRefPtrVector<Element> Element::get_elements_by_class_name(const FlyString& class_name) const
+NonnullRefPtr<HTMLCollection> Element::get_elements_by_class_name(FlyString const& class_name)
 {
-    NonnullRefPtrVector<Element> elements;
-    for_each_in_inclusive_subtree_of_type<Element>([&](auto& element) {
-        if (element.has_class(class_name, m_document->in_quirks_mode() ? CaseSensitivity::CaseInsensitive : CaseSensitivity::CaseSensitive))
-            elements.append(element);
-        return IterationDecision::Continue;
+    return HTMLCollection::create(*this, [class_name, quirks_mode = document().in_quirks_mode()](Element const& element) {
+        return element.has_class(class_name, quirks_mode ? CaseSensitivity::CaseInsensitive : CaseSensitivity::CaseSensitive);
     });
-    return elements;
 }
 
 void Element::set_shadow_root(RefPtr<ShadowRoot> shadow_root)
@@ -385,6 +332,90 @@ NonnullRefPtr<CSS::CSSStyleDeclaration> Element::style_for_bindings()
     if (!m_inline_style)
         m_inline_style = CSS::ElementInlineCSSStyleDeclaration::create(*this);
     return *m_inline_style;
+}
+
+// https://dom.spec.whatwg.org/#element-html-uppercased-qualified-name
+void Element::make_html_uppercased_qualified_name()
+{
+    // This is allowed by the spec: "User agents could optimize qualified name and HTML-uppercased qualified name by storing them in internal slots."
+    if (namespace_() == Namespace::HTML /* FIXME: and its node document is an HTML document */)
+        m_html_uppercased_qualified_name = qualified_name().to_uppercase();
+    else
+        m_html_uppercased_qualified_name = qualified_name();
+}
+
+// https://html.spec.whatwg.org/multipage/webappapis.html#queue-an-element-task
+void Element::queue_an_element_task(HTML::Task::Source source, Function<void()> steps)
+{
+    auto task = HTML::Task::create(source, &document(), [strong_this = NonnullRefPtr(*this), steps = move(steps)] {
+        steps();
+    });
+    HTML::main_thread_event_loop().task_queue().add(move(task));
+}
+
+// https://html.spec.whatwg.org/multipage/syntax.html#void-elements
+bool Element::is_void_element() const
+{
+    return local_name().is_one_of(HTML::TagNames::area, HTML::TagNames::base, HTML::TagNames::br, HTML::TagNames::col, HTML::TagNames::embed, HTML::TagNames::hr, HTML::TagNames::img, HTML::TagNames::input, HTML::TagNames::link, HTML::TagNames::meta, HTML::TagNames::param, HTML::TagNames::source, HTML::TagNames::track, HTML::TagNames::wbr);
+}
+
+// https://html.spec.whatwg.org/multipage/parsing.html#serializes-as-void
+bool Element::serializes_as_void() const
+{
+    return is_void_element() || local_name().is_one_of(HTML::TagNames::basefont, HTML::TagNames::bgsound, HTML::TagNames::frame, HTML::TagNames::keygen);
+}
+
+// https://drafts.csswg.org/cssom-view/#dom-element-getboundingclientrect
+NonnullRefPtr<Geometry::DOMRect> Element::get_bounding_client_rect() const
+{
+    // FIXME: Support inline layout nodes as well.
+
+    if (!layout_node() || !layout_node()->is_box())
+        return Geometry::DOMRect::create(0, 0, 0, 0);
+
+    VERIFY(document().browsing_context());
+    auto viewport_offset = document().browsing_context()->viewport_scroll_offset();
+
+    auto& box = static_cast<Layout::Box const&>(*layout_node());
+    return Geometry::DOMRect::create(box.absolute_rect().translated(-viewport_offset.x(), -viewport_offset.y()));
+}
+
+int Element::client_top() const
+{
+    if (!layout_node() || !layout_node()->is_box())
+        return 0;
+    auto& box = static_cast<Layout::Box const&>(*layout_node());
+    return box.absolute_rect().top();
+}
+
+int Element::client_left() const
+{
+    if (!layout_node() || !layout_node()->is_box())
+        return 0;
+    auto& box = static_cast<Layout::Box const&>(*layout_node());
+    return box.absolute_rect().left();
+}
+
+int Element::client_width() const
+{
+    if (!layout_node() || !layout_node()->is_box())
+        return 0;
+    auto& box = static_cast<Layout::Box const&>(*layout_node());
+    return box.absolute_rect().width();
+}
+
+int Element::client_height() const
+{
+    if (!layout_node() || !layout_node()->is_box())
+        return 0;
+    auto& box = static_cast<Layout::Box const&>(*layout_node());
+    return box.absolute_rect().height();
+}
+
+void Element::children_changed()
+{
+    Node::children_changed();
+    set_needs_style_update(true);
 }
 
 }

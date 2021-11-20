@@ -1,27 +1,8 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Mustafa Quraish <mustafa@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "GlyphMapWidget.h"
@@ -44,14 +25,15 @@ void GlyphMapWidget::initialize(Gfx::BitmapFont& mutable_font)
     if (m_font == mutable_font)
         return;
     m_font = mutable_font;
-    m_glyph_count = mutable_font.glyph_count();
-    m_selected_glyph = 0;
     vertical_scrollbar().set_step(font().glyph_height() + m_vertical_spacing);
+    set_selected_glyph('A');
 }
 
 void GlyphMapWidget::resize_event(GUI::ResizeEvent& event)
 {
     int event_width = event.size().width() - this->vertical_scrollbar().width() - (frame_thickness() * 2) - m_horizontal_spacing;
+    int event_height = event.size().height() - (frame_thickness() * 2);
+    m_visible_glyphs = (event_width * event_height) / (font().max_glyph_width() * font().glyph_height());
     m_columns = max(event_width / (font().max_glyph_width() + m_horizontal_spacing), 1);
     m_rows = ceil_div(m_glyph_count, m_columns);
 
@@ -59,7 +41,9 @@ void GlyphMapWidget::resize_event(GUI::ResizeEvent& event)
     int content_height = rows() * (font().glyph_height() + m_vertical_spacing) + frame_thickness();
     set_content_size({ content_width, content_height });
 
-    ScrollableWidget::resize_event(event);
+    scroll_to_glyph(m_selected_glyph);
+
+    AbstractScrollableWidget::resize_event(event);
 }
 
 void GlyphMapWidget::set_selected_glyph(int glyph)
@@ -90,14 +74,6 @@ void GlyphMapWidget::update_glyph(int glyph)
     update(get_outer_rect(glyph));
 }
 
-void GlyphMapWidget::reprobe_font()
-{
-    VERIFY(m_font);
-    m_glyph_count = m_font->glyph_count();
-    m_selected_glyph = 0;
-    update();
-}
-
 void GlyphMapWidget::paint_event(GUI::PaintEvent& event)
 {
     GUI::Frame::paint_event(event);
@@ -109,7 +85,10 @@ void GlyphMapWidget::paint_event(GUI::PaintEvent& event)
     painter.set_font(font());
     painter.fill_rect(widget_inner_rect(), palette().inactive_window_title());
 
-    for (int glyph = 0; glyph < m_glyph_count; ++glyph) {
+    int scroll_steps = this->vertical_scrollbar().value() / this->vertical_scrollbar().step();
+    int first_visible_glyph = scroll_steps * columns();
+
+    for (int glyph = first_visible_glyph; glyph <= first_visible_glyph + m_visible_glyphs && glyph < m_glyph_count; ++glyph) {
         Gfx::IntRect outer_rect = get_outer_rect(glyph);
         Gfx::IntRect inner_rect(
             outer_rect.x() + m_horizontal_spacing / 2,
@@ -118,8 +97,9 @@ void GlyphMapWidget::paint_event(GUI::PaintEvent& event)
             font().glyph_height());
         if (glyph == m_selected_glyph) {
             painter.fill_rect(outer_rect, is_focused() ? palette().selection() : palette().inactive_selection());
-            painter.draw_glyph(inner_rect.location(), glyph, is_focused() ? palette().selection_text() : palette().inactive_selection_text());
-        } else if (m_font->contains_glyph(glyph)) {
+            if (m_font->raw_glyph_width(glyph))
+                painter.draw_glyph(inner_rect.location(), glyph, is_focused() ? palette().selection_text() : palette().inactive_selection_text());
+        } else if (m_font->raw_glyph_width(glyph)) {
             painter.fill_rect(outer_rect, palette().base());
             painter.draw_glyph(inner_rect.location(), glyph, palette().base_text());
         }
@@ -130,12 +110,13 @@ void GlyphMapWidget::mousedown_event(GUI::MouseEvent& event)
 {
     GUI::Frame::mousedown_event(event);
 
-    // FIXME: This is a silly loop.
-    for (int glyph = 0; glyph < m_glyph_count; ++glyph) {
-        if (get_outer_rect(glyph).contains(event.position())) {
-            set_selected_glyph(glyph);
-            break;
-        }
+    Gfx::IntPoint map_offset { frame_thickness() - horizontal_scrollbar().value(), frame_thickness() - vertical_scrollbar().value() };
+    auto map_position = event.position() - map_offset;
+    auto col = (map_position.x() - 1) / ((font().max_glyph_width() + m_horizontal_spacing));
+    auto row = (map_position.y() - 1) / ((font().glyph_height() + m_vertical_spacing));
+    auto glyph = row * columns() + col;
+    if (row >= 0 && row < rows() && col >= 0 && col < columns() && glyph < m_glyph_count) {
+        set_selected_glyph(glyph);
     }
 }
 

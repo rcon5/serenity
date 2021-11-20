@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
@@ -30,7 +10,6 @@
 #include "Job.h"
 #include "NodeVisitor.h"
 #include <AK/Format.h>
-#include <AK/InlineLinkedList.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
@@ -41,16 +20,12 @@
 
 namespace Shell::AST {
 
-template<typename T, typename... Args>
-static inline NonnullRefPtr<T> create(Args... args)
-{
-    return adopt(*new T(args...));
-}
+using AK::make_ref_counted;
 
 template<typename T>
-static inline NonnullRefPtr<T> create(std::initializer_list<NonnullRefPtr<Value>> arg)
+static inline NonnullRefPtr<T> make_ref_counted(std::initializer_list<NonnullRefPtr<Value>> arg)
 {
-    return adopt(*new T(arg));
+    return adopt_ref(*new T(arg));
 }
 
 struct HighlightMetadata {
@@ -142,7 +117,7 @@ struct PathRedirection : public Redirection {
 
     static NonnullRefPtr<PathRedirection> create(String path, int fd, decltype(direction) direction)
     {
-        return adopt(*new PathRedirection(move(path), fd, direction));
+        return adopt_ref(*new PathRedirection(move(path), fd, direction));
     }
 
     virtual Result<NonnullRefPtr<Rewiring>, String> apply() const override;
@@ -163,19 +138,19 @@ struct FdRedirection : public Redirection {
 public:
     static NonnullRefPtr<FdRedirection> create(int old_fd, int new_fd, Rewiring::Close close)
     {
-        return adopt(*new FdRedirection(old_fd, new_fd, close));
+        return adopt_ref(*new FdRedirection(old_fd, new_fd, close));
     }
 
     static NonnullRefPtr<FdRedirection> create(int old_fd, int new_fd, FdRedirection* pipe_end, Rewiring::Close close)
     {
-        return adopt(*new FdRedirection(old_fd, new_fd, pipe_end, close));
+        return adopt_ref(*new FdRedirection(old_fd, new_fd, pipe_end, close));
     }
 
     virtual ~FdRedirection();
 
     virtual Result<NonnullRefPtr<Rewiring>, String> apply() const override
     {
-        return adopt(*new Rewiring(old_fd, new_fd, other_pipe_end, action));
+        return adopt_ref(*new Rewiring(old_fd, new_fd, other_pipe_end, action));
     }
 
     int old_fd { -1 };
@@ -268,7 +243,7 @@ class CommandValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
     virtual Vector<Command> resolve_as_commands(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<CommandValue>(m_command)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<CommandValue>(m_command)->set_slices(m_slices); }
     virtual ~CommandValue();
     virtual bool is_command() const override { return true; }
     CommandValue(Command command)
@@ -289,7 +264,7 @@ class CommandSequenceValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
     virtual Vector<Command> resolve_as_commands(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<CommandSequenceValue>(m_contained_values)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<CommandSequenceValue>(m_contained_values)->set_slices(m_slices); }
     virtual ~CommandSequenceValue();
     virtual bool is_command() const override { return true; }
     CommandSequenceValue(Vector<Command> commands)
@@ -305,7 +280,7 @@ class JobValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override { VERIFY_NOT_REACHED(); }
     virtual Vector<Command> resolve_as_commands(RefPtr<Shell>) override { VERIFY_NOT_REACHED(); }
-    virtual NonnullRefPtr<Value> clone() const override { return create<JobValue>(m_job)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<JobValue>(m_job)->set_slices(m_slices); }
     virtual ~JobValue();
     virtual bool is_job() const override { return true; }
     JobValue(RefPtr<Job> job)
@@ -323,7 +298,7 @@ class ListValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
     virtual NonnullRefPtr<Value> resolve_without_cast(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<ListValue>(m_contained_values)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<ListValue>(m_contained_values)->set_slices(m_slices); }
     virtual ~ListValue();
     virtual bool is_list() const override { return true; }
     virtual bool is_list_without_resolution() const override { return true; }
@@ -347,7 +322,7 @@ private:
 class StringValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<StringValue>(m_string, m_split, m_keep_empty)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<StringValue>(m_string, m_split, m_keep_empty)->set_slices(m_slices); }
     virtual ~StringValue();
     virtual bool is_string() const override { return m_split.is_null(); }
     virtual bool is_list() const override { return !m_split.is_null(); }
@@ -368,7 +343,7 @@ private:
 class GlobValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<GlobValue>(m_glob, m_generation_position)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<GlobValue>(m_glob, m_generation_position)->set_slices(m_slices); }
     virtual ~GlobValue();
     virtual bool is_glob() const override { return true; }
     GlobValue(String glob, Position position)
@@ -386,7 +361,7 @@ class SimpleVariableValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
     virtual NonnullRefPtr<Value> resolve_without_cast(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<SimpleVariableValue>(m_name)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<SimpleVariableValue>(m_name)->set_slices(m_slices); }
     virtual ~SimpleVariableValue();
     SimpleVariableValue(String name)
         : m_name(move(name))
@@ -400,7 +375,7 @@ private:
 class SpecialVariableValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<SpecialVariableValue>(m_name)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<SpecialVariableValue>(m_name)->set_slices(m_slices); }
     virtual ~SpecialVariableValue();
     SpecialVariableValue(char name)
         : m_name(name)
@@ -408,13 +383,13 @@ public:
     }
 
 private:
-    char m_name { -1 };
+    char m_name { 0 };
 };
 
 class TildeValue final : public Value {
 public:
     virtual Vector<String> resolve_as_list(RefPtr<Shell>) override;
-    virtual NonnullRefPtr<Value> clone() const override { return create<TildeValue>(m_username)->set_slices(m_slices); }
+    virtual NonnullRefPtr<Value> clone() const override { return make_ref_counted<TildeValue>(m_username)->set_slices(m_slices); }
     virtual ~TildeValue();
     virtual bool is_string() const override { return true; }
     TildeValue(String name)
@@ -427,6 +402,9 @@ private:
 };
 
 class Node : public RefCounted<Node> {
+    AK_MAKE_NONCOPYABLE(Node);
+    AK_MAKE_NONMOVABLE(Node);
+
 public:
     virtual void dump(int level) const = 0;
     virtual void for_each_entry(RefPtr<Shell> shell, Function<IterationDecision(NonnullRefPtr<Value>)> callback);
@@ -451,20 +429,15 @@ public:
     virtual bool is_tilde() const { return false; }
     virtual bool is_variable_decls() const { return false; }
     virtual bool is_simple_variable() const { return false; }
-    virtual bool is_syntax_error() const { return m_is_syntax_error; }
+    virtual bool is_syntax_error() const;
 
     virtual bool is_list() const { return false; }
     virtual bool would_execute() const { return false; }
     virtual bool should_override_execution_in_current_process() const { return false; }
 
     const Position& position() const { return m_position; }
-    void set_is_syntax_error(const SyntaxError& error_node)
-    {
-        if (!m_is_syntax_error) {
-            m_is_syntax_error = true;
-            m_syntax_error_node = error_node;
-        }
-    }
+    virtual void clear_syntax_error();
+    virtual void set_is_syntax_error(const SyntaxError& error_node);
     virtual const SyntaxError& syntax_error_node() const
     {
         VERIFY(is_syntax_error());
@@ -496,6 +469,7 @@ public:
         ForLoop,
         FunctionDeclaration,
         Glob,
+        Heredoc,
         HistoryEvent,
         IfCond,
         ImmediateExpression,
@@ -528,8 +502,7 @@ public:
 
 protected:
     Position m_position;
-    bool m_is_syntax_error { false };
-    RefPtr<const SyntaxError> m_syntax_error_node;
+    RefPtr<SyntaxError> m_syntax_error_node;
 };
 
 #define NODE(name)                                               \
@@ -944,7 +917,7 @@ struct HistorySelector {
             if (kind == Index)
                 return selector;
             if (kind == Last)
-                return size - 1;
+                return size - selector - 1;
             VERIFY_NOT_REACHED();
         }
     };
@@ -1312,7 +1285,7 @@ private:
     virtual Vector<Line::CompletionSuggestion> complete_for_editor(Shell&, size_t, const HitTestResult&) override;
     virtual HitTestResult hit_test_position(size_t) const override;
 
-    char m_name { -1 };
+    char m_name { 0 };
 };
 
 class Juxtaposition final : public Node {
@@ -1334,6 +1307,39 @@ private:
 
     NonnullRefPtr<Node> m_left;
     NonnullRefPtr<Node> m_right;
+};
+
+class Heredoc final : public Node {
+public:
+    Heredoc(Position, String end, bool allow_interpolation, bool deindent);
+    virtual ~Heredoc();
+    virtual void visit(NodeVisitor& visitor) override { visitor.visit(this); }
+
+    const String& end() const { return m_end; }
+    bool allow_interpolation() const { return m_allows_interpolation; }
+    bool deindent() const { return m_deindent; }
+    const RefPtr<AST::Node>& contents() const { return m_contents; }
+    void set_contents(RefPtr<AST::Node> contents)
+    {
+        m_contents = move(contents);
+        if (m_contents->is_syntax_error())
+            set_is_syntax_error(m_contents->syntax_error_node());
+        else
+            clear_syntax_error();
+    }
+
+private:
+    NODE(Heredoc);
+    virtual void dump(int level) const override;
+    virtual RefPtr<Value> run(RefPtr<Shell>) override;
+    virtual void highlight_in_editor(Line::Editor&, Shell&, HighlightMetadata = {}) override;
+    virtual HitTestResult hit_test_position(size_t) const override;
+    virtual RefPtr<Node> leftmost_trivial_literal() const override { return this; };
+
+    String m_end;
+    bool m_allows_interpolation { false };
+    bool m_deindent { false };
+    RefPtr<AST::Node> m_contents;
 };
 
 class StringLiteral final : public Node {
@@ -1383,17 +1389,31 @@ public:
     const String& error_text() const { return m_syntax_error_text; }
     bool is_continuable() const { return m_is_continuable; }
 
+    virtual void clear_syntax_error() override
+    {
+        m_is_cleared = true;
+    }
+    virtual void set_is_syntax_error(const SyntaxError& error) override
+    {
+        m_position = error.position();
+        m_is_cleared = error.m_is_cleared;
+        m_is_continuable = error.m_is_continuable;
+        m_syntax_error_text = error.error_text();
+    }
+
+    virtual bool is_syntax_error() const override { return !m_is_cleared; }
+
 private:
     NODE(SyntaxError);
     virtual void dump(int level) const override;
     virtual RefPtr<Value> run(RefPtr<Shell>) override;
     virtual void highlight_in_editor(Line::Editor&, Shell&, HighlightMetadata = {}) override;
     virtual HitTestResult hit_test_position(size_t) const override { return { nullptr, nullptr, nullptr }; }
-    virtual bool is_syntax_error() const override { return true; }
     virtual const SyntaxError& syntax_error_node() const override;
 
     String m_syntax_error_text;
     bool m_is_continuable { false };
+    bool m_is_cleared { false };
 };
 
 class SyntheticNode final : public Node {
@@ -1486,7 +1506,7 @@ namespace AK {
 
 template<>
 struct Formatter<Shell::AST::Command> : StandardFormatter {
-    Formatter() { }
+    Formatter() = default;
     explicit Formatter(StandardFormatter formatter)
         : StandardFormatter(formatter)
     {

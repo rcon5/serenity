@@ -1,35 +1,15 @@
 /*
- * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@gmx.de>
- * Copyright (c) 2020, Linus Groh <mail@linusgroh.de>
- * All rights reserved.
+ * Copyright (c) 2020, Stephan Unverwerth <s.unverwerth@serenityos.org>
+ * Copyright (c) 2020-2021, Linus Groh <linusg@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "Token.h"
 #include <AK/Assertions.h>
+#include <AK/CharacterTypes.h>
 #include <AK/GenericLexer.h>
 #include <AK/StringBuilder.h>
-#include <ctype.h>
 
 namespace JS {
 
@@ -73,7 +53,16 @@ TokenCategory Token::category() const
 double Token::double_value() const
 {
     VERIFY(type() == TokenType::NumericLiteral);
-    String value_string(m_value);
+
+    StringBuilder builder;
+
+    for (auto ch : value()) {
+        if (ch == '_')
+            continue;
+        builder.append(ch);
+    }
+
+    String value_string = builder.to_string();
     if (value_string[0] == '0' && value_string.length() >= 2) {
         if (value_string[1] == 'x' || value_string[1] == 'X') {
             // hexadecimal
@@ -84,9 +73,9 @@ double Token::double_value() const
         } else if (value_string[1] == 'b' || value_string[1] == 'B') {
             // binary
             return static_cast<double>(strtoul(value_string.characters() + 2, nullptr, 2));
-        } else if (isdigit(value_string[1])) {
+        } else if (is_ascii_digit(value_string[1])) {
             // also octal, but syntax error in strict mode
-            if (!m_value.contains('8') && !m_value.contains('9'))
+            if (!value().contains('8') && !value().contains('9'))
                 return static_cast<double>(strtoul(value_string.characters() + 1, nullptr, 8));
         }
     }
@@ -95,10 +84,10 @@ double Token::double_value() const
 
 static u32 hex2int(char x)
 {
-    VERIFY(isxdigit(x));
+    VERIFY(is_ascii_hex_digit(x));
     if (x >= '0' && x <= '9')
         return x - '0';
-    return 10u + (tolower(x) - 'a');
+    return 10u + (to_ascii_lowercase(x) - 'a');
 }
 
 String Token::string_value(StringValueStatus& status) const
@@ -106,7 +95,7 @@ String Token::string_value(StringValueStatus& status) const
     VERIFY(type() == TokenType::StringLiteral || type() == TokenType::TemplateLiteralString);
 
     auto is_template = type() == TokenType::TemplateLiteralString;
-    GenericLexer lexer(is_template ? m_value : m_value.substring_view(1, m_value.length() - 2));
+    GenericLexer lexer(is_template ? value() : value().substring_view(1, value().length() - 2));
 
     auto encoding_failure = [&status](StringValueStatus parse_status) -> String {
         status = parse_status;
@@ -117,7 +106,34 @@ String Token::string_value(StringValueStatus& status) const
     while (!lexer.is_eof()) {
         // No escape, consume one char and continue
         if (!lexer.next_is('\\')) {
+
+            if (is_template && lexer.next_is('\r')) {
+                lexer.ignore();
+                if (lexer.next_is('\n'))
+                    lexer.ignore();
+
+                builder.append('\n');
+                continue;
+            }
+
             builder.append(lexer.consume());
+            continue;
+        }
+
+        // Unicode escape
+        if (lexer.next_is("\\u"sv)) {
+            auto code_point_or_error = lexer.consume_escaped_code_point();
+
+            if (code_point_or_error.is_error()) {
+                switch (code_point_or_error.error()) {
+                case GenericLexer::UnicodeEscapeError::MalformedUnicodeEscape:
+                    return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
+                case GenericLexer::UnicodeEscapeError::UnicodeEscapeOverflow:
+                    return encoding_failure(StringValueStatus::UnicodeEscapeOverflow);
+                }
+            }
+
+            builder.append_code_point(code_point_or_error.value());
             continue;
         }
 
@@ -126,16 +142,18 @@ String Token::string_value(StringValueStatus& status) const
 
         // Line continuation
         if (lexer.next_is('\n') || lexer.next_is('\r')) {
+            if (lexer.next_is("\r\n"))
+                lexer.ignore();
             lexer.ignore();
             continue;
         }
         // Line continuation
-        if (lexer.next_is(LINE_SEPARATOR) || lexer.next_is(PARAGRAPH_SEPARATOR)) {
+        if (lexer.next_is(LINE_SEPARATOR_STRING) || lexer.next_is(PARAGRAPH_SEPARATOR_STRING)) {
             lexer.ignore(3);
             continue;
         }
         // Null-byte escape
-        if (lexer.next_is('0') && !isdigit(lexer.peek(1))) {
+        if (lexer.next_is('0') && !is_ascii_digit(lexer.peek(1))) {
             lexer.ignore();
             builder.append('\0');
             continue;
@@ -143,37 +161,10 @@ String Token::string_value(StringValueStatus& status) const
         // Hex escape
         if (lexer.next_is('x')) {
             lexer.ignore();
-            if (!isxdigit(lexer.peek()) || !isxdigit(lexer.peek(1)))
+            if (!is_ascii_hex_digit(lexer.peek()) || !is_ascii_hex_digit(lexer.peek(1)))
                 return encoding_failure(StringValueStatus::MalformedHexEscape);
             auto code_point = hex2int(lexer.consume()) * 16 + hex2int(lexer.consume());
             VERIFY(code_point <= 255);
-            builder.append_code_point(code_point);
-            continue;
-        }
-        // Unicode escape
-        if (lexer.next_is('u')) {
-            lexer.ignore();
-            u32 code_point = 0;
-            if (lexer.next_is('{')) {
-                lexer.ignore();
-                while (true) {
-                    if (!lexer.next_is(isxdigit))
-                        return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
-                    auto new_code_point = (code_point << 4u) | hex2int(lexer.consume());
-                    if (new_code_point < code_point)
-                        return encoding_failure(StringValueStatus::UnicodeEscapeOverflow);
-                    code_point = new_code_point;
-                    if (lexer.next_is('}'))
-                        break;
-                }
-                lexer.ignore();
-            } else {
-                for (int j = 0; j < 4; ++j) {
-                    if (!lexer.next_is(isxdigit))
-                        return encoding_failure(StringValueStatus::MalformedUnicodeEscape);
-                    code_point = (code_point << 4u) | hex2int(lexer.consume());
-                }
-            }
             builder.append_code_point(code_point);
             continue;
         }
@@ -213,18 +204,25 @@ String Token::string_value(StringValueStatus& status) const
     return builder.to_string();
 }
 
+// 12.8.6.2 Static Semantics: TRV, https://tc39.es/ecma262/multipage/ecmascript-language-lexical-grammar.html#sec-static-semantics-trv
+String Token::raw_template_value() const
+{
+    return value().replace("\r\n", "\n", true).replace("\r", "\n", true);
+}
+
 bool Token::bool_value() const
 {
     VERIFY(type() == TokenType::BoolLiteral);
-    return m_value == "true";
+    return value() == "true";
 }
 
 bool Token::is_identifier_name() const
 {
     // IdentifierNames are Identifiers + ReservedWords
     // The standard defines this reversed: Identifiers are IdentifierNames except reserved words
-    // https://www.ecma-international.org/ecma-262/5.1/#sec-7.6
+    // https://tc39.es/ecma262/#prod-Identifier
     return m_type == TokenType::Identifier
+        || m_type == TokenType::EscapedKeyword
         || m_type == TokenType::Await
         || m_type == TokenType::BoolLiteral
         || m_type == TokenType::Break
@@ -233,6 +231,7 @@ bool Token::is_identifier_name() const
         || m_type == TokenType::Class
         || m_type == TokenType::Const
         || m_type == TokenType::Continue
+        || m_type == TokenType::Debugger
         || m_type == TokenType::Default
         || m_type == TokenType::Delete
         || m_type == TokenType::Do
@@ -247,7 +246,6 @@ bool Token::is_identifier_name() const
         || m_type == TokenType::Import
         || m_type == TokenType::In
         || m_type == TokenType::Instanceof
-        || m_type == TokenType::Interface
         || m_type == TokenType::Let
         || m_type == TokenType::New
         || m_type == TokenType::NullLiteral
@@ -261,12 +259,13 @@ bool Token::is_identifier_name() const
         || m_type == TokenType::Var
         || m_type == TokenType::Void
         || m_type == TokenType::While
+        || m_type == TokenType::With
         || m_type == TokenType::Yield;
 }
 
 bool Token::trivia_contains_line_terminator() const
 {
-    return m_trivia.contains('\n') || m_trivia.contains('\r') || m_trivia.contains(LINE_SEPARATOR) || m_trivia.contains(PARAGRAPH_SEPARATOR);
+    return m_trivia.contains('\n') || m_trivia.contains('\r') || m_trivia.contains(LINE_SEPARATOR_STRING) || m_trivia.contains(PARAGRAPH_SEPARATOR_STRING);
 }
 
 }

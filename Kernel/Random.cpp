@@ -1,41 +1,23 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * Copyright (c) 2020, Peter Elliott <pelliott@ualberta.ca>
- * All rights reserved.
+ * Copyright (c) 2020, Peter Elliott <pelliott@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/Singleton.h>
-#include <Kernel/Arch/x86/CPU.h>
+#include <Kernel/Arch/Processor.h>
 #include <Kernel/Devices/RandomDevice.h>
 #include <Kernel/Random.h>
+#include <Kernel/Sections.h>
 #include <Kernel/Time/HPET.h>
 #include <Kernel/Time/RTC.h>
 #include <Kernel/Time/TimeManagement.h>
 
 namespace Kernel {
 
-static AK::Singleton<KernelRng> s_the;
+static Singleton<KernelRng> s_the;
+static Atomic<u32, AK::MemoryOrder::memory_order_relaxed> s_next_random_value = 1;
 
 KernelRng& KernelRng::the()
 {
@@ -88,7 +70,7 @@ UNMAP_AFTER_INIT KernelRng::KernelRng()
 
 void KernelRng::wait_for_entropy()
 {
-    ScopedSpinLock lock(get_lock());
+    SpinlockLocker lock(get_lock());
     if (!resource().is_ready()) {
         dbgln("Entropy starvation...");
         m_seed_queue.wait_forever("KernelRng");
@@ -105,21 +87,20 @@ void KernelRng::wake_if_ready()
 
 size_t EntropySource::next_source { static_cast<size_t>(EntropySource::Static::MaxHardcodedSourceIndex) };
 
-static void do_get_fast_random_bytes(u8* buffer, size_t buffer_size)
+static void do_get_fast_random_bytes(Bytes buffer)
 {
-    static Atomic<u32, AK::MemoryOrder::memory_order_relaxed> next = 1;
 
     union {
         u8 bytes[4];
         u32 value;
     } u;
     size_t offset = 4;
-    for (size_t i = 0; i < buffer_size; ++i) {
+    for (size_t i = 0; i < buffer.size(); ++i) {
         if (offset >= 4) {
-            auto current_next = next.load();
+            auto current_next = s_next_random_value.load();
             for (;;) {
                 auto new_next = current_next * 1103515245 + 12345;
-                if (next.compare_exchange_strong(current_next, new_next)) {
+                if (s_next_random_value.compare_exchange_strong(current_next, new_next)) {
                     u.value = new_next;
                     break;
                 }
@@ -130,7 +111,7 @@ static void do_get_fast_random_bytes(u8* buffer, size_t buffer_size)
     }
 }
 
-bool get_good_random_bytes(u8* buffer, size_t buffer_size, bool allow_wait, bool fallback_to_fast)
+bool get_good_random_bytes(Bytes buffer, bool allow_wait, bool fallback_to_fast)
 {
     bool result = false;
     auto& kernel_rng = KernelRng::the();
@@ -145,8 +126,8 @@ bool get_good_random_bytes(u8* buffer, size_t buffer_size, bool allow_wait, bool
     if (can_wait && allow_wait) {
         for (;;) {
             {
-                LOCKER(KernelRng::the().lock());
-                if (kernel_rng.resource().get_random_bytes(buffer, buffer_size)) {
+                MutexLocker locker(KernelRng::the().lock());
+                if (kernel_rng.resource().get_random_bytes(buffer)) {
                     result = true;
                     break;
                 }
@@ -155,11 +136,11 @@ bool get_good_random_bytes(u8* buffer, size_t buffer_size, bool allow_wait, bool
         }
     } else {
         // We can't wait/block here, or we are not allowed to block/wait
-        if (kernel_rng.resource().get_random_bytes(buffer, buffer_size)) {
+        if (kernel_rng.resource().get_random_bytes(buffer)) {
             result = true;
         } else if (fallback_to_fast) {
             // If interrupts are disabled
-            do_get_fast_random_bytes(buffer, buffer_size);
+            do_get_fast_random_bytes(buffer);
             result = true;
         }
     }
@@ -171,11 +152,11 @@ bool get_good_random_bytes(u8* buffer, size_t buffer_size, bool allow_wait, bool
     return result;
 }
 
-void get_fast_random_bytes(u8* buffer, size_t buffer_size)
+void get_fast_random_bytes(Bytes buffer)
 {
     // Try to get good randomness, but don't block if we can't right now
     // and allow falling back to fast randomness
-    auto result = get_good_random_bytes(buffer, buffer_size, false, true);
+    auto result = get_good_random_bytes(buffer, false, true);
     VERIFY(result);
 }
 

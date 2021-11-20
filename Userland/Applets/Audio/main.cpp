@@ -1,30 +1,13 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
+ * Copyright (c) 2021, David Isaksson <davidisaksson93@gmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibAudio/ClientConnection.h>
+#include <LibConfig/Client.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/CheckBox.h>
@@ -34,7 +17,6 @@
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Bitmap.h>
-#include <LibGfx/Font.h>
 #include <LibGfx/FontDatabase.h>
 #include <LibGfx/Palette.h>
 
@@ -43,7 +25,11 @@ class AudioWidget final : public GUI::Widget {
 public:
     AudioWidget()
         : m_audio_client(Audio::ClientConnection::construct())
+        , m_show_percent(Config::read_bool("AudioApplet", "Applet", "ShowPercent", false))
     {
+        m_audio_volume = static_cast<int>(m_audio_client->get_main_mix_volume() * 100);
+        m_audio_muted = m_audio_client->get_muted();
+
         m_audio_client->on_muted_state_change = [this](bool muted) {
             if (m_audio_muted == muted)
                 return;
@@ -53,17 +39,18 @@ public:
             update();
         };
 
-        m_audio_client->on_main_mix_volume_change = [this](int volume) {
-            m_audio_volume = volume;
+        m_audio_client->on_main_mix_volume_change = [this](double volume) {
+            m_audio_volume = static_cast<int>(round(volume * 100));
+            m_slider->set_value(m_slider->max() - m_audio_volume, GUI::AllowCallback::No);
             if (!m_audio_muted)
                 update();
         };
 
-        m_volume_level_bitmaps.append({ 66, Gfx::Bitmap::load_from_file("/res/icons/16x16/audio-volume-high.png") });
-        m_volume_level_bitmaps.append({ 33, Gfx::Bitmap::load_from_file("/res/icons/16x16/audio-volume-medium.png") });
-        m_volume_level_bitmaps.append({ 1, Gfx::Bitmap::load_from_file("/res/icons/16x16/audio-volume-low.png") });
-        m_volume_level_bitmaps.append({ 0, Gfx::Bitmap::load_from_file("/res/icons/16x16/audio-volume-zero.png") });
-        m_volume_level_bitmaps.append({ 0, Gfx::Bitmap::load_from_file("/res/icons/16x16/audio-volume-muted.png") });
+        m_volume_level_bitmaps.append({ 66, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/audio-volume-high.png") });
+        m_volume_level_bitmaps.append({ 33, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/audio-volume-medium.png") });
+        m_volume_level_bitmaps.append({ 1, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/audio-volume-low.png") });
+        m_volume_level_bitmaps.append({ 0, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/audio-volume-zero.png") });
+        m_volume_level_bitmaps.append({ 0, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/audio-volume-muted.png") });
 
         m_slider_window = add<GUI::Window>(window());
         m_slider_window->set_frameless(true);
@@ -77,7 +64,7 @@ public:
         m_root_container = m_slider_window->set_main_widget<GUI::Label>();
         m_root_container->set_fill_with_background_color(true);
         m_root_container->set_layout<GUI::VerticalBoxLayout>();
-        m_root_container->layout()->set_margins({ 0, 4, 0, 4 });
+        m_root_container->layout()->set_margins({ 4, 0 });
         m_root_container->layout()->set_spacing(0);
         m_root_container->set_frame_thickness(2);
         m_root_container->set_frame_shape(Gfx::FrameShape::Container);
@@ -85,36 +72,34 @@ public:
 
         m_percent_box = m_root_container->add<GUI::CheckBox>("\xE2\x84\xB9");
         m_percent_box->set_fixed_size(27, 16);
-        m_percent_box->set_checked(false);
-        m_percent_box->set_tooltip("Show percent");
+        m_percent_box->set_tooltip(m_show_percent ? "Hide percent" : "Show percent");
+        m_percent_box->set_checked(m_show_percent);
         m_percent_box->on_checked = [&](bool show_percent) {
             m_show_percent = show_percent;
-            if (!m_show_percent) {
-                window()->resize(16, 16);
-                m_percent_box->set_tooltip("Show percent");
-            } else {
-                window()->resize(44, 16);
-                m_percent_box->set_tooltip("Hide percent");
-            }
-            reposition_slider_window();
+            set_audio_widget_size(m_show_percent);
+            m_percent_box->set_tooltip(m_show_percent ? "Hide percent" : "Show percent");
             GUI::Application::the()->hide_tooltip();
+
+            Config::write_bool("AudioApplet", "Applet", "ShowPercent", m_show_percent);
         };
 
         m_slider = m_root_container->add<GUI::VerticalSlider>();
-        m_slider->set_max(20);
-        m_slider->set_value(0);
+        m_slider->set_max(100);
+        m_slider->set_page_step(5);
+        m_slider->set_step(5);
+        m_slider->set_value(m_slider->max() - m_audio_volume);
         m_slider->set_knob_size_mode(GUI::Slider::KnobSizeMode::Proportional);
         m_slider->on_change = [&](int value) {
-            int volume = clamp((20 - value) * 5, 0, 100);
-            float volume_log = ((volume / 100.0f) * (volume / 100.0f)) * 100.0f;
-            m_audio_client->set_main_mix_volume(volume_log);
+            m_audio_volume = m_slider->max() - value;
+            double volume = clamp(static_cast<double>(m_audio_volume) / m_slider->max(), 0.0, 1.0);
+            m_audio_client->set_main_mix_volume(volume);
             update();
         };
 
         m_mute_box = m_root_container->add<GUI::CheckBox>("\xE2\x9D\x8C");
         m_mute_box->set_fixed_size(27, 16);
-        m_mute_box->set_checked(false);
-        m_mute_box->set_tooltip("Mute");
+        m_mute_box->set_checked(m_audio_muted);
+        m_mute_box->set_tooltip(m_audio_muted ? "Unmute" : "Mute");
         m_mute_box->on_checked = [&](bool is_muted) {
             m_mute_box->set_tooltip(is_muted ? "Unmute" : "Mute");
             m_audio_client->set_muted(is_muted);
@@ -124,17 +109,25 @@ public:
 
     virtual ~AudioWidget() override { }
 
+    void set_audio_widget_size(bool show_percent)
+    {
+        if (show_percent)
+            window()->resize(44, 16);
+        else
+            window()->resize(16, 16);
+    }
+
 private:
     virtual void mousedown_event(GUI::MouseEvent& event) override
     {
-        if (event.button() == GUI::MouseButton::Left) {
+        if (event.button() == GUI::MouseButton::Primary) {
             if (!m_slider_window->is_visible())
                 open();
             else
                 close();
             return;
         }
-        if (event.button() == GUI::MouseButton::Right) {
+        if (event.button() == GUI::MouseButton::Secondary) {
             m_audio_client->set_muted(!m_audio_muted);
             update();
         }
@@ -144,10 +137,7 @@ private:
     {
         if (m_audio_muted)
             return;
-        int volume = clamp(m_audio_volume - event.wheel_delta() * 5, 0, 100);
-        float volume_log = ((volume / 100.0f) * (volume / 100.0f)) * 100.0f;
-        m_audio_client->set_main_mix_volume(volume_log);
-        m_slider->set_value(20 - (volume / 5));
+        m_slider->dispatch_event(event);
         update();
     }
 
@@ -164,6 +154,11 @@ private:
             auto volume_text = m_audio_muted ? "mute" : String::formatted("{}%", m_audio_volume);
             painter.draw_text({ 16, 3, 24, 16 }, volume_text, Gfx::FontDatabase::default_fixed_width_font(), Gfx::TextAlignment::TopLeft, palette().window_text());
         }
+    }
+
+    virtual void applet_area_rect_change_event(GUI::AppletAreaRectChangeEvent&) override
+    {
+        reposition_slider_window();
     }
 
     void open()
@@ -215,35 +210,40 @@ private:
 
 int main(int argc, char** argv)
 {
-    if (pledge("stdio recvfd sendfd accept rpath unix cpath fattr", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd rpath wpath cpath unix", nullptr) < 0) {
         perror("pledge");
         return 1;
     }
 
     auto app = GUI::Application::construct(argc, argv);
-
-    if (pledge("stdio recvfd sendfd accept rpath unix", nullptr) < 0) {
-        perror("pledge");
+    if (unveil("/tmp/portal/config", "rw") < 0) {
+        perror("unveil");
         return 1;
     }
+    if (unveil("/tmp/portal/audio", "rw") < 0) {
+        perror("unveil");
+        return 1;
+    }
+    if (unveil("/res", "r") < 0) {
+        perror("unveil");
+        return 1;
+    }
+    unveil(nullptr, nullptr);
+
+    Config::pledge_domains("AudioApplet");
 
     auto window = GUI::Window::construct();
     window->set_has_alpha_channel(true);
     window->set_title("Audio");
     window->set_window_type(GUI::WindowType::Applet);
-    window->resize(16, 16);
 
     window->set_main_widget<AudioWidget>();
     window->show();
 
-    if (unveil("/res", "r") < 0) {
-        perror("unveil");
-        return 1;
-    }
+    // This positioning code depends on the window actually existing.
+    static_cast<AudioWidget*>(window->main_widget())->set_audio_widget_size(Config::read_bool("AudioApplet", "Applet", "ShowPercent", false));
 
-    unveil(nullptr, nullptr);
-
-    if (pledge("stdio recvfd sendfd accept rpath", nullptr) < 0) {
+    if (pledge("stdio recvfd sendfd rpath", nullptr) < 0) {
         perror("pledge");
         return 1;
     }

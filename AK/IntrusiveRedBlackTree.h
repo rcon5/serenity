@@ -1,40 +1,34 @@
 /*
- * Copyright (c) 2021, Idan Horowitz <idan.horowitz@gmail.com>
- * All rights reserved.
+ * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
+#include <AK/IntrusiveDetails.h>
 #include <AK/RedBlackTree.h>
 
-namespace AK {
+namespace AK::Detail {
 
-template<Integral K>
+template<Integral K, typename V, typename Container = RawPtr<V>>
 class IntrusiveRedBlackTreeNode;
 
-template<Integral K, typename V, IntrusiveRedBlackTreeNode<K> V::*member>
+struct ExtractIntrusiveRedBlackTreeTypes {
+    template<typename K, typename V, typename Container, typename T>
+    static K key(IntrusiveRedBlackTreeNode<K, V, Container> T::*x);
+    template<typename K, typename V, typename Container, typename T>
+    static V value(IntrusiveRedBlackTreeNode<K, V, Container> T::*x);
+    template<typename K, typename V, typename Container, typename T>
+    static Container container(IntrusiveRedBlackTreeNode<K, V, Container> T::*x);
+};
+
+template<Integral K, typename V, typename Container = RawPtr<V>>
+using SubstitutedIntrusiveRedBlackTreeNode = IntrusiveRedBlackTreeNode<K, V, typename Detail::SubstituteIntrusiveContainerType<V, Container>::Type>;
+
+template<Integral K, typename V, typename Container, SubstitutedIntrusiveRedBlackTreeNode<K, V, Container> V::*member>
 class IntrusiveRedBlackTree : public BaseRedBlackTree<K> {
+
 public:
     IntrusiveRedBlackTree() = default;
     virtual ~IntrusiveRedBlackTree() override
@@ -43,9 +37,9 @@ public:
     }
 
     using BaseTree = BaseRedBlackTree<K>;
-    using TreeNode = IntrusiveRedBlackTreeNode<K>;
+    using TreeNode = SubstitutedIntrusiveRedBlackTreeNode<K, V, Container>;
 
-    V* find(K key)
+    Container find(K key)
     {
         auto* node = static_cast<TreeNode*>(BaseTree::find(this->m_root, key));
         if (!node)
@@ -53,7 +47,7 @@ public:
         return node_to_value(*node);
     }
 
-    V* find_largest_not_above(K key)
+    Container find_largest_not_above(K key)
     {
         auto* node = static_cast<TreeNode*>(BaseTree::find_largest_not_above(this->m_root, key));
         if (!node)
@@ -61,10 +55,14 @@ public:
         return node_to_value(*node);
     }
 
-    void insert(V& value)
+    void insert(K key, V& value)
     {
         auto& node = value.*member;
+        VERIFY(!node.m_in_tree);
+        static_cast<typename BaseTree::Node&>(node).key = key;
         BaseTree::insert(&node);
+        if constexpr (!TreeNode::IsRaw)
+            node.m_self.reference = &value; // Note: Self-reference ensures that the object will keep a ref to itself when the Container is a smart pointer.
         node.m_in_tree = true;
     }
 
@@ -95,13 +93,14 @@ public:
             VERIFY(m_node);
             return *node_to_value(*m_node);
         }
-        ElementType* operator->()
+        auto operator->()
         {
             VERIFY(m_node);
             return node_to_value(*m_node);
         }
         [[nodiscard]] bool is_end() const { return !m_node; }
         [[nodiscard]] bool is_begin() const { return !m_prev; }
+        [[nodiscard]] auto key() const { return m_node->key; }
 
     private:
         friend class IntrusiveRedBlackTree;
@@ -135,6 +134,8 @@ public:
         node->right_child = nullptr;
         node->left_child = nullptr;
         node->m_in_tree = false;
+        if constexpr (!TreeNode::IsRaw)
+            node->m_self.reference = nullptr;
 
         return true;
     }
@@ -157,37 +158,69 @@ private:
         clear_nodes(static_cast<TreeNode*>(node->left_child));
         node->left_child = nullptr;
         node->m_in_tree = false;
+        if constexpr (!TreeNode::IsRaw)
+            node->m_self.reference = nullptr;
     }
 
     static V* node_to_value(TreeNode& node)
     {
-        return (V*)((u8*)&node - ((u8*)&(((V*)nullptr)->*member) - (u8*)nullptr));
+        return bit_cast<V*>(bit_cast<u8*>(&node) - bit_cast<u8*>(member));
     }
 };
 
-template<Integral K>
+template<Integral K, typename V, typename Container>
 class IntrusiveRedBlackTreeNode : public BaseRedBlackTree<K>::Node {
 public:
-    IntrusiveRedBlackTreeNode(K key)
-        : BaseRedBlackTree<K>::Node(key)
-    {
-    }
-
     ~IntrusiveRedBlackTreeNode()
     {
         VERIFY(!is_in_tree());
     }
 
-    bool is_in_tree()
+    [[nodiscard]] bool is_in_tree() const
     {
         return m_in_tree;
     }
 
+    [[nodiscard]] K key() const
+    {
+        return BaseRedBlackTree<K>::Node::key;
+    }
+
+    static constexpr bool IsRaw = IsPointer<Container>;
+
+#ifndef __clang__
 private:
-    template<Integral TK, typename V, IntrusiveRedBlackTreeNode<TK> V::*member>
-    friend class IntrusiveRedBlackTree;
+    template<Integral TK, typename TV, typename TContainer, SubstitutedIntrusiveRedBlackTreeNode<TK, TV, TContainer> TV::*member>
+    friend class ::AK::Detail::IntrusiveRedBlackTree;
+#endif
+
     bool m_in_tree { false };
+    [[no_unique_address]] SelfReferenceIfNeeded<Container, IsRaw> m_self;
 };
+
+// Specialise IntrusiveRedBlackTree for NonnullRefPtr
+// By default, red black trees cannot contain null entries anyway, so switch to RefPtr
+// and just make the user-facing functions deref the pointers.
+template<Integral K, typename V, SubstitutedIntrusiveRedBlackTreeNode<K, V, NonnullRefPtr<V>> V::*member>
+class IntrusiveRedBlackTree<K, V, NonnullRefPtr<V>, member> : public IntrusiveRedBlackTree<K, V, RefPtr<V>, member> {
+public:
+    [[nodiscard]] NonnullRefPtr<V> find(K key) const { return IntrusiveRedBlackTree<K, V, RefPtr<V>, member>::find(key).release_nonnull(); }
+    [[nodiscard]] NonnullRefPtr<V> find_largest_not_above(K key) const { return IntrusiveRedBlackTree<K, V, RefPtr<V>, member>::find_largest_not_above(key).release_nonnull(); }
+};
+
+}
+
+namespace AK {
+
+template<Integral K, typename V, typename Container = RawPtr<K>>
+using IntrusiveRedBlackTreeNode = Detail::SubstitutedIntrusiveRedBlackTreeNode<K, V, Container>;
+
+template<auto member>
+using IntrusiveRedBlackTree = Detail::IntrusiveRedBlackTree<
+    decltype(Detail::ExtractIntrusiveRedBlackTreeTypes::key(member)),
+    decltype(Detail::ExtractIntrusiveRedBlackTreeTypes::value(member)),
+    decltype(Detail::ExtractIntrusiveRedBlackTreeTypes::container(member)),
+    member>;
 
 }
 

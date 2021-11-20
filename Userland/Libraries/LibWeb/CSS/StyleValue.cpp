@@ -1,37 +1,18 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <AK/ByteBuffer.h>
 #include <LibGfx/Palette.h>
 #include <LibWeb/CSS/StyleValue.h>
 #include <LibWeb/DOM/Document.h>
-#include <LibWeb/InProcessWebView.h>
 #include <LibWeb/Loader/LoadRequest.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <LibWeb/Page/Frame.h>
+#include <LibWeb/Page/BrowsingContext.h>
+#include <LibWeb/Page/Page.h>
 
 namespace Web::CSS {
 
@@ -44,13 +25,229 @@ StyleValue::~StyleValue()
 {
 }
 
+BackgroundStyleValue const& StyleValue::as_background() const
+{
+    VERIFY(is_background());
+    return static_cast<BackgroundStyleValue const&>(*this);
+}
+
+BackgroundRepeatStyleValue const& StyleValue::as_background_repeat() const
+{
+    VERIFY(is_background_repeat());
+    return static_cast<BackgroundRepeatStyleValue const&>(*this);
+}
+
+BorderStyleValue const& StyleValue::as_border() const
+{
+    VERIFY(is_border());
+    return static_cast<BorderStyleValue const&>(*this);
+}
+
+BorderRadiusStyleValue const& StyleValue::as_border_radius() const
+{
+    VERIFY(is_border_radius());
+    return static_cast<BorderRadiusStyleValue const&>(*this);
+}
+
+BoxShadowStyleValue const& StyleValue::as_box_shadow() const
+{
+    VERIFY(is_box_shadow());
+    return static_cast<BoxShadowStyleValue const&>(*this);
+}
+
+CalculatedStyleValue const& StyleValue::as_calculated() const
+{
+    VERIFY(is_calculated());
+    return static_cast<CalculatedStyleValue const&>(*this);
+}
+
+ColorStyleValue const& StyleValue::as_color() const
+{
+    VERIFY(is_color());
+    return static_cast<ColorStyleValue const&>(*this);
+}
+
+CustomStyleValue const& StyleValue::as_custom_property() const
+{
+    VERIFY(is_custom_property());
+    return static_cast<CustomStyleValue const&>(*this);
+}
+
+FlexStyleValue const& StyleValue::as_flex() const
+{
+    VERIFY(is_flex());
+    return static_cast<FlexStyleValue const&>(*this);
+}
+
+FlexFlowStyleValue const& StyleValue::as_flex_flow() const
+{
+    VERIFY(is_flex_flow());
+    return static_cast<FlexFlowStyleValue const&>(*this);
+}
+
+FontStyleValue const& StyleValue::as_font() const
+{
+    VERIFY(is_font());
+    return static_cast<FontStyleValue const&>(*this);
+}
+
+IdentifierStyleValue const& StyleValue::as_identifier() const
+{
+    VERIFY(is_identifier());
+    return static_cast<IdentifierStyleValue const&>(*this);
+}
+
+ImageStyleValue const& StyleValue::as_image() const
+{
+    VERIFY(is_image());
+    return static_cast<ImageStyleValue const&>(*this);
+}
+
+InheritStyleValue const& StyleValue::as_inherit() const
+{
+    VERIFY(is_inherit());
+    return static_cast<InheritStyleValue const&>(*this);
+}
+
+InitialStyleValue const& StyleValue::as_initial() const
+{
+    VERIFY(is_initial());
+    return static_cast<InitialStyleValue const&>(*this);
+}
+
+LengthStyleValue const& StyleValue::as_length() const
+{
+    VERIFY(is_length());
+    return static_cast<LengthStyleValue const&>(*this);
+}
+
+ListStyleStyleValue const& StyleValue::as_list_style() const
+{
+    VERIFY(is_list_style());
+    return static_cast<ListStyleStyleValue const&>(*this);
+}
+
+NumericStyleValue const& StyleValue::as_numeric() const
+{
+    VERIFY(is_numeric());
+    return static_cast<NumericStyleValue const&>(*this);
+}
+
+OverflowStyleValue const& StyleValue::as_overflow() const
+{
+    VERIFY(is_overflow());
+    return static_cast<OverflowStyleValue const&>(*this);
+}
+
+StringStyleValue const& StyleValue::as_string() const
+{
+    VERIFY(is_string());
+    return static_cast<StringStyleValue const&>(*this);
+}
+
+TextDecorationStyleValue const& StyleValue::as_text_decoration() const
+{
+    VERIFY(is_text_decoration());
+    return static_cast<TextDecorationStyleValue const&>(*this);
+}
+
+TransformationStyleValue const& StyleValue::as_transformation() const
+{
+    VERIFY(is_transformation());
+    return static_cast<TransformationStyleValue const&>(*this);
+}
+
+UnsetStyleValue const& StyleValue::as_unset() const
+{
+    VERIFY(is_unset());
+    return static_cast<UnsetStyleValue const&>(*this);
+}
+
+StyleValueList const& StyleValue::as_value_list() const
+{
+    VERIFY(is_value_list());
+    return static_cast<StyleValueList const&>(*this);
+}
+
 String IdentifierStyleValue::to_string() const
 {
     return CSS::string_from_value_id(m_id);
 }
 
-Color IdentifierStyleValue::to_color(const DOM::Document& document) const
+bool IdentifierStyleValue::has_color() const
 {
+    switch (m_id) {
+    case ValueID::Currentcolor:
+    case ValueID::LibwebLink:
+    case ValueID::LibwebPaletteActiveLink:
+    case ValueID::LibwebPaletteActiveWindowBorder1:
+    case ValueID::LibwebPaletteActiveWindowBorder2:
+    case ValueID::LibwebPaletteActiveWindowTitle:
+    case ValueID::LibwebPaletteBase:
+    case ValueID::LibwebPaletteBaseText:
+    case ValueID::LibwebPaletteButton:
+    case ValueID::LibwebPaletteButtonText:
+    case ValueID::LibwebPaletteDesktopBackground:
+    case ValueID::LibwebPaletteFocusOutline:
+    case ValueID::LibwebPaletteHighlightWindowBorder1:
+    case ValueID::LibwebPaletteHighlightWindowBorder2:
+    case ValueID::LibwebPaletteHighlightWindowTitle:
+    case ValueID::LibwebPaletteHoverHighlight:
+    case ValueID::LibwebPaletteInactiveSelection:
+    case ValueID::LibwebPaletteInactiveSelectionText:
+    case ValueID::LibwebPaletteInactiveWindowBorder1:
+    case ValueID::LibwebPaletteInactiveWindowBorder2:
+    case ValueID::LibwebPaletteInactiveWindowTitle:
+    case ValueID::LibwebPaletteLink:
+    case ValueID::LibwebPaletteMenuBase:
+    case ValueID::LibwebPaletteMenuBaseText:
+    case ValueID::LibwebPaletteMenuSelection:
+    case ValueID::LibwebPaletteMenuSelectionText:
+    case ValueID::LibwebPaletteMenuStripe:
+    case ValueID::LibwebPaletteMovingWindowBorder1:
+    case ValueID::LibwebPaletteMovingWindowBorder2:
+    case ValueID::LibwebPaletteMovingWindowTitle:
+    case ValueID::LibwebPaletteRubberBandBorder:
+    case ValueID::LibwebPaletteRubberBandFill:
+    case ValueID::LibwebPaletteRuler:
+    case ValueID::LibwebPaletteRulerActiveText:
+    case ValueID::LibwebPaletteRulerBorder:
+    case ValueID::LibwebPaletteRulerInactiveText:
+    case ValueID::LibwebPaletteSelection:
+    case ValueID::LibwebPaletteSelectionText:
+    case ValueID::LibwebPaletteSyntaxComment:
+    case ValueID::LibwebPaletteSyntaxControlKeyword:
+    case ValueID::LibwebPaletteSyntaxIdentifier:
+    case ValueID::LibwebPaletteSyntaxKeyword:
+    case ValueID::LibwebPaletteSyntaxNumber:
+    case ValueID::LibwebPaletteSyntaxOperator:
+    case ValueID::LibwebPaletteSyntaxPreprocessorStatement:
+    case ValueID::LibwebPaletteSyntaxPreprocessorValue:
+    case ValueID::LibwebPaletteSyntaxPunctuation:
+    case ValueID::LibwebPaletteSyntaxString:
+    case ValueID::LibwebPaletteSyntaxType:
+    case ValueID::LibwebPaletteTextCursor:
+    case ValueID::LibwebPaletteThreedHighlight:
+    case ValueID::LibwebPaletteThreedShadow1:
+    case ValueID::LibwebPaletteThreedShadow2:
+    case ValueID::LibwebPaletteVisitedLink:
+    case ValueID::LibwebPaletteWindow:
+    case ValueID::LibwebPaletteWindowText:
+        return true;
+    default:
+        return false;
+    }
+}
+
+Color IdentifierStyleValue::to_color(Layout::NodeWithStyle const& node) const
+{
+    if (id() == CSS::ValueID::Currentcolor) {
+        if (!node.has_style())
+            return Color::Black;
+        return node.computed_values().color();
+    }
+
+    auto& document = node.document();
     if (id() == CSS::ValueID::LibwebLink)
         return document.link_color();
 
@@ -170,12 +367,19 @@ Color IdentifierStyleValue::to_color(const DOM::Document& document) const
     }
 }
 
-ImageStyleValue::ImageStyleValue(const URL& url, DOM::Document& document)
+ImageStyleValue::ImageStyleValue(AK::URL const& url)
     : StyleValue(Type::Image)
     , m_url(url)
-    , m_document(document)
 {
-    auto request = LoadRequest::create_for_url_on_page(url, document.page());
+}
+
+void ImageStyleValue::load_bitmap(DOM::Document& document)
+{
+    if (m_bitmap)
+        return;
+
+    m_document = &document;
+    auto request = LoadRequest::create_for_url_on_page(m_url, document.page());
     set_resource(ResourceLoader::the().load_resource(Resource::Type::Image, request));
 }
 
@@ -185,8 +389,16 @@ void ImageStyleValue::resource_did_load()
         return;
     m_bitmap = resource()->bitmap();
     // FIXME: Do less than a full repaint if possible?
-    if (m_document->frame())
-        m_document->frame()->set_needs_display({});
+    if (m_document && m_document->browsing_context())
+        m_document->browsing_context()->set_needs_display({});
+}
+
+// https://www.w3.org/TR/css-color-4/#serializing-sRGB-values
+String ColorStyleValue::to_string() const
+{
+    if (m_color.alpha() == 1)
+        return String::formatted("rgb({}, {}, {})", m_color.red(), m_color.green(), m_color.blue());
+    return String::formatted("rgba({}, {}, {}, {})", m_color.red(), m_color.green(), m_color.blue(), (float)(m_color.alpha()) / 255.0f);
 }
 
 }

@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2019-2020, Ryan Grieb <ryan.m.grieb@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "AddEventDialog.h"
@@ -30,14 +10,12 @@
 #include <LibGUI/Button.h>
 #include <LibGUI/ComboBox.h>
 #include <LibGUI/Label.h>
-#include <LibGUI/Layout.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/SpinBox.h>
 #include <LibGUI/TextBox.h>
 #include <LibGUI/Widget.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/Color.h>
-#include <LibGfx/Font.h>
 #include <LibGfx/FontDatabase.h>
 
 static const char* short_month_names[] = {
@@ -61,12 +39,12 @@ AddEventDialog::AddEventDialog(Core::DateTime date_time, Window* parent_window)
     auto& top_container = widget.add<GUI::Widget>();
     top_container.set_layout<GUI::VerticalBoxLayout>();
     top_container.set_fixed_height(45);
-    top_container.layout()->set_margins({ 4, 4, 4, 4 });
+    top_container.layout()->set_margins(4);
 
     auto& add_label = top_container.add<GUI::Label>("Add title & date:");
     add_label.set_text_alignment(Gfx::TextAlignment::CenterLeft);
     add_label.set_fixed_height(14);
-    add_label.set_font(Gfx::FontDatabase::default_bold_font());
+    add_label.set_font(Gfx::FontDatabase::default_font().bold_variant());
 
     auto& event_title_textbox = top_container.add<GUI::TextBox>();
     event_title_textbox.set_fixed_height(20);
@@ -74,7 +52,7 @@ AddEventDialog::AddEventDialog(Core::DateTime date_time, Window* parent_window)
     auto& middle_container = widget.add<GUI::Widget>();
     middle_container.set_layout<GUI::HorizontalBoxLayout>();
     middle_container.set_fixed_height(25);
-    middle_container.layout()->set_margins({ 4, 4, 4, 4 });
+    middle_container.layout()->set_margins(4);
 
     auto& starting_month_combo = middle_container.add<GUI::ComboBox>();
     starting_month_combo.set_only_allow_values_from_model(true);
@@ -117,10 +95,6 @@ AddEventDialog::MonthListModel::MonthListModel()
 }
 
 AddEventDialog::MonthListModel::~MonthListModel()
-{
-}
-
-void AddEventDialog::MonthListModel::update()
 {
 }
 

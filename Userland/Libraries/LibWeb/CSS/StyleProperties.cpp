@@ -1,34 +1,17 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/TypeCasts.h>
 #include <LibCore/DirIterator.h>
 #include <LibGfx/FontDatabase.h>
 #include <LibWeb/CSS/StyleProperties.h>
 #include <LibWeb/FontCache.h>
-#include <ctype.h>
+#include <LibWeb/Layout/BlockContainer.h>
+#include <LibWeb/Layout/Node.h>
 
 namespace Web::CSS {
 
@@ -48,22 +31,17 @@ StyleProperties::StyleProperties(const StyleProperties& other)
 
 NonnullRefPtr<StyleProperties> StyleProperties::clone() const
 {
-    return adopt(*new StyleProperties(*this));
+    return adopt_ref(*new StyleProperties(*this));
 }
 
 void StyleProperties::set_property(CSS::PropertyID id, NonnullRefPtr<StyleValue> value)
 {
-    m_property_values.set((unsigned)id, move(value));
+    m_property_values.set(id, move(value));
 }
 
-void StyleProperties::set_property(CSS::PropertyID id, const StringView& value)
+Optional<NonnullRefPtr<StyleValue>> StyleProperties::property(CSS::PropertyID property_id) const
 {
-    m_property_values.set((unsigned)id, StringStyleValue::create(value));
-}
-
-Optional<NonnullRefPtr<StyleValue>> StyleProperties::property(CSS::PropertyID id) const
-{
-    auto it = m_property_values.find((unsigned)id);
+    auto it = m_property_values.find(property_id);
     if (it == m_property_values.end())
         return {};
     return it->value;
@@ -74,6 +52,13 @@ Length StyleProperties::length_or_fallback(CSS::PropertyID id, const Length& fal
     auto value = property(id);
     if (!value.has_value())
         return fallback;
+
+    if (value.value()->is_calculated()) {
+        Length length = Length(0, Length::Type::Calculated);
+        length.set_calculated_style(&value.value()->as_calculated());
+        return length;
+    }
+
     return value.value()->to_length();
 }
 
@@ -87,137 +72,70 @@ LengthBox StyleProperties::length_box(CSS::PropertyID left_id, CSS::PropertyID t
     return box;
 }
 
-String StyleProperties::string_or_fallback(CSS::PropertyID id, const StringView& fallback) const
+Color StyleProperties::color_or_fallback(CSS::PropertyID id, Layout::NodeWithStyle const& node, Color fallback) const
 {
     auto value = property(id);
-    if (!value.has_value())
+    if (!value.has_value() || !value.value()->has_color())
         return fallback;
-    return value.value()->to_string();
+    return value.value()->to_color(node);
 }
 
-Color StyleProperties::color_or_fallback(CSS::PropertyID id, const DOM::Document& document, Color fallback) const
+NonnullRefPtr<Gfx::Font> StyleProperties::font_fallback(bool monospace, bool bold)
 {
-    auto value = property(id);
-    if (!value.has_value())
-        return fallback;
-    return value.value()->to_color(document);
-}
+    if (monospace && bold)
+        return Gfx::FontDatabase::default_fixed_width_font().bold_variant();
 
-void StyleProperties::load_font() const
-{
-    auto family_value = string_or_fallback(CSS::PropertyID::FontFamily, "Katica");
-    auto font_size = property(CSS::PropertyID::FontSize).value_or(IdentifierStyleValue::create(CSS::ValueID::Medium));
-    auto font_weight = property(CSS::PropertyID::FontWeight).value_or(IdentifierStyleValue::create(CSS::ValueID::Normal));
+    if (monospace)
+        return Gfx::FontDatabase::default_fixed_width_font();
 
-    auto family_parts = family_value.split(',');
-    auto family = family_parts[0];
+    if (bold)
+        return Gfx::FontDatabase::default_font().bold_variant();
 
-    if (family.is_one_of("monospace", "ui-monospace"))
-        family = "Csilla";
-    else if (family.is_one_of("serif", "sans-serif", "cursive", "fantasy", "ui-serif", "ui-sans-serif", "ui-rounded"))
-        family = "Katica";
-
-    int weight = 400;
-    if (font_weight->is_identifier()) {
-        switch (static_cast<const IdentifierStyleValue&>(*font_weight).id()) {
-        case CSS::ValueID::Normal:
-            weight = 400;
-            break;
-        case CSS::ValueID::Bold:
-            weight = 700;
-            break;
-        case CSS::ValueID::Lighter:
-            // FIXME: This should be relative to the parent.
-            weight = 400;
-            break;
-        case CSS::ValueID::Bolder:
-            // FIXME: This should be relative to the parent.
-            weight = 700;
-            break;
-        default:
-            break;
-        }
-    } else if (font_weight->is_length()) {
-        // FIXME: This isn't really a length, it's a numeric value..
-        int font_weight_integer = font_weight->to_length().raw_value();
-        if (font_weight_integer <= 400)
-            weight = 400;
-        if (font_weight_integer <= 700)
-            weight = 700;
-        weight = 900;
-    }
-
-    int size = 10;
-    if (font_size->is_identifier()) {
-        switch (static_cast<const IdentifierStyleValue&>(*font_size).id()) {
-        case CSS::ValueID::XxSmall:
-        case CSS::ValueID::XSmall:
-        case CSS::ValueID::Small:
-        case CSS::ValueID::Medium:
-            // FIXME: Should be based on "user's default font size"
-            size = 10;
-            break;
-        case CSS::ValueID::Large:
-        case CSS::ValueID::XLarge:
-        case CSS::ValueID::XxLarge:
-        case CSS::ValueID::XxxLarge:
-            // FIXME: Should be based on "user's default font size"
-            size = 12;
-            break;
-        case CSS::ValueID::Smaller:
-            // FIXME: This should be relative to the parent.
-            size = 10;
-            break;
-        case CSS::ValueID::Larger:
-            // FIXME: This should be relative to the parent.
-            size = 12;
-            break;
-
-        default:
-            break;
-        }
-    } else if (font_size->is_length()) {
-        // FIXME: This isn't really a length, it's a numeric value..
-        int font_size_integer = font_size->to_length().raw_value();
-        size = font_size_integer;
-    }
-
-    FontSelector font_selector { family, size, weight };
-
-    auto found_font = FontCache::the().get(font_selector);
-    if (found_font) {
-        m_font = found_font;
-        return;
-    }
-
-    Gfx::FontDatabase::the().for_each_font([&](auto& font) {
-        if (font.family() == family && font.weight() == weight && font.presentation_size() == size)
-            found_font = font;
-    });
-
-    if (!found_font) {
-        dbgln("Font not found: '{}' {} {}", family, size, weight);
-        found_font = Gfx::FontDatabase::default_font();
-    }
-
-    m_font = found_font;
-    FontCache::the().set(font_selector, *m_font);
+    return Gfx::FontDatabase::default_font();
 }
 
 float StyleProperties::line_height(const Layout::Node& layout_node) const
 {
     auto line_height_length = length_or_fallback(CSS::PropertyID::LineHeight, Length::make_auto());
     if (line_height_length.is_absolute())
-        return (float)line_height_length.to_px(layout_node);
-    return (float)font().glyph_height() * 1.4f;
+        return line_height_length.to_px(layout_node);
+    auto font_size = length_or_fallback(CSS::PropertyID::FontSize, Length::make_auto());
+    if (font_size.is_absolute())
+        return font_size.to_px(layout_node);
+    return (float)computed_font().glyph_height() * 1.4f;
 }
 
 Optional<int> StyleProperties::z_index() const
 {
-    auto value = property(CSS::PropertyID::ZIndex);
-    if (!value.has_value())
+    auto maybe_value = property(CSS::PropertyID::ZIndex);
+    if (!maybe_value.has_value())
         return {};
-    return static_cast<int>(value.value()->to_length().raw_value());
+    auto& value = maybe_value.value();
+
+    if (value->has_auto())
+        return 0;
+    if (value->has_integer())
+        return value->to_integer();
+    return {};
+}
+
+float StyleProperties::opacity() const
+{
+    auto maybe_value = property(CSS::PropertyID::Opacity);
+    if (!maybe_value.has_value())
+        return 1.0f;
+    auto& value = maybe_value.value();
+
+    if (value->has_number())
+        return clamp(value->to_number(), 0.0f, 1.0f);
+
+    if (value->has_length()) {
+        auto length = value->to_length();
+        if (length.is_percentage())
+            return clamp(length.raw_value() / 100.0f, 0.0f, 1.0f);
+    }
+
+    return 1.0f;
 }
 
 Optional<CSS::FlexDirection> StyleProperties::flex_direction() const
@@ -239,12 +157,143 @@ Optional<CSS::FlexDirection> StyleProperties::flex_direction() const
     }
 }
 
+Optional<CSS::FlexWrap> StyleProperties::flex_wrap() const
+{
+    auto value = property(CSS::PropertyID::FlexWrap);
+    if (!value.has_value())
+        return {};
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::Wrap:
+        return CSS::FlexWrap::Wrap;
+    case CSS::ValueID::Nowrap:
+        return CSS::FlexWrap::Nowrap;
+    case CSS::ValueID::WrapReverse:
+        return CSS::FlexWrap::WrapReverse;
+    default:
+        return {};
+    }
+}
+
+Optional<CSS::FlexBasisData> StyleProperties::flex_basis() const
+{
+    auto value = property(CSS::PropertyID::FlexBasis);
+    if (!value.has_value())
+        return {};
+
+    if (value.value()->is_identifier() && value.value()->to_identifier() == CSS::ValueID::Content)
+        return { { CSS::FlexBasis::Content, {} } };
+
+    if (value.value()->has_auto())
+        return { { CSS::FlexBasis::Auto, {} } };
+
+    if (value.value()->has_length())
+        return { { CSS::FlexBasis::Length, value.value()->to_length() } };
+
+    return {};
+}
+
+float StyleProperties::flex_grow() const
+{
+    auto value = property(CSS::PropertyID::FlexGrow);
+    if (!value.has_value() || !value.value()->has_number())
+        return 0;
+    return value.value()->to_number();
+}
+
+float StyleProperties::flex_shrink() const
+{
+    auto value = property(CSS::PropertyID::FlexShrink);
+    if (!value.has_value() || !value.value()->has_number())
+        return 1;
+    return value.value()->to_number();
+}
+
+Optional<CSS::JustifyContent> StyleProperties::justify_content() const
+{
+    auto value = property(CSS::PropertyID::JustifyContent);
+    if (!value.has_value())
+        return {};
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::FlexStart:
+        return CSS::JustifyContent::FlexStart;
+    case CSS::ValueID::FlexEnd:
+        return CSS::JustifyContent::FlexEnd;
+    case CSS::ValueID::Center:
+        return CSS::JustifyContent::Center;
+    case CSS::ValueID::SpaceBetween:
+        return CSS::JustifyContent::SpaceBetween;
+    case CSS::ValueID::SpaceAround:
+        return CSS::JustifyContent::SpaceAround;
+    default:
+        return {};
+    }
+}
+
+Vector<CSS::Transformation> StyleProperties::transformations() const
+{
+    auto value = property(CSS::PropertyID::Transform);
+    if (!value.has_value())
+        return {};
+
+    if (value.value()->is_identifier() && value.value()->to_identifier() == CSS::ValueID::None)
+        return {};
+
+    if (!value.value()->is_value_list())
+        return {};
+
+    auto& list = value.value()->as_value_list();
+
+    Vector<CSS::Transformation> transformations;
+
+    for (auto& it : list.values()) {
+        if (!it.is_transformation())
+            return {};
+        auto& transformation_style_value = it.as_transformation();
+        CSS::Transformation transformation;
+        transformation.function = transformation_style_value.transform_function();
+        Vector<Variant<CSS::Length, float>> values;
+        for (auto& transformation_value : transformation_style_value.values()) {
+            if (transformation_value.is_length()) {
+                values.append({ transformation_value.to_length() });
+            } else if (transformation_value.is_numeric()) {
+                values.append({ transformation_value.to_number() });
+            } else {
+                dbgln("FIXME: Unsupported value in transform!");
+            }
+        }
+        transformation.values = move(values);
+        transformations.append(move(transformation));
+    }
+    return transformations;
+}
+
+Optional<CSS::AlignItems> StyleProperties::align_items() const
+{
+    auto value = property(CSS::PropertyID::AlignItems);
+    if (!value.has_value())
+        return {};
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::FlexStart:
+        return CSS::AlignItems::FlexStart;
+    case CSS::ValueID::FlexEnd:
+        return CSS::AlignItems::FlexEnd;
+    case CSS::ValueID::Center:
+        return CSS::AlignItems::Center;
+    case CSS::ValueID::Baseline:
+        return CSS::AlignItems::Baseline;
+    case CSS::ValueID::Stretch:
+        return CSS::AlignItems::Stretch;
+    default:
+        return {};
+    }
+}
+
 Optional<CSS::Position> StyleProperties::position() const
 {
     auto value = property(CSS::PropertyID::Position);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::Static:
         return CSS::Position::Static;
     case CSS::ValueID::Relative:
@@ -283,10 +332,9 @@ bool StyleProperties::operator==(const StyleProperties& other) const
 Optional<CSS::TextAlign> StyleProperties::text_align() const
 {
     auto value = property(CSS::PropertyID::TextAlign);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::Left:
         return CSS::TextAlign::Left;
     case CSS::ValueID::Center:
@@ -302,12 +350,28 @@ Optional<CSS::TextAlign> StyleProperties::text_align() const
     }
 }
 
+Optional<CSS::PointerEvents> StyleProperties::pointer_events() const
+{
+    auto value = property(CSS::PropertyID::PointerEvents);
+    if (!value.has_value())
+        return {};
+
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::Auto:
+        return CSS::PointerEvents::Auto;
+    case CSS::ValueID::None:
+        return CSS::PointerEvents::None;
+    default:
+        return {};
+    }
+}
+
 Optional<CSS::WhiteSpace> StyleProperties::white_space() const
 {
     auto value = property(CSS::PropertyID::WhiteSpace);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::Normal:
         return CSS::WhiteSpace::Normal;
     case CSS::ValueID::Nowrap:
@@ -326,9 +390,9 @@ Optional<CSS::WhiteSpace> StyleProperties::white_space() const
 Optional<CSS::LineStyle> StyleProperties::line_style(CSS::PropertyID property_id) const
 {
     auto value = property(property_id);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::LineStyle::None;
     case CSS::ValueID::Hidden:
@@ -357,9 +421,9 @@ Optional<CSS::LineStyle> StyleProperties::line_style(CSS::PropertyID property_id
 Optional<CSS::Float> StyleProperties::float_() const
 {
     auto value = property(CSS::PropertyID::Float);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::Float::None;
     case CSS::ValueID::Left:
@@ -374,9 +438,9 @@ Optional<CSS::Float> StyleProperties::float_() const
 Optional<CSS::Clear> StyleProperties::clear() const
 {
     auto value = property(CSS::PropertyID::Clear);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::Clear::None;
     case CSS::ValueID::Left:
@@ -393,9 +457,9 @@ Optional<CSS::Clear> StyleProperties::clear() const
 Optional<CSS::Cursor> StyleProperties::cursor() const
 {
     auto value = property(CSS::PropertyID::Cursor);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::Auto:
         return CSS::Cursor::Auto;
     case CSS::ValueID::Default:
@@ -477,49 +541,49 @@ CSS::Display StyleProperties::display() const
 {
     auto value = property(CSS::PropertyID::Display);
     if (!value.has_value() || !value.value()->is_identifier())
-        return CSS::Display::Inline;
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+        return CSS::Display::from_short(CSS::Display::Short::Inline);
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
-        return CSS::Display::None;
+        return CSS::Display::from_short(CSS::Display::Short::None);
     case CSS::ValueID::Block:
-        return CSS::Display::Block;
+        return CSS::Display::from_short(CSS::Display::Short::Block);
     case CSS::ValueID::Inline:
-        return CSS::Display::Inline;
+        return CSS::Display::from_short(CSS::Display::Short::Inline);
     case CSS::ValueID::InlineBlock:
-        return CSS::Display::InlineBlock;
+        return CSS::Display::from_short(CSS::Display::Short::InlineBlock);
     case CSS::ValueID::ListItem:
-        return CSS::Display::ListItem;
+        return CSS::Display::from_short(CSS::Display::Short::ListItem);
     case CSS::ValueID::Table:
-        return CSS::Display::Table;
+        return CSS::Display::from_short(CSS::Display::Short::Table);
     case CSS::ValueID::TableRow:
-        return CSS::Display::TableRow;
+        return CSS::Display { CSS::Display::Internal::TableRow };
     case CSS::ValueID::TableCell:
-        return CSS::Display::TableCell;
+        return CSS::Display { CSS::Display::Internal::TableCell };
     case CSS::ValueID::TableColumn:
-        return CSS::Display::TableColumn;
+        return CSS::Display { CSS::Display::Internal::TableColumn };
     case CSS::ValueID::TableColumnGroup:
-        return CSS::Display::TableColumnGroup;
+        return CSS::Display { CSS::Display::Internal::TableColumnGroup };
     case CSS::ValueID::TableCaption:
-        return CSS::Display::TableCaption;
+        return CSS::Display { CSS::Display::Internal::TableCaption };
     case CSS::ValueID::TableRowGroup:
-        return CSS::Display::TableRowGroup;
+        return CSS::Display { CSS::Display::Internal::TableRowGroup };
     case CSS::ValueID::TableHeaderGroup:
-        return CSS::Display::TableHeaderGroup;
+        return CSS::Display { CSS::Display::Internal::TableHeaderGroup };
     case CSS::ValueID::TableFooterGroup:
-        return CSS::Display::TableFooterGroup;
+        return CSS::Display { CSS::Display::Internal::TableFooterGroup };
     case CSS::ValueID::Flex:
-        return CSS::Display::Flex;
+        return CSS::Display::from_short(CSS::Display::Short::Flex);
     default:
-        return CSS::Display::Block;
+        return CSS::Display::from_short(CSS::Display::Short::Block);
     }
 }
 
 Optional<CSS::TextDecorationLine> StyleProperties::text_decoration_line() const
 {
     auto value = property(CSS::PropertyID::TextDecorationLine);
-    if (!value.has_value() || !value.value()->is_identifier())
+    if (!value.has_value())
         return {};
-    switch (static_cast<const IdentifierStyleValue&>(*value.value()).id()) {
+    switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::TextDecorationLine::None;
     case CSS::ValueID::Underline:
@@ -563,7 +627,6 @@ Optional<CSS::ListStyleType> StyleProperties::list_style_type() const
     auto value = property(CSS::PropertyID::ListStyleType);
     if (!value.has_value())
         return {};
-
     switch (value.value()->to_identifier()) {
     case CSS::ValueID::None:
         return CSS::ListStyleType::None;
@@ -575,6 +638,20 @@ Optional<CSS::ListStyleType> StyleProperties::list_style_type() const
         return CSS::ListStyleType::Square;
     case CSS::ValueID::Decimal:
         return CSS::ListStyleType::Decimal;
+    case CSS::ValueID::DecimalLeadingZero:
+        return CSS::ListStyleType::DecimalLeadingZero;
+    case CSS::ValueID::LowerAlpha:
+        return CSS::ListStyleType::LowerAlpha;
+    case CSS::ValueID::LowerLatin:
+        return CSS::ListStyleType::LowerLatin;
+    case CSS::ValueID::UpperAlpha:
+        return CSS::ListStyleType::UpperAlpha;
+    case CSS::ValueID::UpperLatin:
+        return CSS::ListStyleType::UpperLatin;
+    case CSS::ValueID::UpperRoman:
+        return CSS::ListStyleType::UpperRoman;
+    case CSS::ValueID::LowerRoman:
+        return CSS::ListStyleType::LowerRoman;
     default:
         return {};
     }
@@ -595,7 +672,6 @@ Optional<CSS::Overflow> StyleProperties::overflow(CSS::PropertyID property_id) c
     auto value = property(property_id);
     if (!value.has_value())
         return {};
-
     switch (value.value()->to_identifier()) {
     case CSS::ValueID::Auto:
         return CSS::Overflow::Auto;
@@ -617,7 +693,6 @@ Optional<CSS::Repeat> StyleProperties::background_repeat_x() const
     auto value = property(CSS::PropertyID::BackgroundRepeatX);
     if (!value.has_value())
         return {};
-
     switch (value.value()->to_identifier()) {
     case CSS::ValueID::NoRepeat:
         return CSS::Repeat::NoRepeat;
@@ -637,7 +712,6 @@ Optional<CSS::Repeat> StyleProperties::background_repeat_y() const
     auto value = property(CSS::PropertyID::BackgroundRepeatY);
     if (!value.has_value())
         return {};
-
     switch (value.value()->to_identifier()) {
     case CSS::ValueID::NoRepeat:
         return CSS::Repeat::NoRepeat;
@@ -652,4 +726,33 @@ Optional<CSS::Repeat> StyleProperties::background_repeat_y() const
     }
 }
 
+Optional<CSS::BoxShadowData> StyleProperties::box_shadow() const
+{
+    auto value_or_error = property(CSS::PropertyID::BoxShadow);
+    if (!value_or_error.has_value())
+        return {};
+
+    auto value = value_or_error.value();
+    if (!value->is_box_shadow())
+        return {};
+
+    auto& box = value->as_box_shadow();
+    return { { box.offset_x(), box.offset_y(), box.blur_radius(), box.color() } };
+}
+
+CSS::BoxSizing StyleProperties::box_sizing() const
+{
+    auto value = property(CSS::PropertyID::BoxSizing);
+    if (!value.has_value())
+        return {};
+
+    switch (value.value()->to_identifier()) {
+    case CSS::ValueID::BorderBox:
+        return CSS::BoxSizing::BorderBox;
+    case CSS::ValueID::ContentBox:
+        return CSS::BoxSizing::ContentBox;
+    default:
+        return {};
+    }
+}
 }

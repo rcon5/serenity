@@ -1,40 +1,75 @@
 /*
  * Copyright (c) 2019-2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibWeb/CSS/CSSStyleSheet.h>
+#include <LibWeb/CSS/Parser/Parser.h>
+#include <LibWeb/DOM/ExceptionOr.h>
 
 namespace Web::CSS {
 
 CSSStyleSheet::CSSStyleSheet(NonnullRefPtrVector<CSSRule> rules)
-    : m_rules(move(rules))
+    : m_rules(CSSRuleList::create(move(rules)))
 {
 }
 
 CSSStyleSheet::~CSSStyleSheet()
 {
+}
+
+// https://www.w3.org/TR/cssom/#dom-cssstylesheet-insertrule
+DOM::ExceptionOr<unsigned> CSSStyleSheet::insert_rule(StringView rule, unsigned index)
+{
+    // FIXME: 1. If the origin-clean flag is unset, throw a SecurityError exception.
+
+    // FIXME: 2. If the disallow modification flag is set, throw a NotAllowedError DOMException.
+
+    // 3. Let parsed rule be the return value of invoking parse a rule with rule.
+    auto parsed_rule = parse_css_rule(CSS::ParsingContext {}, rule);
+
+    // 4. If parsed rule is a syntax error, return parsed rule.
+    if (!parsed_rule)
+        return DOM::SyntaxError::create("Unable to parse CSS rule.");
+
+    // FIXME: 5. If parsed rule is an @import rule, and the constructed flag is set, throw a SyntaxError DOMException.
+
+    // 6. Return the result of invoking insert a CSS rule rule in the CSS rules at index.
+    return m_rules->insert_a_css_rule(parsed_rule.release_nonnull(), index);
+}
+
+// https://www.w3.org/TR/cssom/#dom-cssstylesheet-deleterule
+DOM::ExceptionOr<void> CSSStyleSheet::delete_rule(unsigned index)
+{
+    // FIXME: 1. If the origin-clean flag is unset, throw a SecurityError exception.
+
+    // FIXME: 2. If the disallow modification flag is set, throw a NotAllowedError DOMException.
+
+    // 3. Remove a CSS rule in the CSS rules at index.
+    return m_rules->remove_a_css_rule(index);
+}
+
+// https://www.w3.org/TR/cssom/#dom-cssstylesheet-removerule
+DOM::ExceptionOr<void> CSSStyleSheet::remove_rule(unsigned index)
+{
+    // The removeRule(index) method must run the same steps as deleteRule().
+    return delete_rule(index);
+}
+
+void CSSStyleSheet::for_each_effective_style_rule(Function<void(CSSStyleRule const&)> const& callback) const
+{
+    m_rules->for_each_effective_style_rule(callback);
+}
+
+bool CSSStyleSheet::for_first_not_loaded_import_rule(Function<void(CSSImportRule&)> const& callback)
+{
+    return m_rules->for_first_not_loaded_import_rule(callback);
+}
+
+void CSSStyleSheet::evaluate_media_queries(DOM::Window const& window)
+{
+    m_rules->evaluate_media_queries(window);
 }
 
 }

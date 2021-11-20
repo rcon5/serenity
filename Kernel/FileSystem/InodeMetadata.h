@@ -1,34 +1,15 @@
 /*
  * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 #include <AK/Span.h>
+#include <Kernel/API/KResult.h>
 #include <Kernel/FileSystem/InodeIdentifier.h>
-#include <Kernel/KResult.h>
+#include <Kernel/Forward.h>
 #include <Kernel/UnixTypes.h>
 
 namespace Kernel {
@@ -39,6 +20,8 @@ constexpr u32 encoded_device(unsigned major, unsigned minor)
 {
     return (minor & 0xff) | (major << 8) | ((minor & ~0xff) << 12);
 }
+static inline unsigned int major_from_encoded_device(dev_t dev) { return (dev & 0xfff00u) >> 8u; }
+static inline unsigned int minor_from_encoded_device(dev_t dev) { return (dev & 0xffu) | ((dev >> 12u) & 0xfff00u); }
 
 inline bool is_directory(mode_t mode) { return (mode & S_IFMT) == S_IFDIR; }
 inline bool is_character_device(mode_t mode) { return (mode & S_IFMT) == S_IFCHR; }
@@ -58,7 +41,7 @@ struct InodeMetadata {
     bool may_write(const Process&) const;
     bool may_execute(const Process&) const;
 
-    bool may_read(uid_t u, gid_t g, Span<const gid_t> eg) const
+    bool may_read(UserID u, GroupID g, Span<GroupID const> eg) const
     {
         if (u == 0)
             return true;
@@ -69,7 +52,7 @@ struct InodeMetadata {
         return mode & S_IROTH;
     }
 
-    bool may_write(uid_t u, gid_t g, Span<const gid_t> eg) const
+    bool may_write(UserID u, GroupID g, Span<GroupID const> eg) const
     {
         if (u == 0)
             return true;
@@ -80,7 +63,7 @@ struct InodeMetadata {
         return mode & S_IWOTH;
     }
 
-    bool may_execute(uid_t u, gid_t g, Span<const gid_t> eg) const
+    bool may_execute(UserID u, GroupID g, Span<GroupID const> eg) const
     {
         if (u == 0)
             return true;
@@ -111,8 +94,8 @@ struct InodeMetadata {
         buffer.st_ino = inode.index().value();
         buffer.st_mode = mode;
         buffer.st_nlink = link_count;
-        buffer.st_uid = uid;
-        buffer.st_gid = gid;
+        buffer.st_uid = uid.value();
+        buffer.st_gid = gid.value();
         buffer.st_dev = 0; // FIXME
         buffer.st_size = size;
         buffer.st_blksize = block_size;
@@ -129,8 +112,8 @@ struct InodeMetadata {
     InodeIdentifier inode;
     off_t size { 0 };
     mode_t mode { 0 };
-    uid_t uid { 0 };
-    gid_t gid { 0 };
+    UserID uid { 0 };
+    GroupID gid { 0 };
     nlink_t link_count { 0 };
     time_t atime { 0 };
     time_t ctime { 0 };

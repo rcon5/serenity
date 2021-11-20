@@ -1,29 +1,11 @@
 /*
  * Copyright (c) 2020, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
+ * Copyright (c) 2021, kleines Filmröllchen <malu.bertsch@gmail.com>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/BitCast.h>
 #include <AK/ByteBuffer.h>
 #include <AK/String.h>
 #include <AK/URL.h>
@@ -118,26 +100,28 @@ Encoder& Encoder::operator<<(i64 value)
 
 Encoder& Encoder::operator<<(float value)
 {
-    union bits {
-        float as_float;
-        u32 as_u32;
-    } u;
-    u.as_float = value;
-    return *this << u.as_u32;
+    u32 as_u32 = bit_cast<u32>(value);
+    return *this << as_u32;
 }
 
-Encoder& Encoder::operator<<(const char* value)
+Encoder& Encoder::operator<<(double value)
+{
+    u64 as_u64 = bit_cast<u64>(value);
+    return *this << as_u64;
+}
+
+Encoder& Encoder::operator<<(char const* value)
 {
     return *this << StringView(value);
 }
 
-Encoder& Encoder::operator<<(const StringView& value)
+Encoder& Encoder::operator<<(StringView const& value)
 {
-    m_buffer.data.append((const u8*)value.characters_without_null_termination(), value.length());
+    m_buffer.data.append((u8 const*)value.characters_without_null_termination(), value.length());
     return *this;
 }
 
-Encoder& Encoder::operator<<(const String& value)
+Encoder& Encoder::operator<<(String const& value)
 {
     if (value.is_null())
         return *this << (i32)-1;
@@ -145,19 +129,19 @@ Encoder& Encoder::operator<<(const String& value)
     return *this << value.view();
 }
 
-Encoder& Encoder::operator<<(const ByteBuffer& value)
+Encoder& Encoder::operator<<(ByteBuffer const& value)
 {
     *this << static_cast<i32>(value.size());
     m_buffer.data.append(value.data(), value.size());
     return *this;
 }
 
-Encoder& Encoder::operator<<(const URL& value)
+Encoder& Encoder::operator<<(URL const& value)
 {
     return *this << value.to_string();
 }
 
-Encoder& Encoder::operator<<(const Dictionary& dictionary)
+Encoder& Encoder::operator<<(Dictionary const& dictionary)
 {
     *this << (u64)dictionary.size();
     dictionary.for_each_entry([this](auto& key, auto& value) {
@@ -166,13 +150,22 @@ Encoder& Encoder::operator<<(const Dictionary& dictionary)
     return *this;
 }
 
-Encoder& Encoder::operator<<(const File& file)
+Encoder& Encoder::operator<<(File const& file)
 {
-    m_buffer.fds.append(file.fd());
+    int fd = file.fd();
+    if (fd != -1) {
+        auto result = dup(fd);
+        if (result < 0) {
+            perror("dup");
+            VERIFY_NOT_REACHED();
+        }
+        fd = result;
+    }
+    m_buffer.fds.append(adopt_ref(*new AutoCloseFileDescriptor(fd)));
     return *this;
 }
 
-bool encode(Encoder& encoder, const Core::AnonymousBuffer& buffer)
+bool encode(Encoder& encoder, Core::AnonymousBuffer const& buffer)
 {
     encoder << buffer.is_valid();
     if (buffer.is_valid()) {
@@ -182,7 +175,7 @@ bool encode(Encoder& encoder, const Core::AnonymousBuffer& buffer)
     return true;
 }
 
-bool encode(Encoder& encoder, const Core::DateTime& datetime)
+bool encode(Encoder& encoder, Core::DateTime const& datetime)
 {
     encoder << static_cast<i64>(datetime.timestamp());
     return true;

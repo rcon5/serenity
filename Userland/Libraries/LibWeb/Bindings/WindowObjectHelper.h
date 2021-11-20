@@ -1,45 +1,51 @@
 /*
  * Copyright (c) 2021, Andreas Kling <kling@serenityos.org>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #pragma once
 
 // FIXME: Find a way to generate all of this
 
+#include <LibWeb/Bindings/AbortControllerConstructor.h>
+#include <LibWeb/Bindings/AbortControllerPrototype.h>
+#include <LibWeb/Bindings/AbortSignalConstructor.h>
+#include <LibWeb/Bindings/AbortSignalPrototype.h>
+#include <LibWeb/Bindings/CSSRuleConstructor.h>
+#include <LibWeb/Bindings/CSSRuleListConstructor.h>
+#include <LibWeb/Bindings/CSSRuleListPrototype.h>
+#include <LibWeb/Bindings/CSSRulePrototype.h>
+#include <LibWeb/Bindings/CSSStyleDeclarationConstructor.h>
+#include <LibWeb/Bindings/CSSStyleDeclarationPrototype.h>
+#include <LibWeb/Bindings/CSSStyleRuleConstructor.h>
+#include <LibWeb/Bindings/CSSStyleRulePrototype.h>
 #include <LibWeb/Bindings/CSSStyleSheetConstructor.h>
 #include <LibWeb/Bindings/CSSStyleSheetPrototype.h>
 #include <LibWeb/Bindings/CanvasRenderingContext2DConstructor.h>
 #include <LibWeb/Bindings/CanvasRenderingContext2DPrototype.h>
 #include <LibWeb/Bindings/CharacterDataConstructor.h>
 #include <LibWeb/Bindings/CharacterDataPrototype.h>
+#include <LibWeb/Bindings/CloseEventConstructor.h>
+#include <LibWeb/Bindings/CloseEventPrototype.h>
 #include <LibWeb/Bindings/CommentConstructor.h>
 #include <LibWeb/Bindings/CommentPrototype.h>
+#include <LibWeb/Bindings/CryptoConstructor.h>
+#include <LibWeb/Bindings/CryptoPrototype.h>
+#include <LibWeb/Bindings/CustomEventConstructor.h>
+#include <LibWeb/Bindings/CustomEventPrototype.h>
 #include <LibWeb/Bindings/DOMExceptionConstructor.h>
 #include <LibWeb/Bindings/DOMExceptionPrototype.h>
 #include <LibWeb/Bindings/DOMImplementationConstructor.h>
 #include <LibWeb/Bindings/DOMImplementationPrototype.h>
+#include <LibWeb/Bindings/DOMParserConstructor.h>
+#include <LibWeb/Bindings/DOMParserPrototype.h>
+#include <LibWeb/Bindings/DOMRectConstructor.h>
+#include <LibWeb/Bindings/DOMRectPrototype.h>
+#include <LibWeb/Bindings/DOMRectReadOnlyConstructor.h>
+#include <LibWeb/Bindings/DOMRectReadOnlyPrototype.h>
+#include <LibWeb/Bindings/DOMStringMapConstructor.h>
+#include <LibWeb/Bindings/DOMStringMapPrototype.h>
 #include <LibWeb/Bindings/DocumentConstructor.h>
 #include <LibWeb/Bindings/DocumentFragmentConstructor.h>
 #include <LibWeb/Bindings/DocumentFragmentPrototype.h>
@@ -68,6 +74,8 @@
 #include <LibWeb/Bindings/HTMLButtonElementPrototype.h>
 #include <LibWeb/Bindings/HTMLCanvasElementConstructor.h>
 #include <LibWeb/Bindings/HTMLCanvasElementPrototype.h>
+#include <LibWeb/Bindings/HTMLCollectionConstructor.h>
+#include <LibWeb/Bindings/HTMLCollectionPrototype.h>
 #include <LibWeb/Bindings/HTMLDListElementConstructor.h>
 #include <LibWeb/Bindings/HTMLDListElementPrototype.h>
 #include <LibWeb/Bindings/HTMLDataElementConstructor.h>
@@ -194,13 +202,29 @@
 #include <LibWeb/Bindings/HTMLUnknownElementPrototype.h>
 #include <LibWeb/Bindings/HTMLVideoElementConstructor.h>
 #include <LibWeb/Bindings/HTMLVideoElementPrototype.h>
+#include <LibWeb/Bindings/HistoryConstructor.h>
+#include <LibWeb/Bindings/HistoryPrototype.h>
 #include <LibWeb/Bindings/ImageConstructor.h>
 #include <LibWeb/Bindings/ImageDataConstructor.h>
 #include <LibWeb/Bindings/ImageDataPrototype.h>
+#include <LibWeb/Bindings/IntersectionObserverConstructor.h>
+#include <LibWeb/Bindings/IntersectionObserverPrototype.h>
+#include <LibWeb/Bindings/MediaQueryListConstructor.h>
+#include <LibWeb/Bindings/MediaQueryListEventConstructor.h>
+#include <LibWeb/Bindings/MediaQueryListEventPrototype.h>
+#include <LibWeb/Bindings/MediaQueryListPrototype.h>
+#include <LibWeb/Bindings/MessageChannelConstructor.h>
+#include <LibWeb/Bindings/MessageChannelPrototype.h>
+#include <LibWeb/Bindings/MessageEventConstructor.h>
+#include <LibWeb/Bindings/MessageEventPrototype.h>
 #include <LibWeb/Bindings/MouseEventConstructor.h>
 #include <LibWeb/Bindings/MouseEventPrototype.h>
 #include <LibWeb/Bindings/NodeConstructor.h>
+#include <LibWeb/Bindings/NodeListConstructor.h>
+#include <LibWeb/Bindings/NodeListPrototype.h>
 #include <LibWeb/Bindings/NodePrototype.h>
+#include <LibWeb/Bindings/PageTransitionEventConstructor.h>
+#include <LibWeb/Bindings/PageTransitionEventPrototype.h>
 #include <LibWeb/Bindings/PerformanceConstructor.h>
 #include <LibWeb/Bindings/PerformancePrototype.h>
 #include <LibWeb/Bindings/PerformanceTimingConstructor.h>
@@ -209,6 +233,12 @@
 #include <LibWeb/Bindings/ProcessingInstructionPrototype.h>
 #include <LibWeb/Bindings/ProgressEventConstructor.h>
 #include <LibWeb/Bindings/ProgressEventPrototype.h>
+#include <LibWeb/Bindings/PromiseRejectionEventConstructor.h>
+#include <LibWeb/Bindings/PromiseRejectionEventPrototype.h>
+#include <LibWeb/Bindings/RangeConstructor.h>
+#include <LibWeb/Bindings/RangePrototype.h>
+#include <LibWeb/Bindings/ResizeObserverConstructor.h>
+#include <LibWeb/Bindings/ResizeObserverPrototype.h>
 #include <LibWeb/Bindings/SVGElementConstructor.h>
 #include <LibWeb/Bindings/SVGElementPrototype.h>
 #include <LibWeb/Bindings/SVGGeometryElementConstructor.h>
@@ -221,6 +251,8 @@
 #include <LibWeb/Bindings/SVGSVGElementPrototype.h>
 #include <LibWeb/Bindings/ScreenConstructor.h>
 #include <LibWeb/Bindings/ScreenPrototype.h>
+#include <LibWeb/Bindings/SelectionConstructor.h>
+#include <LibWeb/Bindings/SelectionPrototype.h>
 #include <LibWeb/Bindings/ShadowRootConstructor.h>
 #include <LibWeb/Bindings/ShadowRootPrototype.h>
 #include <LibWeb/Bindings/StyleSheetConstructor.h>
@@ -233,17 +265,23 @@
 #include <LibWeb/Bindings/TextPrototype.h>
 #include <LibWeb/Bindings/UIEventConstructor.h>
 #include <LibWeb/Bindings/UIEventPrototype.h>
+#include <LibWeb/Bindings/URLConstructor.h>
+#include <LibWeb/Bindings/URLPrototype.h>
+#include <LibWeb/Bindings/URLSearchParamsConstructor.h>
+#include <LibWeb/Bindings/URLSearchParamsPrototype.h>
+#include <LibWeb/Bindings/WebSocketConstructor.h>
+#include <LibWeb/Bindings/WebSocketPrototype.h>
 #include <LibWeb/Bindings/XMLHttpRequestConstructor.h>
 #include <LibWeb/Bindings/XMLHttpRequestEventTargetConstructor.h>
 #include <LibWeb/Bindings/XMLHttpRequestEventTargetPrototype.h>
 #include <LibWeb/Bindings/XMLHttpRequestPrototype.h>
 
-#define ADD_WINDOW_OBJECT_CONSTRUCTOR_AND_PROTOTYPE(interface_name, constructor_name, prototype_name)                         \
-    {                                                                                                                         \
-        auto& constructor = ensure_web_constructor<constructor_name>(#interface_name);                                        \
-        constructor.define_property(vm.names.name, js_string(vm, #interface_name), JS::Attribute::Configurable);              \
-        auto& prototype = ensure_web_prototype<prototype_name>(#interface_name);                                              \
-        prototype.define_property(vm.names.constructor, &constructor, JS::Attribute::Writable | JS::Attribute::Configurable); \
+#define ADD_WINDOW_OBJECT_CONSTRUCTOR_AND_PROTOTYPE(interface_name, constructor_name, prototype_name)                                \
+    {                                                                                                                                \
+        auto& constructor = ensure_web_constructor<constructor_name>(#interface_name);                                               \
+        constructor.define_direct_property(vm.names.name, js_string(vm, #interface_name), JS::Attribute::Configurable);              \
+        auto& prototype = ensure_web_prototype<prototype_name>(#interface_name);                                                     \
+        prototype.define_direct_property(vm.names.constructor, &constructor, JS::Attribute::Writable | JS::Attribute::Configurable); \
     }
 
 #define ADD_WINDOW_OBJECT_INTERFACE(interface_name) \
@@ -251,18 +289,32 @@
 
 #define ADD_WINDOW_OBJECT_INTERFACES                       \
     auto& vm = this->vm();                                 \
+    ADD_WINDOW_OBJECT_INTERFACE(AbortController)           \
+    ADD_WINDOW_OBJECT_INTERFACE(AbortSignal)               \
+    ADD_WINDOW_OBJECT_INTERFACE(Crypto)                    \
+    ADD_WINDOW_OBJECT_INTERFACE(CSSRule)                   \
+    ADD_WINDOW_OBJECT_INTERFACE(CSSRuleList)               \
+    ADD_WINDOW_OBJECT_INTERFACE(CSSStyleDeclaration)       \
+    ADD_WINDOW_OBJECT_INTERFACE(CSSStyleRule)              \
+    ADD_WINDOW_OBJECT_INTERFACE(CSSStyleSheet)             \
     ADD_WINDOW_OBJECT_INTERFACE(CanvasRenderingContext2D)  \
     ADD_WINDOW_OBJECT_INTERFACE(CharacterData)             \
+    ADD_WINDOW_OBJECT_INTERFACE(CloseEvent)                \
     ADD_WINDOW_OBJECT_INTERFACE(Comment)                   \
-    ADD_WINDOW_OBJECT_INTERFACE(CSSStyleSheet)             \
+    ADD_WINDOW_OBJECT_INTERFACE(CustomEvent)               \
     ADD_WINDOW_OBJECT_INTERFACE(DocumentFragment)          \
     ADD_WINDOW_OBJECT_INTERFACE(Document)                  \
     ADD_WINDOW_OBJECT_INTERFACE(DocumentType)              \
     ADD_WINDOW_OBJECT_INTERFACE(DOMException)              \
     ADD_WINDOW_OBJECT_INTERFACE(DOMImplementation)         \
+    ADD_WINDOW_OBJECT_INTERFACE(DOMParser)                 \
+    ADD_WINDOW_OBJECT_INTERFACE(DOMRect)                   \
+    ADD_WINDOW_OBJECT_INTERFACE(DOMRectReadOnly)           \
+    ADD_WINDOW_OBJECT_INTERFACE(DOMStringMap)              \
     ADD_WINDOW_OBJECT_INTERFACE(Element)                   \
     ADD_WINDOW_OBJECT_INTERFACE(Event)                     \
     ADD_WINDOW_OBJECT_INTERFACE(EventTarget)               \
+    ADD_WINDOW_OBJECT_INTERFACE(History)                   \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLAnchorElement)         \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLAreaElement)           \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLAudioElement)          \
@@ -271,6 +323,7 @@
     ADD_WINDOW_OBJECT_INTERFACE(HTMLBRElement)             \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLButtonElement)         \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLCanvasElement)         \
+    ADD_WINDOW_OBJECT_INTERFACE(HTMLCollection)            \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLDataElement)           \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLDataListElement)       \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLDetailsElement)        \
@@ -335,13 +388,24 @@
     ADD_WINDOW_OBJECT_INTERFACE(HTMLUnknownElement)        \
     ADD_WINDOW_OBJECT_INTERFACE(HTMLVideoElement)          \
     ADD_WINDOW_OBJECT_INTERFACE(ImageData)                 \
+    ADD_WINDOW_OBJECT_INTERFACE(IntersectionObserver)      \
+    ADD_WINDOW_OBJECT_INTERFACE(MediaQueryList)            \
+    ADD_WINDOW_OBJECT_INTERFACE(MediaQueryListEvent)       \
+    ADD_WINDOW_OBJECT_INTERFACE(MessageChannel)            \
+    ADD_WINDOW_OBJECT_INTERFACE(MessageEvent)              \
     ADD_WINDOW_OBJECT_INTERFACE(MouseEvent)                \
     ADD_WINDOW_OBJECT_INTERFACE(Node)                      \
+    ADD_WINDOW_OBJECT_INTERFACE(NodeList)                  \
+    ADD_WINDOW_OBJECT_INTERFACE(PageTransitionEvent)       \
     ADD_WINDOW_OBJECT_INTERFACE(Performance)               \
     ADD_WINDOW_OBJECT_INTERFACE(PerformanceTiming)         \
     ADD_WINDOW_OBJECT_INTERFACE(ProcessingInstruction)     \
     ADD_WINDOW_OBJECT_INTERFACE(ProgressEvent)             \
+    ADD_WINDOW_OBJECT_INTERFACE(PromiseRejectionEvent)     \
+    ADD_WINDOW_OBJECT_INTERFACE(Range)                     \
+    ADD_WINDOW_OBJECT_INTERFACE(ResizeObserver)            \
     ADD_WINDOW_OBJECT_INTERFACE(Screen)                    \
+    ADD_WINDOW_OBJECT_INTERFACE(Selection)                 \
     ADD_WINDOW_OBJECT_INTERFACE(ShadowRoot)                \
     ADD_WINDOW_OBJECT_INTERFACE(StyleSheet)                \
     ADD_WINDOW_OBJECT_INTERFACE(StyleSheetList)            \
@@ -353,6 +417,9 @@
     ADD_WINDOW_OBJECT_INTERFACE(SVGSVGElement)             \
     ADD_WINDOW_OBJECT_INTERFACE(Text)                      \
     ADD_WINDOW_OBJECT_INTERFACE(UIEvent)                   \
+    ADD_WINDOW_OBJECT_INTERFACE(URLSearchParams)           \
+    ADD_WINDOW_OBJECT_INTERFACE(URL)                       \
+    ADD_WINDOW_OBJECT_INTERFACE(WebSocket)                 \
     ADD_WINDOW_OBJECT_INTERFACE(XMLHttpRequest)            \
     ADD_WINDOW_OBJECT_INTERFACE(XMLHttpRequestEventTarget) \
     ADD_WINDOW_OBJECT_CONSTRUCTOR_AND_PROTOTYPE(Image, ImageConstructor, HTMLImageElementPrototype)

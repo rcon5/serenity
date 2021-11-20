@@ -1,43 +1,32 @@
 /*
  * Copyright (c) 2021, Brandon Scott <xeon.productions@gmail.com>
  * Copyright (c) 2020, Hunter Salyer <thefalsehonesty@gmail.com>
- * All rights reserved.
+ * Copyright (c) 2021, Sam Atkins <atkinssj@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "WebContentConsoleClient.h"
-#include <LibJS/Console.h>
 #include <LibJS/Interpreter.h>
 #include <LibJS/MarkupGenerator.h>
 #include <LibJS/Parser.h>
-#include <LibWeb/Bindings/DOMExceptionWrapper.h>
-#include <LibWeb/DOM/DocumentType.h>
-#include <LibWeb/DOM/Text.h>
-#include <LibWeb/DOMTreeModel.h>
+#include <LibWeb/Bindings/WindowObject.h>
+#include <WebContent/ConsoleGlobalObject.h>
 
 namespace WebContent {
 
-void WebContentConsoleClient::handle_input(const String& js_source)
+WebContentConsoleClient::WebContentConsoleClient(JS::Console& console, WeakPtr<JS::Interpreter> interpreter, ClientConnection& client)
+    : ConsoleClient(console)
+    , m_client(client)
+    , m_interpreter(interpreter)
+{
+    JS::DeferGC defer_gc(m_interpreter->heap());
+    auto console_global_object = m_interpreter->heap().allocate_without_global_object<ConsoleGlobalObject>(static_cast<Web::Bindings::WindowObject&>(m_interpreter->global_object()));
+    console_global_object->initialize_global_object();
+    m_console_global_object = JS::make_handle(console_global_object);
+}
+
+void WebContentConsoleClient::handle_input(String const& js_source)
 {
     auto parser = JS::Parser(JS::Lexer(js_source));
     auto program = parser.parse_program();
@@ -48,9 +37,18 @@ void WebContentConsoleClient::handle_input(const String& js_source)
         auto hint = error.source_location_hint(js_source);
         if (!hint.is_empty())
             output_html.append(String::formatted("<pre>{}</pre>", escape_html_entities(hint)));
-        m_interpreter->vm().throw_exception<JS::SyntaxError>(m_interpreter->global_object(), error.to_string());
+        m_interpreter->vm().throw_exception<JS::SyntaxError>(*m_console_global_object.cell(), error.to_string());
     } else {
-        m_interpreter->run(m_interpreter->global_object(), *program);
+        // FIXME: This is not the correct way to do this, we probably want to have
+        //        multiple execution contexts we switch between.
+        auto& global_object_before = m_interpreter->realm().global_object();
+        VERIFY(is<Web::Bindings::WindowObject>(global_object_before));
+        auto& this_value_before = m_interpreter->realm().global_environment().global_this_value();
+        m_interpreter->realm().set_global_object(*m_console_global_object.cell(), &global_object_before);
+
+        m_interpreter->run(*m_console_global_object.cell(), *program);
+
+        m_interpreter->realm().set_global_object(global_object_before, &this_value_before);
     }
 
     if (m_interpreter->exception()) {
@@ -69,14 +67,52 @@ void WebContentConsoleClient::handle_input(const String& js_source)
     print_html(JS::MarkupGenerator::html_from_value(m_interpreter->vm().last_value()));
 }
 
-void WebContentConsoleClient::print_html(const String& line)
+void WebContentConsoleClient::print_html(String const& line)
 {
-    m_client.post_message(Messages::WebContentClient::DidJSConsoleOutput("html", line));
+    m_message_log.append({ .type = ConsoleOutput::Type::HTML, .html = line });
+    m_client.async_did_output_js_console_message(m_message_log.size() - 1);
 }
 
 void WebContentConsoleClient::clear_output()
 {
-    m_client.post_message(Messages::WebContentClient::DidJSConsoleOutput("clear_output", {}));
+    m_message_log.append({ .type = ConsoleOutput::Type::Clear, .html = "" });
+    m_client.async_did_output_js_console_message(m_message_log.size() - 1);
+}
+
+void WebContentConsoleClient::send_messages(i32 start_index)
+{
+    // FIXME: Cap the number of messages we send at once?
+    auto messages_to_send = m_message_log.size() - start_index;
+    if (messages_to_send < 1) {
+        // When the console is first created, it requests any messages that happened before
+        // then, by requesting with start_index=0. If we don't have any messages at all, that
+        // is still a valid request, and we can just ignore it.
+        if (start_index != 0)
+            m_client.did_misbehave("Requested non-existent console message index.");
+        return;
+    }
+
+    // FIXME: Replace with a single Vector of message structs
+    Vector<String> message_types;
+    Vector<String> messages;
+    message_types.ensure_capacity(messages_to_send);
+    messages.ensure_capacity(messages_to_send);
+
+    for (size_t i = start_index; i < m_message_log.size(); i++) {
+        auto& message = m_message_log[i];
+        switch (message.type) {
+        case ConsoleOutput::Type::HTML:
+            message_types.append("html");
+            break;
+        case ConsoleOutput::Type::Clear:
+            message_types.append("clear");
+            break;
+        }
+
+        messages.append(message.html);
+    }
+
+    m_client.async_did_get_js_console_messages(start_index, message_types, messages);
 }
 
 JS::Value WebContentConsoleClient::log()

@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020-2021, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include <LibGUI/TextEditor.h>
@@ -43,7 +23,7 @@ void Highlighter::highlight_matching_token_pair()
         Backward,
     };
 
-    auto find_span_of_type = [&](auto i, void* type, void* not_type, Direction direction) -> Optional<size_t> {
+    auto find_span_of_type = [&](auto i, u64 type, u64 not_type, Direction direction) -> Optional<size_t> {
         size_t nesting_level = 0;
         bool forward = direction == Direction::Forward;
 
@@ -111,11 +91,8 @@ void Highlighter::highlight_matching_token_pair()
             }
         }
 
-        auto right_of_end = span.range.end();
-        right_of_end.set_column(right_of_end.column() + 1);
-
         for (auto& pair : pairs) {
-            if (token_types_equal(token_type, pair.close) && right_of_end == m_client->get_cursor()) {
+            if (token_types_equal(token_type, pair.close) && span.range.end() == m_client->get_cursor()) {
                 auto buddy = find_span_of_type(i, pair.open, pair.close, Direction::Backward);
                 if (buddy.has_value())
                     make_buddies(i, buddy.value());
@@ -148,6 +125,21 @@ void Highlighter::cursor_did_change()
         m_client->do_update();
     }
     highlight_matching_token_pair();
+}
+
+Vector<Highlighter::MatchingTokenPair> Highlighter::matching_token_pairs() const
+{
+    auto own_pairs = matching_token_pairs_impl();
+    own_pairs.ensure_capacity(own_pairs.size() + m_nested_token_pairs.size());
+    for (auto& nested_pair : m_nested_token_pairs)
+        own_pairs.append(nested_pair);
+    return own_pairs;
+}
+
+void Highlighter::register_nested_token_pairs(Vector<MatchingTokenPair> pairs)
+{
+    for (auto& pair : pairs)
+        m_nested_token_pairs.set(pair);
 }
 
 }

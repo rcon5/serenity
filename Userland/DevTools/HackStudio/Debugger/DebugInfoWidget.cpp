@@ -1,27 +1,7 @@
 /*
  * Copyright (c) 2020, Itamar S. <itamar8910@gmail.com>
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
 #include "DebugInfoWidget.h"
@@ -45,19 +25,19 @@ namespace HackStudio {
 
 void DebugInfoWidget::init_toolbar()
 {
-    m_continue_action = GUI::Action::create("Continue", Gfx::Bitmap::load_from_file("/res/icons/16x16/debug-continue.png"), [](auto&) {
+    m_continue_action = GUI::Action::create("Continue", Gfx::Bitmap::try_load_from_file("/res/icons/16x16/debug-continue.png"), [](auto&) {
         Debugger::the().set_requested_debugger_action(Debugger::DebuggerAction::Continue);
     });
 
-    m_singlestep_action = GUI::Action::create("Step Over", { Mod_None, Key_F10 }, Gfx::Bitmap::load_from_file("/res/icons/16x16/debug-step-over.png"), [](auto&) {
+    m_singlestep_action = GUI::Action::create("Step Over", { Mod_None, Key_F10 }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/debug-step-over.png"), [](auto&) {
         Debugger::the().set_requested_debugger_action(Debugger::DebuggerAction::SourceStepOver);
     });
 
-    m_step_in_action = GUI::Action::create("Step In", { Mod_None, Key_F11 }, Gfx::Bitmap::load_from_file("/res/icons/16x16/debug-step-in.png"), [](auto&) {
+    m_step_in_action = GUI::Action::create("Step In", { Mod_None, Key_F11 }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/debug-step-in.png"), [](auto&) {
         Debugger::the().set_requested_debugger_action(Debugger::DebuggerAction::SourceSingleStep);
     });
 
-    m_step_out_action = GUI::Action::create("Step Out", { Mod_Shift, Key_F11 }, Gfx::Bitmap::load_from_file("/res/icons/16x16/debug-step-out.png"), [](auto&) {
+    m_step_out_action = GUI::Action::create("Step Out", { Mod_Shift, Key_F11 }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/debug-step-out.png"), [](auto&) {
         Debugger::the().set_requested_debugger_action(Debugger::DebuggerAction::SourceStepOut);
     });
 
@@ -85,15 +65,20 @@ DebugInfoWidget::DebugInfoWidget()
     variables_tab_widget.add_widget("Variables", build_variables_tab());
     variables_tab_widget.add_widget("Registers", build_registers_tab());
 
-    m_backtrace_view->on_selection = [this](auto& index) {
-        auto& model = static_cast<BacktraceModel&>(*m_backtrace_view->model());
+    m_backtrace_view->on_selection_change = [this] {
+        const auto& index = m_backtrace_view->selection().first();
 
+        if (!index.is_valid()) {
+            return;
+        }
+
+        auto& model = static_cast<BacktraceModel&>(*m_backtrace_view->model());
         // Note: The reconstruction of the register set here is obviously incomplete.
         // We currently only reconstruct eip & ebp. Ideally would also reconstruct the other registers somehow.
         // (Other registers may be needed to get the values of variables who are not stored on the stack)
         PtraceRegisters frame_regs {};
-        frame_regs.eip = model.frames()[index.row()].instruction_address;
-        frame_regs.ebp = model.frames()[index.row()].frame_base;
+        frame_regs.set_ip(model.frames()[index.row()].instruction_address);
+        frame_regs.set_bp(model.frames()[index.row()].frame_base);
 
         m_variables_view->set_model(VariablesModel::create(frame_regs));
     };
@@ -123,7 +108,7 @@ RefPtr<GUI::Menu> DebugInfoWidget::get_context_menu_for_variable(const GUI::Mode
         }));
     }
 
-    auto variable_address = (u32*)variable->location_data.address;
+    auto variable_address = (FlatPtr*)variable->location_data.address;
     if (Debugger::the().session()->watchpoint_exists(variable_address)) {
         context_menu->add_action(GUI::Action::create("Remove watchpoint", [variable_address](auto&) {
             Debugger::the().session()->remove_watchpoint(variable_address);

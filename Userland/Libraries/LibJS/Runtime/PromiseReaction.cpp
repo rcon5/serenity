@@ -1,29 +1,10 @@
 /*
- * Copyright (c) 2021, Linus Groh <mail@linusgroh.de>
- * All rights reserved.
+ * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <LibJS/Runtime/AbstractOperations.h>
 #include <LibJS/Runtime/Error.h>
 #include <LibJS/Runtime/MarkedValueList.h>
 #include <LibJS/Runtime/NativeFunction.h>
@@ -31,61 +12,47 @@
 
 namespace JS {
 
-// 27.2.1.5 NewPromiseCapability, https://tc39.es/ecma262/#sec-newpromisecapability
-PromiseCapability new_promise_capability(GlobalObject& global_object, Value constructor)
+// 27.2.1.5 NewPromiseCapability ( C ), https://tc39.es/ecma262/#sec-newpromisecapability
+ThrowCompletionOr<PromiseCapability> new_promise_capability(GlobalObject& global_object, Value constructor)
 {
     auto& vm = global_object.vm();
-    if (!constructor.is_constructor()) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::NotAConstructor, constructor.to_string_without_side_effects());
-        return {};
-    }
+    if (!constructor.is_constructor())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAConstructor, constructor.to_string_without_side_effects());
 
     struct {
         Value resolve { js_undefined() };
         Value reject { js_undefined() };
     } promise_capability_functions;
 
-    auto* executor = NativeFunction::create(global_object, "", [&promise_capability_functions](auto& vm, auto& global_object) -> Value {
+    // 27.2.1.5.1 GetCapabilitiesExecutor Functions, https://tc39.es/ecma262/#sec-getcapabilitiesexecutor-functions
+    auto* executor = NativeFunction::create(global_object, "", [&promise_capability_functions](auto& vm, auto& global_object) -> ThrowCompletionOr<Value> {
         auto resolve = vm.argument(0);
         auto reject = vm.argument(1);
         // No idea what other engines say here.
         if (!promise_capability_functions.resolve.is_undefined()) {
-            vm.template throw_exception<TypeError>(global_object, ErrorType::GetCapabilitiesExecutorCalledMultipleTimes);
-            return {};
+            return vm.template throw_completion<TypeError>(global_object, ErrorType::GetCapabilitiesExecutorCalledMultipleTimes);
         }
-        if (!promise_capability_functions.resolve.is_undefined()) {
-            vm.template throw_exception<TypeError>(global_object, ErrorType::GetCapabilitiesExecutorCalledMultipleTimes);
-            return {};
+        if (!promise_capability_functions.reject.is_undefined()) {
+            return vm.template throw_completion<TypeError>(global_object, ErrorType::GetCapabilitiesExecutorCalledMultipleTimes);
         }
         promise_capability_functions.resolve = resolve;
         promise_capability_functions.reject = reject;
         return js_undefined();
     });
-    executor->define_property(vm.names.length, Value(2));
+    executor->define_direct_property(vm.names.length, Value(2), Attribute::Configurable);
+    executor->define_direct_property(vm.names.name, js_string(vm, String::empty()), Attribute::Configurable);
 
     MarkedValueList arguments(vm.heap());
     arguments.append(executor);
-    auto promise = vm.construct(constructor.as_function(), constructor.as_function(), move(arguments), global_object);
-    if (vm.exception())
-        return {};
+    auto* promise = TRY(construct(global_object, constructor.as_function(), move(arguments)));
 
-    // I'm not sure if we could VERIFY(promise.is_object()) instead - the spec doesn't have this check...
-    if (!promise.is_object()) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::NotAnObject, promise.to_string_without_side_effects());
-        return {};
-    }
+    if (!promise_capability_functions.resolve.is_function())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAFunction, promise_capability_functions.resolve.to_string_without_side_effects());
+    if (!promise_capability_functions.reject.is_function())
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAFunction, promise_capability_functions.reject.to_string_without_side_effects());
 
-    if (!promise_capability_functions.resolve.is_function()) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::NotAFunction, promise_capability_functions.resolve.to_string_without_side_effects());
-        return {};
-    }
-    if (!promise_capability_functions.reject.is_function()) {
-        vm.throw_exception<TypeError>(global_object, ErrorType::NotAFunction, promise_capability_functions.reject.to_string_without_side_effects());
-        return {};
-    }
-
-    return {
-        &promise.as_object(),
+    return PromiseCapability {
+        promise,
         &promise_capability_functions.resolve.as_function(),
         &promise_capability_functions.reject.as_function(),
     };

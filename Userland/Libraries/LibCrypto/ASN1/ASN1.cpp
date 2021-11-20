@@ -1,29 +1,10 @@
 /*
  * Copyright (c) 2021, the SerenityOS developers.
- * All rights reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *
- * 1. Redistributions of source code must retain the above copyright notice, this
- *    list of conditions and the following disclaimer.
- *
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include <AK/GenericLexer.h>
 #include <LibCrypto/ASN1/ASN1.h>
 
 namespace Crypto::ASN1 {
@@ -147,7 +128,7 @@ Optional<Core::DateTime> parse_generalized_time(const StringView& time)
     auto month = lexer.consume(2).to_uint();
     auto day = lexer.consume(2).to_uint();
     auto hour = lexer.consume(2).to_uint();
-    Optional<unsigned> minute, seconds, miliseconds, offset_hours, offset_minutes;
+    Optional<unsigned> minute, seconds, milliseconds, offset_hours, offset_minutes;
     [[maybe_unused]] bool negative_offset = false;
     if (!lexer.is_eof()) {
         if (lexer.consume_specific('Z'))
@@ -172,8 +153,8 @@ Optional<Core::DateTime> parse_generalized_time(const StringView& time)
         }
 
         if (lexer.consume_specific('.')) {
-            miliseconds = lexer.consume(3).to_uint();
-            if (!miliseconds.has_value()) {
+            milliseconds = lexer.consume(3).to_uint();
+            if (!milliseconds.has_value()) {
                 return {};
             }
             if (lexer.consume_specific('Z'))
@@ -202,7 +183,7 @@ done_parsing:;
     if (offset_hours.has_value() || offset_minutes.has_value())
         dbgln("FIXME: Implement GeneralizedTime with offset!");
 
-    // Unceremonially drop the miliseconds on the floor.
+    // Unceremonially drop the milliseconds on the floor.
     return Core::DateTime::create(year.value(), month.value(), day.value(), hour.value(), minute.value_or(0), seconds.value_or(0));
 }
 
