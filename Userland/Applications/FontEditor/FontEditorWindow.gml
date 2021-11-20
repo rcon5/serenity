@@ -1,5 +1,6 @@
 @GUI::Widget {
     fill_with_background_color: true
+
     layout: @GUI::VerticalBoxLayout {
         spacing: 2
     }
@@ -18,21 +19,24 @@
 
         @GUI::Widget {
             name: "left_column_container"
+
             layout: @GUI::VerticalBoxLayout {
             }
 
             @GUI::Widget {
                 name: "glyph_editor_container"
+
                 layout: @GUI::VerticalBoxLayout {
                 }
             }
 
             @GUI::Widget {
-                fixed_height: 22
                 layout: @GUI::VerticalBoxLayout {
                 }
 
                 @GUI::Widget {
+                    shrink_to_fit: true
+
                     layout: @GUI::HorizontalBoxLayout {
                     }
 
@@ -42,7 +46,8 @@
 
                     @GUI::CheckBox {
                         name: "glyph_editor_present_checkbox"
-                        text: "Show"
+                        text: "Present"
+                        focus_policy: "TabFocus"
                     }
 
                     @GUI::Button {
@@ -50,22 +55,71 @@
                         fixed_width: 22
                         tooltip: "Move Glyph"
                         button_style: "Coolbar"
+                        checkable: true
                     }
                 }
-            }
 
-            @GUI::Widget {
+                @GUI::Widget {
+                    shrink_to_fit: true
+
+                    layout: @GUI::HorizontalBoxLayout {
+                    }
+
+                    @GUI::Button {
+                        name: "flip_vertical"
+                        fixed_width: 22
+                        tooltip: "Flip vertically (top to bottom)"
+                        button_style: "Coolbar"
+                        focus_policy: "TabFocus"
+                    }
+
+                    @GUI::Button {
+                        name: "flip_horizontal"
+                        fixed_width: 22
+                        tooltip: "Flip horizontally (left to right)"
+                        button_style: "Coolbar"
+                        focus_policy: "TabFocus"
+                    }
+                }
+
+                @GUI::Widget {
+                    shrink_to_fit: true
+
+                    layout: @GUI::HorizontalBoxLayout {
+                    }
+
+                    @GUI::Button {
+                        name: "rotate_90"
+                        fixed_width: 22
+                        tooltip: "Rotate 90° clockwise"
+                        button_style: "Coolbar"
+                        focus_policy: "TabFocus"
+                    }
+
+                    @GUI::Widget {
+                    }
+
+                    @GUI::Button {
+                        name: "copy_code_point"
+                        fixed_width: 22
+                        tooltip: "Copy this codepoint (not glyph)"
+                        button_style: "Coolbar"
+                        focus_policy: "TabFocus"
+                    }
+                }
             }
         }
 
         @GUI::Widget {
             name: "right_column_container"
+
             layout: @GUI::VerticalBoxLayout {
                 spacing: 6
             }
 
             @GUI::Widget {
                 name: "glyph_map_container"
+
                 layout: @GUI::VerticalBoxLayout {
                 }
             }
@@ -74,6 +128,7 @@
                 name: "font_metadata_groupbox"
                 title: "Metadata"
                 fixed_height: 220
+
                 layout: @GUI::VerticalBoxLayout {
                     margins: [6, 6, 6, 6]
                 }
@@ -198,6 +253,7 @@
 
                 @GUI::Widget {
                     fixed_height: 22
+
                     layout: @GUI::HorizontalBoxLayout {
                     }
 

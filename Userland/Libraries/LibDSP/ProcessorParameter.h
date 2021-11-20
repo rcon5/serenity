@@ -6,13 +6,12 @@
 
 #pragma once
 
-#include "AK/Forward.h"
-#include "LibGUI/Label.h"
-#include "Music.h"
 #include <AK/FixedPoint.h>
 #include <AK/Format.h>
+#include <AK/Forward.h>
 #include <AK/Types.h>
 #include <LibCore/Object.h>
+#include <LibDSP/Music.h>
 
 namespace LibDSP {
 
@@ -128,12 +127,11 @@ struct AK::Formatter<LibDSP::ProcessorRangeParameter> : AK::StandardFormatter {
         : StandardFormatter(formatter)
     {
     }
-    void format(FormatBuilder& builder, LibDSP::ProcessorRangeParameter value)
+    ErrorOr<void> format(FormatBuilder& builder, LibDSP::ProcessorRangeParameter value)
     {
         if (m_mode == Mode::Pointer) {
             Formatter<FlatPtr> formatter { *this };
-            formatter.format(builder, reinterpret_cast<FlatPtr>(&value));
-            return;
+            return formatter.format(builder, reinterpret_cast<FlatPtr>(&value));
         }
 
         if (m_sign_mode != FormatBuilder::SignMode::Default)
@@ -150,6 +148,7 @@ struct AK::Formatter<LibDSP::ProcessorRangeParameter> : AK::StandardFormatter {
         m_width = m_width.value_or(0);
         m_precision = m_precision.value_or(NumericLimits<size_t>::max());
 
-        builder.put_literal(String::formatted("[{} - {}]: {}", value.min_value(), value.max_value(), value.value()));
+        TRY(builder.put_literal(String::formatted("[{} - {}]: {}", value.min_value(), value.max_value(), value.value())));
+        return {};
     }
 };

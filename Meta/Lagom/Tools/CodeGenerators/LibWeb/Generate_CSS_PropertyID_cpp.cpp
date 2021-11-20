@@ -58,11 +58,10 @@ int main(int argc, char** argv)
     if (!file->open(Core::OpenMode::ReadOnly))
         return 1;
 
-    auto json = JsonValue::from_string(file->read_all());
-    VERIFY(json.has_value());
-    VERIFY(json.value().is_object());
+    auto json = JsonValue::from_string(file->read_all()).release_value_but_fixme_should_propagate_errors();
+    VERIFY(json.is_object());
 
-    auto& properties = json.value().as_object();
+    auto& properties = json.as_object();
 
     StringBuilder builder;
     SourceGenerator generator { builder };
@@ -96,7 +95,7 @@ PropertyID property_id_from_camel_case_string(StringView string)
     return PropertyID::Invalid;
 }
 
-PropertyID property_id_from_string(const StringView& string)
+PropertyID property_id_from_string(StringView string)
 {
 )~~~");
 
@@ -169,38 +168,7 @@ bool is_inherited_property(PropertyID property_id)
     }
 }
 
-bool is_pseudo_property(PropertyID property_id)
-{
-    switch (property_id) {
-)~~~");
-
-    properties.for_each_member([&](auto& name, auto& value) {
-        VERIFY(value.is_object());
-
-        bool pseudo = false;
-        if (value.as_object().has("pseudo")) {
-            auto& pseudo_value = value.as_object().get("pseudo");
-            VERIFY(pseudo_value.is_bool());
-            pseudo = pseudo_value.as_bool();
-        }
-
-        if (pseudo) {
-            auto member_generator = generator.fork();
-            member_generator.set("name:titlecase", title_casify(name));
-            member_generator.append(R"~~~(
-    case PropertyID::@name:titlecase@:
-        return true;
-)~~~");
-        }
-    });
-
-    generator.append(R"~~~(
-    default:
-        return false;
-    }
-}
-
-RefPtr<StyleValue> property_initial_value(PropertyID property_id)
+NonnullRefPtr<StyleValue> property_initial_value(PropertyID property_id)
 {
     static HashMap<PropertyID, NonnullRefPtr<StyleValue>> initial_values;
     if (initial_values.is_empty()) {
@@ -213,19 +181,24 @@ RefPtr<StyleValue> property_initial_value(PropertyID property_id)
     //       works for now! :^)
 
     auto output_initial_value_code = [&](auto& name, auto& object) {
-        if (object.has("initial")) {
-            auto& initial_value = object.get("initial");
-            VERIFY(initial_value.is_string());
-            auto initial_value_string = initial_value.as_string();
-
-            auto member_generator = generator.fork();
-            member_generator.set("name:titlecase", title_casify(name));
-            member_generator.set("initial_value_string", initial_value_string);
-            member_generator.append(R"~~~(
-        if (auto parsed_value = Parser(parsing_context, "@initial_value_string@").parse_as_css_value(PropertyID::@name:titlecase@))
-            initial_values.set(PropertyID::@name:titlecase@, parsed_value.release_nonnull());
-)~~~");
+        if (!object.has("initial")) {
+            dbgln("No initial value specified for property '{}'", name);
+            VERIFY_NOT_REACHED();
         }
+        auto& initial_value = object.get("initial");
+        VERIFY(initial_value.is_string());
+        auto initial_value_string = initial_value.as_string();
+
+        auto member_generator = generator.fork();
+        member_generator.set("name:titlecase", title_casify(name));
+        member_generator.set("initial_value_string", initial_value_string);
+        member_generator.append(R"~~~(
+        {
+            auto parsed_value = Parser(parsing_context, "@initial_value_string@").parse_as_css_value(PropertyID::@name:titlecase@);
+            VERIFY(!parsed_value.is_null());
+            initial_values.set(PropertyID::@name:titlecase@, parsed_value.release_nonnull());
+        }
+)~~~");
     };
 
     properties.for_each_member([&](auto& name, auto& value) {
@@ -245,10 +218,7 @@ RefPtr<StyleValue> property_initial_value(PropertyID property_id)
     generator.append(R"~~~(
     }
 
-    auto it = initial_values.find(property_id);
-    if (it == initial_values.end())
-        return nullptr;
-    return it->value;
+    return *initial_values.find(property_id)->value;
 }
 
 bool property_has_quirk(PropertyID property_id, Quirk quirk)

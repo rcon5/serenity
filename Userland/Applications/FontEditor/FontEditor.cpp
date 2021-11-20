@@ -37,6 +37,7 @@
 #include <LibGfx/FontStyleMapping.h>
 #include <LibGfx/Palette.h>
 #include <LibGfx/TextDirection.h>
+#include <LibUnicode/CharacterTypes.h>
 #include <stdlib.h>
 
 static constexpr int s_pangram_count = 7;
@@ -92,7 +93,7 @@ static RefPtr<GUI::Window> create_font_preview_window(FontEditorWidget& editor)
     };
 
     auto& reload_button = textbox_button_container.add<GUI::Button>();
-    reload_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/reload.png"));
+    reload_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/reload.png").release_value_but_fixme_should_propagate_errors());
     reload_button.set_fixed_width(22);
     reload_button.on_click = [&](auto) {
         static int i = 1;
@@ -112,6 +113,10 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
     auto& toolbar = *find_descendant_of_type_named<GUI::Toolbar>("toolbar");
     auto& glyph_map_container = *find_descendant_of_type_named<GUI::Widget>("glyph_map_container");
     auto& move_glyph_button = *find_descendant_of_type_named<GUI::Button>("move_glyph_button");
+    auto& rotate_90_button = *find_descendant_of_type_named<GUI::Button>("rotate_90");
+    auto& flip_vertical_button = *find_descendant_of_type_named<GUI::Button>("flip_vertical");
+    auto& flip_horizontal_button = *find_descendant_of_type_named<GUI::Button>("flip_horizontal");
+    auto& copy_code_point_button = *find_descendant_of_type_named<GUI::Button>("copy_code_point");
     m_statusbar = *find_descendant_of_type_named<GUI::Statusbar>("statusbar");
     m_glyph_editor_container = *find_descendant_of_type_named<GUI::Widget>("glyph_editor_container");
     m_left_column_container = *find_descendant_of_type_named<GUI::Widget>("left_column_container");
@@ -131,7 +136,7 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
     m_glyph_editor_widget = m_glyph_editor_container->add<GlyphEditorWidget>();
     m_glyph_map_widget = glyph_map_container.add<GlyphMapWidget>();
 
-    m_new_action = GUI::Action::create("&New Font...", { Mod_Ctrl, Key_N }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/filetype-font.png"), [&](auto&) {
+    m_new_action = GUI::Action::create("&New Font...", { Mod_Ctrl, Key_N }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/filetype-font.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         if (window()->is_modified()) {
             auto result = GUI::MessageBox::show(window(), "Save changes to the current font?", "Unsaved changes", GUI::MessageBox::Type::Warning, GUI::MessageBox::InputType::YesNoCancel);
             if (result == GUI::Dialog::ExecResult::ExecYes) {
@@ -214,7 +219,7 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
     m_redo_action = GUI::CommonActions::make_redo_action([&](auto&) {
         redo();
     });
-    m_open_preview_action = GUI::Action::create("&Preview Font", { Mod_Ctrl, Key_P }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/find.png"), [&](auto&) {
+    m_open_preview_action = GUI::Action::create("&Preview Font", { Mod_Ctrl, Key_P }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/find.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         if (!m_font_preview_window)
             m_font_preview_window = create_font_preview_window(*this);
         m_font_preview_window->show();
@@ -227,7 +232,7 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
     });
     m_show_metadata_action->set_checked(true);
     m_show_metadata_action->set_status_tip("Show or hide metadata about the current font");
-    m_go_to_glyph_action = GUI::Action::create("&Go to Glyph...", { Mod_Ctrl, Key_G }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-to.png"), [&](auto&) {
+    m_go_to_glyph_action = GUI::Action::create("&Go to Glyph...", { Mod_Ctrl, Key_G }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-to.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         String input;
         if (GUI::InputBox::show(window(), input, "Hexadecimal:", "Go to Glyph") == GUI::InputBox::ExecOK && !input.is_empty()) {
             int code_point = strtoul(&input[0], nullptr, 16);
@@ -238,7 +243,7 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
         }
     });
     m_go_to_glyph_action->set_status_tip("Go to the specified code point");
-    m_previous_glyph_action = GUI::Action::create("Pre&vious Glyph", { Mod_Alt, Key_Left }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-back.png"), [&](auto&) {
+    m_previous_glyph_action = GUI::Action::create("Pre&vious Glyph", { Mod_Alt, Key_Left }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-back.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         bool search_wrapped = false;
         for (int i = m_glyph_map_widget->selected_glyph() - 1;; --i) {
             if (i < 0 && !search_wrapped) {
@@ -256,7 +261,7 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
         }
     });
     m_previous_glyph_action->set_status_tip("Seek the previous visible glyph");
-    m_next_glyph_action = GUI::Action::create("&Next Glyph", { Mod_Alt, Key_Right }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png"), [&](auto&) {
+    m_next_glyph_action = GUI::Action::create("&Next Glyph", { Mod_Alt, Key_Right }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         bool search_wrapped = false;
         for (int i = m_glyph_map_widget->selected_glyph() + 1;; ++i) {
             if (i > 0x10FFFF && !search_wrapped) {
@@ -326,8 +331,29 @@ FontEditorWidget::FontEditorWidget(const String& path, RefPtr<Gfx::BitmapFont>&&
         else
             m_glyph_editor_widget->set_mode(GlyphEditorWidget::Paint);
     };
-    move_glyph_button.set_checkable(true);
-    move_glyph_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/selection-move.png"));
+    move_glyph_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/selection-move.png").release_value_but_fixme_should_propagate_errors());
+
+    rotate_90_button.on_click = [&](auto) {
+        m_glyph_editor_widget->rotate_90();
+    };
+    rotate_90_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-rotate-cw.png").release_value_but_fixme_should_propagate_errors());
+
+    flip_vertical_button.on_click = [&](auto) {
+        m_glyph_editor_widget->flip_vertically();
+    };
+    flip_vertical_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-flip-vertical.png").release_value_but_fixme_should_propagate_errors());
+
+    flip_horizontal_button.on_click = [&](auto) {
+        m_glyph_editor_widget->flip_horizontally();
+    };
+    flip_horizontal_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-flip-horizontal.png").release_value_but_fixme_should_propagate_errors());
+
+    copy_code_point_button.on_click = [&](auto) {
+        StringBuilder glyph_builder;
+        glyph_builder.append_code_point(m_glyph_editor_widget->glyph());
+        GUI::Clipboard::the().set_plain_text(glyph_builder.build());
+    };
+    copy_code_point_button.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-copy.png").release_value_but_fixme_should_propagate_errors());
 
     GUI::Clipboard::the().on_change = [&](const String& data_type) {
         m_paste_action->set_enabled(data_type == "glyph/x-fonteditor");
@@ -704,6 +730,12 @@ void FontEditorWidget::update_statusbar()
     }
 
     builder.append(")");
+
+    auto glyph_name = Unicode::code_point_display_name(glyph);
+    if (glyph_name.has_value()) {
+        builder.appendff(" {}", glyph_name.value());
+    }
+
     if (m_edited_font->raw_glyph_width(glyph) > 0)
         builder.appendff(" [{}x{}]", m_edited_font->raw_glyph_width(glyph), m_edited_font->glyph_height());
     m_statusbar->set_text(builder.to_string());

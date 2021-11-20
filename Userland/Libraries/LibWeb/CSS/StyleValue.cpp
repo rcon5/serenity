@@ -9,9 +9,9 @@
 #include <LibGfx/Palette.h>
 #include <LibWeb/CSS/StyleValue.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/Loader/LoadRequest.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <LibWeb/Page/BrowsingContext.h>
 #include <LibWeb/Page/Page.h>
 
 namespace Web::CSS {
@@ -35,6 +35,12 @@ BackgroundRepeatStyleValue const& StyleValue::as_background_repeat() const
 {
     VERIFY(is_background_repeat());
     return static_cast<BackgroundRepeatStyleValue const&>(*this);
+}
+
+BackgroundSizeStyleValue const& StyleValue::as_background_size() const
+{
+    VERIFY(is_background_size());
+    return static_cast<BackgroundSizeStyleValue const&>(*this);
 }
 
 BorderStyleValue const& StyleValue::as_border() const
@@ -139,6 +145,12 @@ OverflowStyleValue const& StyleValue::as_overflow() const
     return static_cast<OverflowStyleValue const&>(*this);
 }
 
+PositionStyleValue const& StyleValue::as_position() const
+{
+    VERIFY(is_position());
+    return static_cast<PositionStyleValue const&>(*this);
+}
+
 StringStyleValue const& StyleValue::as_string() const
 {
     VERIFY(is_string());
@@ -167,6 +179,66 @@ StyleValueList const& StyleValue::as_value_list() const
 {
     VERIFY(is_value_list());
     return static_cast<StyleValueList const&>(*this);
+}
+
+BackgroundStyleValue::BackgroundStyleValue(
+    NonnullRefPtr<StyleValue> color,
+    NonnullRefPtr<StyleValue> image,
+    NonnullRefPtr<StyleValue> position,
+    NonnullRefPtr<StyleValue> size,
+    NonnullRefPtr<StyleValue> repeat,
+    NonnullRefPtr<StyleValue> attachment,
+    NonnullRefPtr<StyleValue> origin,
+    NonnullRefPtr<StyleValue> clip)
+    : StyleValue(Type::Background)
+    , m_color(color)
+    , m_image(image)
+    , m_position(position)
+    , m_size(size)
+    , m_repeat(repeat)
+    , m_attachment(attachment)
+    , m_origin(origin)
+    , m_clip(clip)
+{
+    auto layer_count = [](auto style_value) -> size_t {
+        if (style_value->is_value_list())
+            return style_value->as_value_list().size();
+        else
+            return 1;
+    };
+
+    m_layer_count = max(layer_count(m_image), layer_count(m_position));
+    m_layer_count = max(m_layer_count, layer_count(m_size));
+    m_layer_count = max(m_layer_count, layer_count(m_repeat));
+    m_layer_count = max(m_layer_count, layer_count(m_attachment));
+    m_layer_count = max(m_layer_count, layer_count(m_origin));
+    m_layer_count = max(m_layer_count, layer_count(m_clip));
+
+    VERIFY(!m_color->is_value_list());
+}
+
+String BackgroundStyleValue::to_string() const
+{
+    if (m_layer_count == 1) {
+        return String::formatted("{} {} {} {} {} {} {} {}", m_color->to_string(), m_image->to_string(), m_position->to_string(), m_size->to_string(), m_repeat->to_string(), m_attachment->to_string(), m_origin->to_string(), m_clip->to_string());
+    }
+
+    auto get_layer_value_string = [](NonnullRefPtr<StyleValue> const& style_value, size_t index) {
+        if (style_value->is_value_list())
+            return style_value->as_value_list().value_at(index, true)->to_string();
+        return style_value->to_string();
+    };
+
+    StringBuilder builder;
+    for (size_t i = 0; i < m_layer_count; i++) {
+        if (i)
+            builder.append(", ");
+        if (i == m_layer_count - 1)
+            builder.appendff("{} ", m_color->to_string());
+        builder.appendff("{} {} {} {} {} {} {}", get_layer_value_string(m_image, i), get_layer_value_string(m_position, i), get_layer_value_string(m_size, i), get_layer_value_string(m_repeat, i), get_layer_value_string(m_attachment, i), get_layer_value_string(m_origin, i), get_layer_value_string(m_clip, i));
+    }
+
+    return builder.to_string();
 }
 
 String IdentifierStyleValue::to_string() const
@@ -399,6 +471,25 @@ String ColorStyleValue::to_string() const
     if (m_color.alpha() == 1)
         return String::formatted("rgb({}, {}, {})", m_color.red(), m_color.green(), m_color.blue());
     return String::formatted("rgba({}, {}, {}, {})", m_color.red(), m_color.green(), m_color.blue(), (float)(m_color.alpha()) / 255.0f);
+}
+
+String PositionStyleValue::to_string() const
+{
+    auto to_string = [](PositionEdge edge) {
+        switch (edge) {
+        case PositionEdge::Left:
+            return "left";
+        case PositionEdge::Right:
+            return "right";
+        case PositionEdge::Top:
+            return "top";
+        case PositionEdge::Bottom:
+            return "bottom";
+        }
+        VERIFY_NOT_REACHED();
+    };
+
+    return String::formatted("{} {} {} {}", to_string(m_edge_x), m_offset_x.to_string(), to_string(m_edge_y), m_offset_y.to_string());
 }
 
 }

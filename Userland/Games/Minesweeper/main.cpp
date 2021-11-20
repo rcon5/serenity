@@ -4,9 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
+#include "CustomGameDialog.h"
 #include "Field.h"
 #include <LibConfig/Client.h>
 #include <LibGUI/Action.h>
+#include <LibGUI/ActionGroup.h>
 #include <LibGUI/Application.h>
 #include <LibGUI/BoxLayout.h>
 #include <LibGUI/Button.h>
@@ -67,7 +69,7 @@ int main(int argc, char** argv)
     container.layout()->add_spacer();
 
     auto& flag_image = container.add<GUI::Label>();
-    flag_image.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/flag.png"));
+    flag_image.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/flag.png").release_value_but_fixme_should_propagate_errors());
     flag_image.set_fixed_width(16);
 
     auto& flag_label = container.add<GUI::Label>();
@@ -85,7 +87,7 @@ int main(int argc, char** argv)
 
     auto& time_image = container.add<GUI::Label>();
     time_image.set_fixed_width(16);
-    time_image.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/timer.png"));
+    time_image.set_icon(Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/timer.png").release_value_but_fixme_should_propagate_errors());
 
     auto& time_label = container.add<GUI::Label>();
     time_label.set_fixed_width(50);
@@ -119,18 +121,44 @@ int main(int argc, char** argv)
     }));
 
     auto& difficulty_menu = window->add_menu("&Difficulty");
-    difficulty_menu.add_action(GUI::Action::create("&Beginner", { Mod_Ctrl, Key_B }, [&](auto&) {
-        field.set_field_size(9, 9, 10);
-    }));
-    difficulty_menu.add_action(GUI::Action::create("&Intermediate", { Mod_Ctrl, Key_I }, [&](auto&) {
-        field.set_field_size(16, 16, 40);
-    }));
-    difficulty_menu.add_action(GUI::Action::create("&Expert", { Mod_Ctrl, Key_E }, [&](auto&) {
-        field.set_field_size(16, 30, 99);
-    }));
-    difficulty_menu.add_action(GUI::Action::create("&Madwoman", { Mod_Ctrl, Key_M }, [&](auto&) {
-        field.set_field_size(32, 60, 350);
-    }));
+    GUI::ActionGroup difficulty_actions;
+    difficulty_actions.set_exclusive(true);
+
+    auto action = GUI::Action::create_checkable("&Beginner", { Mod_Ctrl, Key_B }, [&](auto&) {
+        field.set_field_difficulty(Field::Difficulty::Beginner);
+    });
+    action->set_checked(field.difficulty() == Field::Difficulty::Beginner);
+    difficulty_menu.add_action(action);
+    difficulty_actions.add_action(action);
+
+    action = GUI::Action::create_checkable("&Intermediate", { Mod_Ctrl, Key_I }, [&](auto&) {
+        field.set_field_difficulty(Field::Difficulty::Intermediate);
+    });
+    action->set_checked(field.difficulty() == Field::Difficulty::Intermediate);
+    difficulty_menu.add_action(action);
+    difficulty_actions.add_action(action);
+
+    action = GUI::Action::create_checkable("&Expert", { Mod_Ctrl, Key_E }, [&](auto&) {
+        field.set_field_difficulty(Field::Difficulty::Expert);
+    });
+    action->set_checked(field.difficulty() == Field::Difficulty::Expert);
+    difficulty_menu.add_action(action);
+    difficulty_actions.add_action(action);
+
+    action = GUI::Action::create_checkable("&Madwoman", { Mod_Ctrl, Key_M }, [&](auto&) {
+        field.set_field_difficulty(Field::Difficulty::Madwoman);
+    });
+    action->set_checked(field.difficulty() == Field::Difficulty::Madwoman);
+    difficulty_menu.add_action(action);
+    difficulty_actions.add_action(action);
+
+    difficulty_menu.add_separator();
+    action = GUI::Action::create_checkable("&Custom game...", { Mod_Ctrl, Key_C }, [&](auto&) {
+        CustomGameDialog::show(window, field);
+    });
+    action->set_checked(field.difficulty() == Field::Difficulty::Custom);
+    difficulty_menu.add_action(action);
+    difficulty_actions.add_action(action);
 
     auto& help_menu = window->add_menu("&Help");
     help_menu.add_action(GUI::CommonActions::make_about_action("Minesweeper", app_icon, window));

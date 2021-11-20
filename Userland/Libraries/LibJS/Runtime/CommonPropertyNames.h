@@ -360,6 +360,7 @@ namespace JS {
     P(reduceRight)                           \
     P(region)                                \
     P(reject)                                \
+    P(relativeTo)                            \
     P(repeat)                                \
     P(resolve)                               \
     P(resolvedOptions)                       \
@@ -416,6 +417,7 @@ namespace JS {
     P(source)                                \
     P(splice)                                \
     P(sqrt)                                  \
+    P(startOfDay)                            \
     P(startsWith)                            \
     P(status)                                \
     P(sticky)                                \
@@ -435,6 +437,7 @@ namespace JS {
     P(test)                                  \
     P(then)                                  \
     P(timeZone)                              \
+    P(timeZoneName)                          \
     P(toDateString)                          \
     P(toFixed)                               \
     P(toGMTString)                           \
@@ -453,6 +456,7 @@ namespace JS {
     P(toPlainTime)                           \
     P(toPlainYearMonth)                      \
     P(toString)                              \
+    P(total)                                 \
     P(toTemporalInstant)                     \
     P(toTimeString)                          \
     P(toUpperCase)                           \
@@ -486,6 +490,7 @@ namespace JS {
     P(withCalendar)                          \
     P(withPlainDate)                         \
     P(withPlainTime)                         \
+    P(withTimeZone)                          \
     P(writable)                              \
     P(year)                                  \
     P(yearMonthFromFields)                   \

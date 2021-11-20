@@ -26,19 +26,6 @@ namespace JS {
         _temporary_result.release_value();     \
     })
 
-// MUST() is to the spec's `!` what TRY() is to `?`.
-// https://tc39.es/ecma262/#sec-returnifabrupt-shorthands
-#define MUST(expression)                                           \
-    ({                                                             \
-        auto _temporary_result = (expression);                     \
-        VERIFY(!_temporary_result.is_error());                     \
-        /* The return value of "! Something()" is commonly      */ \
-        /* ignored, so we assign to a temporary variable here   */ \
-        /* to avoid having to (void) all the things.            */ \
-        auto _temporary_value = _temporary_result.release_value(); \
-        move(_temporary_value);                                    \
-    })
-
 // 6.2.3 The Completion Record Specification Type, https://tc39.es/ecma262/#sec-completion-record-specification-type
 class [[nodiscard]] Completion {
 public:
@@ -58,6 +45,8 @@ public:
         if (m_value.has_value())
             VERIFY(!m_value->is_empty());
     }
+
+    Completion(ThrowCompletionOr<Value> const&);
 
     // 5.2.3.1 Implicit Completion Values, https://tc39.es/ecma262/#sec-implicit-completion-values
     // Not `explicit` on purpose.
@@ -164,6 +153,8 @@ class ThrowCompletionOr<void> : public ThrowCompletionOr<Empty> {
 public:
     using ThrowCompletionOr<Empty>::ThrowCompletionOr;
 };
+
+ThrowCompletionOr<Value> await(GlobalObject&, Value);
 
 // 6.2.3.2 NormalCompletion ( value ), https://tc39.es/ecma262/#sec-normalcompletion
 inline Completion normal_completion(Optional<Value> value)

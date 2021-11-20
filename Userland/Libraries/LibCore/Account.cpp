@@ -8,13 +8,11 @@
 #include <AK/Random.h>
 #include <AK/ScopeGuard.h>
 #include <LibCore/Account.h>
-#ifndef AK_OS_MACOS
-#    include <crypt.h>
-#endif
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
 #ifndef AK_OS_BSD_GENERIC
+#    include <crypt.h>
 #    include <shadow.h>
 #endif
 #include <stdio.h>
@@ -55,7 +53,7 @@ static Vector<gid_t> get_extra_gids(const passwd& pwd)
     return extra_gids;
 }
 
-Result<Account, String> Account::from_passwd(const passwd& pwd, const spwd& spwd)
+ErrorOr<Account> Account::from_passwd(const passwd& pwd, const spwd& spwd)
 {
     Account account(pwd, spwd, get_extra_gids(pwd));
     endpwent();
@@ -107,15 +105,14 @@ Account Account::self(Read options)
     return Account(*pwd, *spwd, extra_gids);
 }
 
-Result<Account, String> Account::from_name(const char* username, Read options)
+ErrorOr<Account> Account::from_name(const char* username, Read options)
 {
     errno = 0;
     auto* pwd = getpwnam(username);
     if (!pwd) {
         if (errno == 0)
-            return String("No such user");
-
-        return String(strerror(errno));
+            return Error::from_string_literal("No such user"sv);
+        return Error::from_errno(errno);
     }
     spwd spwd_dummy = {};
     spwd_dummy.sp_namp = const_cast<char*>(username);
@@ -133,15 +130,14 @@ Result<Account, String> Account::from_name(const char* username, Read options)
     return from_passwd(*pwd, *spwd);
 }
 
-Result<Account, String> Account::from_uid(uid_t uid, Read options)
+ErrorOr<Account> Account::from_uid(uid_t uid, Read options)
 {
     errno = 0;
     auto* pwd = getpwuid(uid);
     if (!pwd) {
         if (errno == 0)
-            return String("No such user");
-
-        return String(strerror(errno));
+            return Error::from_string_literal("No such user"sv);
+        return Error::from_errno(errno);
     }
     spwd spwd_dummy = {};
     spwd_dummy.sp_namp = pwd->pw_name;

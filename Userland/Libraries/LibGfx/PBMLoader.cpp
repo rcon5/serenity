@@ -8,9 +8,6 @@
 #include "PortableImageLoaderCommon.h"
 #include "Streamer.h"
 #include <AK/Endian.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
-#include <AK/StringBuilder.h>
 #include <string.h>
 
 namespace Gfx {
@@ -97,16 +94,6 @@ static bool read_image_data(PBMLoadingContext& context, Streamer& streamer)
     return true;
 }
 
-RefPtr<Gfx::Bitmap> load_pbm(const StringView& path)
-{
-    return load<PBMLoadingContext>(path);
-}
-
-RefPtr<Gfx::Bitmap> load_pbm_from_memory(u8 const* data, size_t length, String const& mmap_name)
-{
-    return load_from_memory<PBMLoadingContext>(data, length, mmap_name);
-}
-
 PBMImageDecoderPlugin::PBMImageDecoderPlugin(const u8* data, size_t size)
 {
     m_context = make<PBMLoadingContext>();
@@ -130,21 +117,6 @@ IntSize PBMImageDecoderPlugin::size()
     }
 
     return { m_context->width, m_context->height };
-}
-
-RefPtr<Gfx::Bitmap> PBMImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == PBMLoadingContext::State::Error)
-        return nullptr;
-
-    if (m_context->state < PBMLoadingContext::State::Decoded) {
-        bool success = decode(*m_context);
-        if (!success)
-            return nullptr;
-    }
-
-    VERIFY(m_context->bitmap);
-    return m_context->bitmap;
 }
 
 void PBMImageDecoderPlugin::set_volatile()
@@ -194,7 +166,18 @@ ImageFrameDescriptor PBMImageDecoderPlugin::frame(size_t i)
 {
     if (i > 0)
         return {};
-    return { bitmap(), 0 };
+
+    if (m_context->state == PBMLoadingContext::State::Error)
+        return {};
+
+    if (m_context->state < PBMLoadingContext::State::Decoded) {
+        bool success = decode(*m_context);
+        if (!success)
+            return {};
+    }
+
+    VERIFY(m_context->bitmap);
+    return { m_context->bitmap, 0 };
 }
 
 }

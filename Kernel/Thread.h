@@ -8,6 +8,7 @@
 
 #include <AK/Concepts.h>
 #include <AK/EnumBits.h>
+#include <AK/Error.h>
 #include <AK/HashMap.h>
 #include <AK/IntrusiveList.h>
 #include <AK/Optional.h>
@@ -19,7 +20,6 @@
 #include <AK/Vector.h>
 #include <AK/WeakPtr.h>
 #include <AK/Weakable.h>
-#include <Kernel/API/KResult.h>
 #include <Kernel/Arch/x86/SafeMem.h>
 #include <Kernel/Debug.h>
 #include <Kernel/FileSystem/InodeIdentifier.h>
@@ -162,7 +162,7 @@ public:
         return Processor::current_thread();
     }
 
-    static KResultOr<NonnullRefPtr<Thread>> try_create(NonnullRefPtr<Process>);
+    static ErrorOr<NonnullRefPtr<Thread>> try_create(NonnullRefPtr<Process>);
     ~Thread();
 
     static RefPtr<Thread> from_tid(ThreadID);
@@ -516,7 +516,7 @@ public:
     friend class JoinBlocker;
     class JoinBlocker final : public Blocker {
     public:
-        explicit JoinBlocker(Thread& joinee, KResult& try_join_result, void*& joinee_exit_value);
+        explicit JoinBlocker(Thread& joinee, ErrorOr<void>& try_join_result, void*& joinee_exit_value);
         virtual Type blocker_type() const override { return Type::Join; }
         virtual StringView state_string() const override { return "Joining"sv; }
         virtual bool can_be_interrupted() const override { return false; }
@@ -529,7 +529,7 @@ public:
     private:
         NonnullRefPtr<Thread> m_joinee;
         void*& m_joinee_exit_value;
-        KResult& m_try_join_result;
+        ErrorOr<void>& m_try_join_result;
         bool m_did_unblock { false };
     };
 
@@ -706,7 +706,7 @@ public:
             Disowned
         };
 
-        WaitBlocker(int wait_options, Variant<Empty, NonnullRefPtr<Process>, NonnullRefPtr<ProcessGroup>> waitee, KResultOr<siginfo_t>& result);
+        WaitBlocker(int wait_options, Variant<Empty, NonnullRefPtr<Process>, NonnullRefPtr<ProcessGroup>> waitee, ErrorOr<siginfo_t>& result);
         virtual StringView state_string() const override { return "Waiting"sv; }
         virtual Type blocker_type() const override { return Type::Wait; }
         virtual void will_unblock_immediately_without_blocking(UnblockImmediatelyReason) override;
@@ -714,14 +714,14 @@ public:
         virtual bool setup_blocker() override;
 
         bool unblock(Process& process, UnblockFlags flags, u8 signal, bool from_add_blocker);
-        bool is_wait() const { return !(m_wait_options & WNOWAIT); }
+        bool is_wait() const { return (m_wait_options & WNOWAIT) != WNOWAIT; }
 
     private:
         void do_was_disowned();
         void do_set_result(const siginfo_t&);
 
         const int m_wait_options;
-        KResultOr<siginfo_t>& m_result;
+        ErrorOr<siginfo_t>& m_result;
         Variant<Empty, NonnullRefPtr<Process>, NonnullRefPtr<ProcessGroup>> m_waitee;
         bool m_did_unblock { false };
         bool m_got_sigchild { false };
@@ -761,7 +761,7 @@ public:
     };
 
     template<typename AddBlockerHandler>
-    KResult try_join(AddBlockerHandler add_blocker)
+    ErrorOr<void> try_join(AddBlockerHandler add_blocker)
     {
         if (Thread::current() == this)
             return EDEADLK;
@@ -776,7 +776,7 @@ public:
         // else. It also means that if the join is timed, it becomes
         // detached when a timeout happens.
         m_is_joinable = false;
-        return KSuccess;
+        return {};
     }
 
     void did_schedule() { ++m_times_scheduled; }
@@ -883,7 +883,7 @@ public:
                 // NOTE: this may execute on the same or any other processor!
                 SpinlockLocker scheduler_lock(g_scheduler_lock);
                 SpinlockLocker block_lock(m_block_lock);
-                if (m_blocker && timeout_unblocked.exchange(true) == false)
+                if (m_blocker && !timeout_unblocked.exchange(true))
                     unblock();
             });
             if (!timer_was_added) {
@@ -1011,8 +1011,8 @@ public:
     u32 signal_mask() const;
     void clear_signals();
 
-    KResultOr<u32> peek_debug_register(u32 register_index);
-    KResult poke_debug_register(u32 register_index, u32 data);
+    ErrorOr<u32> peek_debug_register(u32 register_index);
+    ErrorOr<void> poke_debug_register(u32 register_index, u32 data);
 
     void set_dump_backtrace_on_finalization() { m_dump_backtrace_on_finalization = true; }
 
@@ -1028,7 +1028,7 @@ public:
 
     FPUState& fpu_state() { return m_fpu_state; }
 
-    KResult make_thread_specific_region(Badge<Process>);
+    ErrorOr<void> make_thread_specific_region(Badge<Process>);
 
     unsigned syscall_count() const { return m_syscall_count; }
     void did_syscall() { ++m_syscall_count; }
@@ -1104,7 +1104,7 @@ public:
         return !m_is_joinable;
     }
 
-    KResultOr<NonnullRefPtr<Thread>> try_clone(Process&);
+    ErrorOr<NonnullRefPtr<Thread>> try_clone(Process&);
 
     template<IteratorFunction<Thread&> Callback>
     static IterationDecision for_each_in_state(State, Callback);
@@ -1432,5 +1432,5 @@ inline IterationDecision Thread::for_each_in_state(State state, Callback callbac
 
 template<>
 struct AK::Formatter<Kernel::Thread> : AK::Formatter<FormatString> {
-    void format(FormatBuilder&, const Kernel::Thread&);
+    ErrorOr<void> format(FormatBuilder&, Kernel::Thread const&);
 };

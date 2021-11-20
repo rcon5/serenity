@@ -22,7 +22,7 @@ namespace Kernel::ACPI {
 
 class ACPISysFSDirectory : public SysFSDirectory {
 public:
-    static KResultOr<NonnullRefPtr<ACPISysFSDirectory>> try_create(FirmwareSysFSDirectory& firmware_directory);
+    static ErrorOr<NonnullRefPtr<ACPISysFSDirectory>> try_create(FirmwareSysFSDirectory& firmware_directory);
 
 private:
     explicit ACPISysFSDirectory(FirmwareSysFSDirectory& firmware_directory);
@@ -32,10 +32,10 @@ class ACPISysFSComponent : public SysFSComponent {
 public:
     static NonnullRefPtr<ACPISysFSComponent> create(String name, PhysicalAddress, size_t table_size);
 
-    virtual KResultOr<size_t> read_bytes(off_t, size_t, UserOrKernelBuffer&, OpenFileDescription*) const override;
+    virtual ErrorOr<size_t> read_bytes(off_t, size_t, UserOrKernelBuffer&, OpenFileDescription*) const override;
 
 protected:
-    KResultOr<NonnullOwnPtr<KBuffer>> try_to_generate_buffer() const;
+    ErrorOr<NonnullOwnPtr<KBuffer>> try_to_generate_buffer() const;
     ACPISysFSComponent(String name, PhysicalAddress, size_t table_size);
 
     PhysicalAddress m_paddr;
@@ -51,7 +51,7 @@ public:
     virtual StringView purpose() const override { return "ACPI Parser"sv; }
     virtual bool handle_irq(const RegisterState&) override;
 
-    Optional<PhysicalAddress> find_table(const StringView& signature);
+    Optional<PhysicalAddress> find_table(StringView signature);
 
     void try_acpi_reboot();
     bool can_reboot();
@@ -64,7 +64,7 @@ public:
     PhysicalAddress main_system_description_table() const { return m_main_system_description_table; }
     bool is_xsdt_supported() const { return m_xsdt_supported; }
 
-    void enumerate_static_tables(Function<void(const StringView&, PhysicalAddress, size_t)>);
+    void enumerate_static_tables(Function<void(StringView, PhysicalAddress, size_t)>);
 
     virtual bool have_8042() const
     {

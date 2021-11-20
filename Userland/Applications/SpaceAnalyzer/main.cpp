@@ -84,10 +84,9 @@ static void fill_mounts(Vector<MountInfo>& output)
     }
 
     auto content = file->read_all();
-    auto json = JsonValue::from_string(content);
-    VERIFY(json.has_value());
+    auto json = JsonValue::from_string(content).release_value_but_fixme_should_propagate_errors();
 
-    json.value().as_array().for_each([&output](auto& value) {
+    json.as_array().for_each([&output](auto& value) {
         auto& filesystem_object = value.as_object();
         MountInfo mount_info;
         mount_info.mount_point = filesystem_object.get("mount_point").to_string();
@@ -332,14 +331,14 @@ int main(int argc, char* argv[])
     help_menu.add_action(GUI::CommonActions::make_about_action(APP_NAME, app_icon, window));
 
     // Configure the nodes context menu.
-    auto open_folder_action = GUI::Action::create("Open Folder", { Mod_Ctrl, Key_O }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png"), [&](auto&) {
+    auto open_folder_action = GUI::Action::create("Open Folder", { Mod_Ctrl, Key_O }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         Desktop::Launcher::open(URL::create_with_file_protocol(get_absolute_path_to_selected_node(treemapwidget)));
     });
-    auto open_containing_folder_action = GUI::Action::create("Open Containing Folder", { Mod_Ctrl, Key_O }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png"), [&](auto&) {
+    auto open_containing_folder_action = GUI::Action::create("Open Containing Folder", { Mod_Ctrl, Key_O }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/open.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         LexicalPath path { get_absolute_path_to_selected_node(treemapwidget) };
         Desktop::Launcher::open(URL::create_with_file_protocol(path.dirname(), path.basename()));
     });
-    auto copy_path_action = GUI::Action::create("Copy Path to Clipboard", { Mod_Ctrl, Key_C }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-copy.png"), [&](auto&) {
+    auto copy_path_action = GUI::Action::create("Copy Path to Clipboard", { Mod_Ctrl, Key_C }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-copy.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         GUI::Clipboard::the().set_plain_text(get_absolute_path_to_selected_node(treemapwidget));
     });
     auto delete_action = GUI::CommonActions::make_delete_action([&](auto&) {
@@ -353,7 +352,7 @@ int main(int argc, char* argv[])
                 auto retry_message_result = GUI::MessageBox::show(window,
                     String::formatted("Failed to delete \"{}\": {}. Retry?",
                         deletion_result.error().file,
-                        deletion_result.error().error_code.string()),
+                        static_cast<Error const&>(deletion_result.error())),
                     "Deletion failed",
                     GUI::MessageBox::Type::Error,
                     GUI::MessageBox::InputType::YesNo);

@@ -8,7 +8,9 @@
 
 #include <AK/Optional.h>
 #include <AK/String.h>
+#include <LibJS/Runtime/Intl/AbstractOperations.h>
 #include <LibJS/Runtime/Object.h>
+#include <LibUnicode/Locale.h>
 
 namespace JS::Intl {
 
@@ -96,6 +98,7 @@ public:
     CurrencyDisplay currency_display() const { return *m_currency_display; }
     StringView currency_display_string() const;
     void set_currency_display(StringView currency_display);
+    StringView resolve_currency_display();
 
     bool has_currency_sign() const { return m_currency_sign.has_value(); }
     CurrencySign currency_sign() const { return *m_currency_sign; }
@@ -150,7 +153,16 @@ public:
     StringView sign_display_string() const;
     void set_sign_display(StringView sign_display);
 
+    NativeFunction* bound_format() const { return m_bound_format; }
+    void set_bound_format(NativeFunction* bound_format) { m_bound_format = bound_format; }
+
+    bool has_compact_format() const { return m_compact_format.has_value(); }
+    void set_compact_format(Unicode::NumberFormat compact_format) { m_compact_format = compact_format; }
+    Unicode::NumberFormat compact_format() const { return *m_compact_format; }
+
 private:
+    virtual void visit_edges(Visitor&) override;
+
     String m_locale;                                        // [[Locale]]
     String m_data_locale;                                   // [[DataLocale]]
     String m_numbering_system;                              // [[NumberingSystem]]
@@ -170,11 +182,38 @@ private:
     Notation m_notation { Notation::Invalid };              // [[Notation]]
     Optional<CompactDisplay> m_compact_display {};          // [[CompactDisplay]]
     SignDisplay m_sign_display { SignDisplay::Invalid };    // [[SignDisplay]]
+    NativeFunction* m_bound_format { nullptr };             // [[BoundFormat]]
+
+    // Non-standard. Stores the resolved currency display string based on [[Locale]], [[Currency]], and [[CurrencyDisplay]].
+    Optional<StringView> m_resolved_currency_display;
+
+    // Non-standard. Stores the resolved compact number format based on [[Locale]], [[Notation], [[Style]], and [[CompactDisplay]].
+    Optional<Unicode::NumberFormat> m_compact_format;
+};
+
+struct FormatResult {
+    String formatted_string;       // [[FormattedString]]
+    double rounded_number { 0.0 }; // [[RoundedNumber]]
+};
+
+struct RawFormatResult : public FormatResult {
+    int digits { 0 }; // [[IntegerDigitsCount]]
 };
 
 ThrowCompletionOr<void> set_number_format_digit_options(GlobalObject& global_object, NumberFormat& intl_object, Object const& options, int default_min_fraction_digits, int default_max_fraction_digits, NumberFormat::Notation notation);
 ThrowCompletionOr<NumberFormat*> initialize_number_format(GlobalObject& global_object, NumberFormat& number_format, Value locales_value, Value options_value);
 int currency_digits(StringView currency);
+FormatResult format_numeric_to_string(NumberFormat& number_format, double number);
+Vector<PatternPartition> partition_number_pattern(NumberFormat& number_format, double number);
+Vector<PatternPartition> partition_notation_sub_pattern(NumberFormat& number_format, double number, String formatted_string, int exponent);
+String format_numeric(NumberFormat& number_format, double number);
+Array* format_numeric_to_parts(GlobalObject& global_object, NumberFormat& number_format, double number);
+RawFormatResult to_raw_precision(double number, int min_precision, int max_precision);
+RawFormatResult to_raw_fixed(double number, int min_fraction, int max_fraction);
 ThrowCompletionOr<void> set_number_format_unit_options(GlobalObject& global_object, NumberFormat& intl_object, Object const& options);
+Optional<Variant<StringView, String>> get_number_format_pattern(NumberFormat& number_format, double number, Unicode::NumberFormat& found_pattern);
+Optional<StringView> get_notation_sub_pattern(NumberFormat& number_format, int exponent);
+int compute_exponent(NumberFormat& number_format, double number);
+int compute_exponent_for_magniude(NumberFormat& number_format, int magnitude);
 
 }

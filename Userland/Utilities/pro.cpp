@@ -20,7 +20,7 @@
 // FIXME: Move this somewhere else when it's needed (e.g. in the Browser)
 class ContentDispositionParser {
 public:
-    ContentDispositionParser(const StringView& value)
+    ContentDispositionParser(StringView value)
     {
         GenericLexer lexer(value);
 
@@ -84,8 +84,8 @@ public:
         FormData,
     };
 
-    const StringView& filename() const { return m_filename; }
-    const StringView& name() const { return m_name; }
+    StringView filename() const { return m_filename; }
+    StringView name() const { return m_name; }
     Kind kind() const { return m_kind; }
     bool might_be_wrong() const { return m_might_be_wrong; }
 
@@ -122,7 +122,8 @@ private:
     {
         if (!m_condition()) {
         write_to_buffer:;
-            if (!m_buffer.try_append(bytes.data(), bytes.size()))
+            // FIXME: Propagate errors.
+            if (m_buffer.try_append(bytes.data(), bytes.size()).is_error())
                 return 0;
             return bytes.size();
         }

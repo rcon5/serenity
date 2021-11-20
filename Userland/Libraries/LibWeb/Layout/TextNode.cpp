@@ -8,11 +8,11 @@
 #include <AK/StringBuilder.h>
 #include <LibGfx/Painter.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/InlineFormattingContext.h>
 #include <LibWeb/Layout/Label.h>
 #include <LibWeb/Layout/TextNode.h>
-#include <LibWeb/Page/BrowsingContext.h>
 
 namespace Web::Layout {
 
@@ -26,7 +26,7 @@ TextNode::~TextNode()
 {
 }
 
-static bool is_all_whitespace(const StringView& string)
+static bool is_all_whitespace(StringView string)
 {
     for (size_t i = 0; i < string.length(); ++i) {
         if (!is_ascii_space(string[i]))
@@ -313,7 +313,7 @@ void TextNode::handle_mousemove(Badge<EventHandler>, const Gfx::IntPoint& positi
     verify_cast<Label>(*parent()).handle_mousemove_on_label({}, position, button);
 }
 
-TextNode::ChunkIterator::ChunkIterator(StringView const& text, LayoutMode layout_mode, bool wrap_lines, bool respect_linebreaks)
+TextNode::ChunkIterator::ChunkIterator(StringView text, LayoutMode layout_mode, bool wrap_lines, bool respect_linebreaks)
     : m_layout_mode(layout_mode)
     , m_wrap_lines(wrap_lines)
     , m_respect_linebreaks(respect_linebreaks)

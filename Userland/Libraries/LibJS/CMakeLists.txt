@@ -38,6 +38,9 @@ set(SOURCES
     Runtime/ArrayIterator.cpp
     Runtime/ArrayIteratorPrototype.cpp
     Runtime/ArrayPrototype.cpp
+    Runtime/AsyncFunctionConstructor.cpp
+    Runtime/AsyncFunctionDriverWrapper.cpp
+    Runtime/AsyncFunctionPrototype.cpp
     Runtime/AtomicsObject.cpp
     Runtime/BigInt.cpp
     Runtime/BigIntConstructor.cpp
@@ -47,6 +50,7 @@ set(SOURCES
     Runtime/BooleanObject.cpp
     Runtime/BooleanPrototype.cpp
     Runtime/BoundFunction.cpp
+    Runtime/Completion.cpp
     Runtime/ConsoleObject.cpp
     Runtime/DataView.cpp
     Runtime/DataViewConstructor.cpp
@@ -89,6 +93,7 @@ set(SOURCES
     Runtime/Intl/LocalePrototype.cpp
     Runtime/Intl/NumberFormat.cpp
     Runtime/Intl/NumberFormatConstructor.cpp
+    Runtime/Intl/NumberFormatFunction.cpp
     Runtime/Intl/NumberFormatPrototype.cpp
     Runtime/IteratorOperations.cpp
     Runtime/IteratorPrototype.cpp

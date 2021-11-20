@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include <Kernel/API/KResult.h>
+#include <AK/Error.h>
 #include <Kernel/VirtualAddress.h>
 
 namespace Kernel::Memory {
@@ -51,7 +51,7 @@ public:
     Vector<VirtualRange, 2> carve(VirtualRange const&) const;
     VirtualRange intersect(VirtualRange const&) const;
 
-    static KResultOr<VirtualRange> expand_to_page_boundaries(FlatPtr address, size_t size);
+    static ErrorOr<VirtualRange> expand_to_page_boundaries(FlatPtr address, size_t size);
 
 private:
     VirtualAddress m_base;
@@ -62,7 +62,7 @@ private:
 
 template<>
 struct AK::Formatter<Kernel::Memory::VirtualRange> : Formatter<FormatString> {
-    void format(FormatBuilder& builder, Kernel::Memory::VirtualRange value)
+    ErrorOr<void> format(FormatBuilder& builder, Kernel::Memory::VirtualRange value)
     {
         return Formatter<FormatString>::format(builder, "{} - {} (size {:p})", value.base().as_ptr(), value.base().offset(value.size() - 1).as_ptr(), value.size());
     }

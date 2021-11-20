@@ -23,7 +23,7 @@ SysFSUSBDeviceInformation::~SysFSUSBDeviceInformation()
 {
 }
 
-KResult SysFSUSBDeviceInformation::try_generate(KBufferBuilder& builder)
+ErrorOr<void> SysFSUSBDeviceInformation::try_generate(KBufferBuilder& builder)
 {
     VERIFY(m_lock.is_locked());
     JsonArraySerializer array { builder };
@@ -44,10 +44,10 @@ KResult SysFSUSBDeviceInformation::try_generate(KBufferBuilder& builder)
     obj.add("num_configurations", m_device->device_descriptor().num_configurations);
     obj.finish();
     array.finish();
-    return KSuccess;
+    return {};
 }
 
-KResult SysFSUSBDeviceInformation::refresh_data(OpenFileDescription& description) const
+ErrorOr<void> SysFSUSBDeviceInformation::refresh_data(OpenFileDescription& description) const
 {
     MutexLocker lock(m_lock);
     auto& cached_data = description.data();
@@ -60,10 +60,10 @@ KResult SysFSUSBDeviceInformation::refresh_data(OpenFileDescription& description
     typed_cached_data.buffer = builder.build();
     if (!typed_cached_data.buffer)
         return ENOMEM;
-    return KSuccess;
+    return {};
 }
 
-KResultOr<size_t> SysFSUSBDeviceInformation::read_bytes(off_t offset, size_t count, UserOrKernelBuffer& buffer, OpenFileDescription* description) const
+ErrorOr<size_t> SysFSUSBDeviceInformation::read_bytes(off_t offset, size_t count, UserOrKernelBuffer& buffer, OpenFileDescription* description) const
 {
     dbgln_if(PROCFS_DEBUG, "SysFSUSBDeviceInformation @ {}: read_bytes offset: {} count: {}", name(), offset, count);
 
@@ -71,13 +71,13 @@ KResultOr<size_t> SysFSUSBDeviceInformation::read_bytes(off_t offset, size_t cou
     VERIFY(buffer.user_or_kernel_ptr());
 
     if (!description)
-        return KResult(EIO);
+        return Error::from_errno(EIO);
 
     MutexLocker locker(m_lock);
 
     if (!description->data()) {
         dbgln("SysFSUSBDeviceInformation: Do not have cached data!");
-        return KResult(EIO);
+        return Error::from_errno(EIO);
     }
 
     auto& typed_cached_data = static_cast<SysFSInodeData&>(*description->data());
@@ -91,19 +91,19 @@ KResultOr<size_t> SysFSUSBDeviceInformation::read_bytes(off_t offset, size_t cou
     return nread;
 }
 
-KResult SysFSUSBBusDirectory::traverse_as_directory(unsigned fsid, Function<bool(FileSystem::DirectoryEntryView const&)> callback) const
+ErrorOr<void> SysFSUSBBusDirectory::traverse_as_directory(FileSystemID fsid, Function<ErrorOr<void>(FileSystem::DirectoryEntryView const&)> callback) const
 {
     SpinlockLocker lock(m_lock);
     // Note: if the parent directory is null, it means something bad happened as this should not happen for the USB directory.
     VERIFY(m_parent_directory);
-    callback({ ".", { fsid, component_index() }, 0 });
-    callback({ "..", { fsid, m_parent_directory->component_index() }, 0 });
+    TRY(callback({ ".", { fsid, component_index() }, 0 }));
+    TRY(callback({ "..", { fsid, m_parent_directory->component_index() }, 0 }));
 
     for (auto& device_node : m_device_nodes) {
         InodeIdentifier identifier = { fsid, device_node.component_index() };
-        callback({ device_node.name(), identifier, 0 });
+        TRY(callback({ device_node.name(), identifier, 0 }));
     }
-    return KSuccess;
+    return {};
 }
 
 RefPtr<SysFSComponent> SysFSUSBBusDirectory::lookup(StringView name)

@@ -39,7 +39,7 @@ Interpreter::~Interpreter()
     s_current = nullptr;
 }
 
-Value Interpreter::run(Executable const& executable, BasicBlock const* entry_point)
+Interpreter::ValueAndFrame Interpreter::run_and_return_frame(Executable const& executable, BasicBlock const* entry_point)
 {
     dbgln_if(JS_BYTECODE_DEBUG, "Bytecode::Interpreter will run unit {:p}", &executable);
 
@@ -57,18 +57,19 @@ Value Interpreter::run(Executable const& executable, BasicBlock const* entry_poi
         execution_context.realm = &m_realm;
         // FIXME: How do we know if we're in strict mode? Maybe the Bytecode::Block should know this?
         // execution_context.is_strict_mode = ???;
-        vm().push_execution_context(execution_context, global_object());
-        VERIFY(!vm().exception());
+        MUST(vm().push_execution_context(execution_context, global_object()));
     }
 
     auto block = entry_point ?: &executable.basic_blocks.first();
-    if (m_manually_entered_frames) {
-        VERIFY(registers().size() >= executable.number_of_registers);
+    if (!m_manually_entered_frames.is_empty() && m_manually_entered_frames.last()) {
+        m_register_windows.append(make<RegisterWindow>(m_register_windows.last()));
     } else {
         m_register_windows.append(make<RegisterWindow>());
-        registers().resize(executable.number_of_registers);
-        registers()[Register::global_object_index] = Value(&global_object());
     }
+
+    registers().resize(executable.number_of_registers);
+    registers()[Register::global_object_index] = Value(&global_object());
+    m_manually_entered_frames.append(false);
 
     for (;;) {
         Bytecode::InstructionStreamIterator pc(block->instruction_stream());
@@ -138,8 +139,17 @@ Value Interpreter::run(Executable const& executable, BasicBlock const* entry_poi
 
     vm().set_last_value(Badge<Interpreter> {}, accumulator());
 
-    if (!m_manually_entered_frames)
-        m_register_windows.take_last();
+    OwnPtr<RegisterWindow> frame;
+    if (!m_manually_entered_frames.last()) {
+        frame = m_register_windows.take_last();
+        m_manually_entered_frames.take_last();
+    }
+
+    Value exception_value;
+    if (vm().exception()) {
+        exception_value = vm().exception()->value();
+        vm().clear_exception();
+    }
 
     auto return_value = m_return_value.value_or(js_undefined());
     m_return_value = {};
@@ -148,12 +158,19 @@ Value Interpreter::run(Executable const& executable, BasicBlock const* entry_poi
     if (!m_register_windows.is_empty())
         m_register_windows.last()[0] = return_value;
 
+    // At this point we may have already run any queued promise jobs via on_call_stack_emptied,
+    // in which case this is a no-op.
+    vm().run_queued_promise_jobs();
+
     if (vm().execution_context_stack().size() == 1)
         vm().pop_execution_context();
 
     vm().finish_execution_generation();
 
-    return return_value;
+    if (!exception_value.is_empty())
+        return { throw_completion(exception_value), move(frame) };
+
+    return { return_value, move(frame) };
 }
 
 void Interpreter::enter_unwind_context(Optional<Label> handler_target, Optional<Label> finalizer_target)

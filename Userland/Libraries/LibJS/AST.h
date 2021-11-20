@@ -18,6 +18,7 @@
 #include <AK/Vector.h>
 #include <LibJS/Forward.h>
 #include <LibJS/Runtime/EnvironmentCoordinate.h>
+#include <LibJS/Runtime/FunctionKind.h>
 #include <LibJS/Runtime/PropertyKey.h>
 #include <LibJS/Runtime/Reference.h>
 #include <LibJS/Runtime/Value.h>
@@ -32,11 +33,6 @@ class FunctionDeclaration;
 class Identifier;
 class MemberExpression;
 class VariableDeclaration;
-
-enum class FunctionKind {
-    Generator,
-    Regular,
-};
 
 template<class T, class... Args>
 static inline NonnullRefPtr<T>
@@ -562,6 +558,22 @@ public:
 private:
     RefPtr<Expression> m_argument;
     bool m_is_yield_from { false };
+};
+
+class AwaitExpression final : public Expression {
+public:
+    explicit AwaitExpression(SourceRange source_range, NonnullRefPtr<Expression> argument)
+        : Expression(source_range)
+        , m_argument(move(argument))
+    {
+    }
+
+    virtual Value execute(Interpreter&, GlobalObject&) const override;
+    virtual void dump(int indent) const override;
+    virtual void generate_bytecode(Bytecode::Generator&) const override;
+
+private:
+    NonnullRefPtr<Expression> m_argument;
 };
 
 class ReturnStatement final : public Statement {

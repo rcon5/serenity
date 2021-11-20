@@ -30,7 +30,7 @@ public:
         Object,
     };
 
-    static Optional<JsonValue> from_string(const StringView&);
+    static ErrorOr<JsonValue> from_string(StringView);
 
     explicit JsonValue(Type = Type::Null);
     ~JsonValue() { clear(); }
@@ -245,9 +245,9 @@ private:
 
 template<>
 struct Formatter<JsonValue> : Formatter<StringView> {
-    void format(FormatBuilder& builder, const JsonValue& value)
+    ErrorOr<void> format(FormatBuilder& builder, JsonValue const& value)
     {
-        Formatter<StringView>::format(builder, value.to_string());
+        return Formatter<StringView>::format(builder, value.to_string());
     }
 };
 

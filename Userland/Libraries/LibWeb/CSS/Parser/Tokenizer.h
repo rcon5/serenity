@@ -59,14 +59,15 @@ public:
 
 class CSSNumber {
 public:
-    String value;
+    String string;
+    double value { 0 };
     Token::NumberType type {};
 };
 
 class Tokenizer {
 
 public:
-    explicit Tokenizer(const StringView& input, const String& encoding);
+    explicit Tokenizer(StringView input, const String& encoding);
 
     [[nodiscard]] Vector<Token> parse();
 
@@ -86,6 +87,7 @@ private:
     [[nodiscard]] Token consume_a_numeric_token();
     [[nodiscard]] Token consume_an_ident_like_token();
     [[nodiscard]] CSSNumber consume_a_number();
+    [[nodiscard]] double convert_a_string_to_a_number(StringView);
     [[nodiscard]] String consume_a_name();
     [[nodiscard]] u32 consume_escaped_code_point();
     [[nodiscard]] Token consume_a_url_token();

@@ -10,12 +10,8 @@
 
 namespace Kernel {
 
-KResultOr<FlatPtr> Process::do_statvfs(StringView path, statvfs* buf)
+ErrorOr<FlatPtr> Process::do_statvfs(FileSystem const& fs, Custody const* custody, statvfs* buf)
 {
-    auto custody = TRY(VirtualFileSystem::the().resolve_path(path, current_directory(), nullptr, 0));
-    auto& inode = custody->inode();
-    auto& fs = inode.fs();
-
     statvfs kernelbuf = {};
 
     kernelbuf.f_bsize = static_cast<u64>(fs.block_size());
@@ -30,56 +26,44 @@ KResultOr<FlatPtr> Process::do_statvfs(StringView path, statvfs* buf)
     kernelbuf.f_ffree = fs.free_inode_count();
     kernelbuf.f_favail = fs.free_inode_count(); // FIXME: same as f_bavail
 
-    kernelbuf.f_fsid = 0; // FIXME: Implement "Filesystem ID" into Filesystem
+    kernelbuf.f_fsid = fs.fsid().value();
 
     kernelbuf.f_namemax = 255;
 
-    Custody* current_custody = custody;
+    if (custody)
+        kernelbuf.f_flag = custody->mount_flags();
 
-    while (current_custody) {
-        VirtualFileSystem::the().for_each_mount([&kernelbuf, &current_custody](auto& mount) {
-            if (&current_custody->inode() == &mount.guest()) {
-                int mountflags = mount.flags();
-                int flags = 0;
-                if (mountflags & MS_RDONLY)
-                    flags = flags | ST_RDONLY;
-                if (mountflags & MS_NOSUID)
-                    flags = flags | ST_NOSUID;
-
-                kernelbuf.f_flag = flags;
-                current_custody = nullptr;
-                return IterationDecision::Break;
-            }
-            return IterationDecision::Continue;
-        });
-
-        if (current_custody) {
-            current_custody = current_custody->parent();
-        }
-    }
-
-    return copy_to_user(buf, &kernelbuf);
+    TRY(copy_to_user(buf, &kernelbuf));
+    return 0;
 }
 
-KResultOr<FlatPtr> Process::sys$statvfs(Userspace<const Syscall::SC_statvfs_params*> user_params)
+ErrorOr<FlatPtr> Process::sys$statvfs(Userspace<const Syscall::SC_statvfs_params*> user_params)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(rpath);
     auto params = TRY(copy_typed_from_user(user_params));
 
     auto path = TRY(get_syscall_path_argument(params.path));
-    return do_statvfs(path->view(), params.buf);
+
+    auto custody = TRY(VirtualFileSystem::the().resolve_path(path->view(), current_directory(), nullptr, 0));
+    auto& inode = custody->inode();
+    auto const& fs = inode.fs();
+
+    return do_statvfs(fs, custody, params.buf);
 }
 
-KResultOr<FlatPtr> Process::sys$fstatvfs(int fd, statvfs* buf)
+ErrorOr<FlatPtr> Process::sys$fstatvfs(int fd, statvfs* buf)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
 
     auto description = TRY(fds().open_file_description(fd));
-    auto absolute_path = TRY(description->original_absolute_path());
-    // FIXME: TOCTOU bug! The file connected to the fd may or may not have been moved, and the name possibly taken by a different file.
-    return do_statvfs(absolute_path->view(), buf);
+    auto inode = description->inode();
+    if (inode == nullptr)
+        return ENOENT;
+
+    // FIXME: The custody that we pass in might be outdated. However, this only affects the mount flags.
+    return do_statvfs(inode->fs(), description->custody(), buf);
 }
 
 }

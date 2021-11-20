@@ -50,7 +50,7 @@ inline bool is_leap_year(int year)
 
 inline int days_in_year(int year)
 {
-    return 365 + is_leap_year(year);
+    return 365 + (is_leap_year(year) ? 1 : 0);
 }
 
 inline int years_to_days_since_epoch(int year)
@@ -115,9 +115,9 @@ private:
         i64 numerator_64 = numerator;
         i64 dividend = sane_mod(numerator_64, denominator);
         // Does not underflow: numerator can only become smaller.
-        numerator = numerator_64;
+        numerator = static_cast<i32>(numerator_64);
         // Does not overflow: Will be smaller than original value of 'numerator'.
-        return dividend;
+        return static_cast<i32>(dividend);
     }
 
 public:
@@ -139,9 +139,10 @@ public:
     }
     [[nodiscard]] static Time from_timespec(const struct timespec&);
     [[nodiscard]] static Time from_timeval(const struct timeval&);
-    [[nodiscard]] constexpr static Time min() { return Time(-0x8000'0000'0000'0000LL, 0); };
+    // We don't pull in <stdint.h> for the pretty min/max definitions because this file is also included in the Kernel
+    [[nodiscard]] constexpr static Time min() { return Time(-__INT64_MAX__ - 1LL, 0); };
     [[nodiscard]] constexpr static Time zero() { return Time(0, 0); };
-    [[nodiscard]] constexpr static Time max() { return Time(0x7fff'ffff'ffff'ffffLL, 999'999'999); };
+    [[nodiscard]] constexpr static Time max() { return Time(__INT64_MAX__, 999'999'999); };
 
 #ifndef KERNEL
     [[nodiscard]] static Time now_realtime();
@@ -163,7 +164,7 @@ public:
     // Rounds towards -inf (it was the easiest to implement).
     [[nodiscard]] timeval to_timeval() const;
 
-    [[nodiscard]] bool is_zero() const { return !m_seconds && !m_nanoseconds; }
+    [[nodiscard]] bool is_zero() const { return (m_seconds == 0) && (m_nanoseconds == 0); }
     [[nodiscard]] bool is_negative() const { return m_seconds < 0; }
 
     bool operator==(const Time& other) const { return this->m_seconds == other.m_seconds && this->m_nanoseconds == other.m_nanoseconds; }

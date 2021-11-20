@@ -11,7 +11,7 @@
 
 namespace Kernel {
 
-KResultOr<FlatPtr> Process::sys$writev(int fd, Userspace<const struct iovec*> iov, int iov_count)
+ErrorOr<FlatPtr> Process::sys$writev(int fd, Userspace<const struct iovec*> iov, int iov_count)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
@@ -24,8 +24,7 @@ KResultOr<FlatPtr> Process::sys$writev(int fd, Userspace<const struct iovec*> io
 
     u64 total_length = 0;
     Vector<iovec, 32> vecs;
-    if (!vecs.try_resize(iov_count))
-        return ENOMEM;
+    TRY(vecs.try_resize(iov_count));
     TRY(copy_n_from_user(vecs.data(), iov, iov_count));
     for (auto& vec : vecs) {
         total_length += vec.iov_len;
@@ -45,7 +44,7 @@ KResultOr<FlatPtr> Process::sys$writev(int fd, Userspace<const struct iovec*> io
         auto result = do_write(*description, buffer.value(), vec.iov_len);
         if (result.is_error()) {
             if (nwritten == 0)
-                return result.error();
+                return result.release_error();
             return nwritten;
         }
         nwritten += result.value();
@@ -54,7 +53,7 @@ KResultOr<FlatPtr> Process::sys$writev(int fd, Userspace<const struct iovec*> io
     return nwritten;
 }
 
-KResultOr<FlatPtr> Process::do_write(OpenFileDescription& description, const UserOrKernelBuffer& data, size_t data_size)
+ErrorOr<FlatPtr> Process::do_write(OpenFileDescription& description, const UserOrKernelBuffer& data, size_t data_size)
 {
     size_t total_nwritten = 0;
 
@@ -81,9 +80,9 @@ KResultOr<FlatPtr> Process::do_write(OpenFileDescription& description, const Use
         if (nwritten_or_error.is_error()) {
             if (total_nwritten > 0)
                 return total_nwritten;
-            if (nwritten_or_error.error() == EAGAIN)
+            if (nwritten_or_error.error().code() == EAGAIN)
                 continue;
-            return nwritten_or_error.error();
+            return nwritten_or_error.release_error();
         }
         VERIFY(nwritten_or_error.value() > 0);
         total_nwritten += nwritten_or_error.value();
@@ -91,7 +90,7 @@ KResultOr<FlatPtr> Process::do_write(OpenFileDescription& description, const Use
     return total_nwritten;
 }
 
-KResultOr<FlatPtr> Process::sys$write(int fd, Userspace<const u8*> data, size_t size)
+ErrorOr<FlatPtr> Process::sys$write(int fd, Userspace<const u8*> data, size_t size)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);

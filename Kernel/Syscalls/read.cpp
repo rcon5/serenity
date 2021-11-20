@@ -12,7 +12,7 @@ namespace Kernel {
 
 using BlockFlags = Thread::FileBlocker::BlockFlags;
 
-static KResultOr<OpenFileDescription*> open_readable_file_description(Process::OpenFileDescriptions const& fds, int fd)
+static ErrorOr<OpenFileDescription*> open_readable_file_description(Process::OpenFileDescriptions const& fds, int fd)
 {
     auto description = TRY(fds.open_file_description(fd));
     if (!description->is_readable())
@@ -22,7 +22,7 @@ static KResultOr<OpenFileDescription*> open_readable_file_description(Process::O
     return description;
 }
 
-static KResult check_blocked_read(OpenFileDescription* description)
+static ErrorOr<void> check_blocked_read(OpenFileDescription* description)
 {
     if (description->is_blocking()) {
         if (!description->can_read()) {
@@ -34,10 +34,10 @@ static KResult check_blocked_read(OpenFileDescription* description)
             // TODO: handle exceptions in unblock_flags
         }
     }
-    return KSuccess;
+    return {};
 }
 
-KResultOr<FlatPtr> Process::sys$readv(int fd, Userspace<const struct iovec*> iov, int iov_count)
+ErrorOr<FlatPtr> Process::sys$readv(int fd, Userspace<const struct iovec*> iov, int iov_count)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
@@ -50,8 +50,7 @@ KResultOr<FlatPtr> Process::sys$readv(int fd, Userspace<const struct iovec*> iov
 
     u64 total_length = 0;
     Vector<iovec, 32> vecs;
-    if (!vecs.try_resize(iov_count))
-        return ENOMEM;
+    TRY(vecs.try_resize(iov_count));
     TRY(copy_n_from_user(vecs.data(), iov, iov_count));
     for (auto& vec : vecs) {
         total_length += vec.iov_len;
@@ -74,7 +73,7 @@ KResultOr<FlatPtr> Process::sys$readv(int fd, Userspace<const struct iovec*> iov
     return nread;
 }
 
-KResultOr<FlatPtr> Process::sys$read(int fd, Userspace<u8*> buffer, size_t size)
+ErrorOr<FlatPtr> Process::sys$read(int fd, Userspace<u8*> buffer, size_t size)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
@@ -91,7 +90,7 @@ KResultOr<FlatPtr> Process::sys$read(int fd, Userspace<u8*> buffer, size_t size)
     return TRY(description->read(user_buffer.value(), size));
 }
 
-KResultOr<FlatPtr> Process::sys$pread(int fd, Userspace<u8*> buffer, size_t size, off_t offset)
+ErrorOr<FlatPtr> Process::sys$pread(int fd, Userspace<u8*> buffer, size_t size, Userspace<off_t*> userspace_offset)
 {
     VERIFY_PROCESS_BIG_LOCK_ACQUIRED(this)
     REQUIRE_PROMISE(stdio);
@@ -99,6 +98,8 @@ KResultOr<FlatPtr> Process::sys$pread(int fd, Userspace<u8*> buffer, size_t size
         return 0;
     if (size > NumericLimits<ssize_t>::max())
         return EINVAL;
+    off_t offset;
+    TRY(copy_from_user(&offset, userspace_offset));
     if (offset < 0)
         return EINVAL;
     dbgln_if(IO_DEBUG, "sys$pread({}, {}, {}, {})", fd, buffer.ptr(), size, offset);

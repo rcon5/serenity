@@ -249,6 +249,65 @@ static T copy_from_process(const T* source)
     return value;
 }
 
+struct BitflagOption {
+    int value;
+    StringView name;
+};
+
+#define BITFLAG(NAME) \
+    BitflagOption { NAME, #NAME }
+
+struct BitflagBase {
+    int flagset;
+    // Derivatives must define 'options', like so:
+    // static constexpr auto options = { BITFLAG(O_CREAT), BITFLAG(O_DIRECTORY) };
+};
+
+namespace AK {
+template<typename BitflagDerivative>
+    requires(IsBaseOf<BitflagBase, BitflagDerivative>) && requires { BitflagDerivative::options; }
+struct Formatter<BitflagDerivative> : StandardFormatter {
+    Formatter() = default;
+    explicit Formatter(StandardFormatter formatter)
+        : StandardFormatter(formatter)
+    {
+    }
+
+    ErrorOr<void> format(FormatBuilder& format_builder, BitflagDerivative const& value)
+    {
+        bool had_any_output = false;
+        int remaining = value.flagset;
+
+        for (BitflagOption const& option : BitflagDerivative::options) {
+            if ((remaining & option.value) != option.value)
+                continue;
+            remaining &= ~option.value;
+            if (had_any_output)
+                TRY(format_builder.put_literal(" | "));
+            TRY(format_builder.put_literal(option.name));
+            had_any_output = true;
+        }
+
+        if (remaining != 0) {
+            // No more BitflagOptions are available. Any remaining flags are unrecognized.
+            if (had_any_output)
+                TRY(format_builder.put_literal(" | "));
+            format_builder.builder().appendff("0x{:x} (?)", static_cast<unsigned>(remaining));
+            had_any_output = true;
+        }
+
+        if (!had_any_output) {
+            if constexpr (requires { BitflagDerivative::default_; })
+                TRY(format_builder.put_literal(BitflagDerivative::default_));
+            else
+                TRY(format_builder.put_literal("0"));
+        }
+
+        return {};
+    }
+};
+}
+
 struct PointerArgument {
     const void* value;
 };
@@ -262,13 +321,14 @@ struct Formatter<PointerArgument> : StandardFormatter {
     {
     }
 
-    void format(FormatBuilder& format_builder, PointerArgument const& value)
+    ErrorOr<void> format(FormatBuilder& format_builder, PointerArgument const& value)
     {
         auto& builder = format_builder.builder();
         if (value.value == nullptr)
             builder.append("null");
         else
             builder.appendff("{}", value.value);
+        return {};
     }
 };
 }
@@ -329,7 +389,12 @@ public:
 
     void format_result(void* res)
     {
-        m_builder.appendff(") = {}\n", res);
+        if (res == MAP_FAILED)
+            m_builder.append(") = MAP_FAILED\n");
+        else if (FlatPtr(res) > FlatPtr(-EMAXERRNO))
+            m_builder.appendff(") = {} {}\n", res, errno_name(-static_cast<int>(FlatPtr(res))));
+        else
+            m_builder.appendff(") = {}\n", res);
     }
 
     void format_result()
@@ -377,6 +442,15 @@ static void format_exit(FormattedSyscallBuilder& builder, int status)
     builder.add_argument(status);
 }
 
+struct OpenOptions : BitflagBase {
+    static constexpr auto options = {
+        BITFLAG(O_RDWR), BITFLAG(O_RDONLY), BITFLAG(O_WRONLY),
+        BITFLAG(O_EXEC), BITFLAG(O_CREAT), BITFLAG(O_EXCL), BITFLAG(O_NOCTTY),
+        BITFLAG(O_TRUNC), BITFLAG(O_APPEND), BITFLAG(O_NONBLOCK), BITFLAG(O_DIRECTORY),
+        BITFLAG(O_NOFOLLOW), BITFLAG(O_CLOEXEC), BITFLAG(O_DIRECT)
+    };
+};
+
 static void format_open(FormattedSyscallBuilder& builder, Syscall::SC_open_params* params_p)
 {
     auto params = copy_from_process(params_p);
@@ -388,24 +462,7 @@ static void format_open(FormattedSyscallBuilder& builder, Syscall::SC_open_param
 
     builder.add_string_argument(params.path);
 
-    Vector<StringView> active_flags;
-    if (params.options & O_RDWR)
-        active_flags.append("O_RDWR");
-    else if (params.options & O_RDONLY)
-        active_flags.append("O_RDONLY");
-    else if (params.options & O_WRONLY)
-        active_flags.append("O_WRONLY");
-
-    if (params.options & O_APPEND)
-        active_flags.append("O_APPEND");
-    if (params.options & O_CREAT)
-        active_flags.append("O_CREAT");
-    // TODO: etc...
-
-    // TODO: add to FormattedSyscallBuilder
-    StringBuilder sbuilder;
-    sbuilder.join(" | ", active_flags);
-    builder.add_argument(sbuilder.to_string());
+    builder.add_argument(OpenOptions { params.options });
 
     if (params.options & O_CREAT)
         builder.add_argument("{:04o}", params.mode);
@@ -424,25 +481,27 @@ static void format_ioctl(FormattedSyscallBuilder& builder, int fd, unsigned requ
 namespace AK {
 template<>
 struct Formatter<struct timespec> : StandardFormatter {
-    void format(FormatBuilder& format_builder, struct timespec value)
+    ErrorOr<void> format(FormatBuilder& format_builder, struct timespec value)
     {
         auto& builder = format_builder.builder();
         builder.appendff("{{tv_sec={}, tv_nsec={}}}", value.tv_sec, value.tv_nsec);
+        return {};
     }
 };
 
 template<>
 struct Formatter<struct timeval> : StandardFormatter {
-    void format(FormatBuilder& format_builder, struct timeval value)
+    ErrorOr<void> format(FormatBuilder& format_builder, struct timeval value)
     {
         auto& builder = format_builder.builder();
         builder.appendff("{{tv_sec={}, tv_usec={}}}", value.tv_sec, value.tv_usec);
+        return {};
     }
 };
 
 template<>
 struct Formatter<struct stat> : StandardFormatter {
-    void format(FormatBuilder& format_builder, struct stat value)
+    ErrorOr<void> format(FormatBuilder& format_builder, struct stat value)
     {
         auto& builder = format_builder.builder();
         builder.appendff(
@@ -450,6 +509,7 @@ struct Formatter<struct stat> : StandardFormatter {
             "st_size={}, st_blksize={}, st_blocks={}, st_atim={}, st_mtim={}, st_ctim={}}}",
             value.st_dev, value.st_ino, value.st_mode, value.st_nlink, value.st_uid, value.st_gid, value.st_rdev,
             value.st_size, value.st_blksize, value.st_blocks, value.st_atim, value.st_mtim, value.st_ctim);
+        return {};
     }
 };
 }
@@ -507,7 +567,7 @@ static void format_select(FormattedSyscallBuilder& builder, Syscall::SC_select_p
 namespace AK {
 template<>
 struct Formatter<struct sockaddr> : StandardFormatter {
-    void format(FormatBuilder& format_builder, struct sockaddr address)
+    ErrorOr<void> format(FormatBuilder& format_builder, struct sockaddr address)
     {
         auto& builder = format_builder.builder();
         builder.append("{sa_family=");
@@ -525,6 +585,7 @@ struct Formatter<struct sockaddr> : StandardFormatter {
                 address_un->sun_path);
         }
         builder.append('}');
+        return {};
     }
 };
 }
@@ -540,80 +601,34 @@ static void format_connect(FormattedSyscallBuilder& builder, int socket, const s
     builder.add_arguments(socket, copy_from_process(address_p), address_len);
 }
 
+struct MsgOptions : BitflagBase {
+    static constexpr auto options = {
+        BITFLAG(MSG_TRUNC), BITFLAG(MSG_CTRUNC), BITFLAG(MSG_PEEK),
+        BITFLAG(MSG_OOB), BITFLAG(MSG_DONTWAIT)
+        // TODO: add MSG_WAITALL once its definition is added
+    };
+};
+
 static void format_recvmsg(FormattedSyscallBuilder& builder, int socket, struct msghdr* message, int flags)
 {
     // TODO: format message
-    builder.add_arguments(socket, message);
-
-    Vector<StringView> active_flags;
-    if (flags & MSG_OOB)
-        active_flags.append("MSG_OOB");
-    if (flags & MSG_PEEK)
-        active_flags.append("MSG_PEEK");
-    // TODO: add MSG_WAITALL once its definition is added
-    if (!active_flags.is_empty()) {
-        StringBuilder sbuilder;
-        sbuilder.join(" | ", active_flags);
-        builder.add_argument(sbuilder.to_string());
-    } else
-        builder.add_argument("0");
+    builder.add_arguments(socket, message, MsgOptions { flags });
 }
 
-struct MmapFlags {
-    int value;
+struct MmapFlags : BitflagBase {
+    static constexpr auto options = {
+        BITFLAG(MAP_SHARED), BITFLAG(MAP_PRIVATE), BITFLAG(MAP_FIXED), BITFLAG(MAP_ANONYMOUS),
+        BITFLAG(MAP_RANDOMIZED), BITFLAG(MAP_STACK), BITFLAG(MAP_NORESERVE), BITFLAG(MAP_PURGEABLE)
+    };
+    static constexpr StringView default_ = "MAP_FILE";
 };
 
-struct MemoryProtectionFlags {
-    int value;
+struct MemoryProtectionFlags : BitflagBase {
+    static constexpr auto options = {
+        BITFLAG(PROT_READ), BITFLAG(PROT_WRITE), BITFLAG(PROT_EXEC)
+    };
+    static constexpr StringView default_ = "PROT_NONE";
 };
-
-namespace AK {
-template<>
-struct Formatter<MmapFlags> : StandardFormatter {
-    void format(FormatBuilder& format_builder, MmapFlags value)
-    {
-        auto& builder = format_builder.builder();
-        auto flags = value.value;
-        Vector<StringView> active_flags;
-        if (flags & MAP_SHARED)
-            active_flags.append("MAP_SHARED");
-        if (flags & MAP_PRIVATE)
-            active_flags.append("MAP_PRIVATE");
-        if (flags & MAP_FIXED)
-            active_flags.append("MAP_FIXED");
-        if (flags & MAP_RANDOMIZED)
-            active_flags.append("MAP_RANDOMIZED");
-        if (flags & MAP_STACK)
-            active_flags.append("MAP_STACK");
-        if (flags & MAP_NORESERVE)
-            active_flags.append("MAP_NORESERVE");
-        if (flags & MAP_PURGEABLE)
-            active_flags.append("MAP_PURGEABLE");
-        builder.join(" | ", active_flags);
-    }
-};
-
-template<>
-struct Formatter<MemoryProtectionFlags> : StandardFormatter {
-    void format(FormatBuilder& format_builder, MemoryProtectionFlags value)
-    {
-        auto& builder = format_builder.builder();
-        int prot = value.value;
-        Vector<StringView> active_prot;
-        if (prot == PROT_NONE)
-            active_prot.append("PROT_NONE");
-        else {
-            if (prot & PROT_READ)
-                active_prot.append("PROT_READ");
-            if (prot & PROT_WRITE)
-                active_prot.append("PROT_WRITE");
-            if (prot & PROT_EXEC)
-                active_prot.append("PROT_EXEC");
-        }
-        builder.join(" | ", active_prot);
-    }
-};
-}
 
 static void format_mmap(FormattedSyscallBuilder& builder, Syscall::SC_mmap_params* params_p)
 {

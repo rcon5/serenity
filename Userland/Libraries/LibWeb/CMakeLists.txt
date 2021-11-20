@@ -94,6 +94,7 @@ set(SOURCES
     Dump.cpp
     FontCache.cpp
     HTML/AttributeNames.cpp
+    HTML/BrowsingContext.cpp
     HTML/BrowsingContextContainer.cpp
     HTML/CanvasRenderingContext2D.cpp
     HTML/DOMParser.cpp
@@ -194,6 +195,7 @@ set(SOURCES
     HTML/TagNames.cpp
     HTML/WebSocket.cpp
     HighResolutionTime/Performance.cpp
+    ImageDecoding.cpp
     InProcessWebView.cpp
     IntersectionObserver/IntersectionObserver.cpp
     Layout/BlockContainer.cpp
@@ -232,7 +234,6 @@ set(SOURCES
     Layout/TableRowGroupBox.cpp
     Layout/TextNode.cpp
     Layout/TreeBuilder.cpp
-    Loader/CSSLoader.cpp
     Loader/ContentFilter.cpp
     Loader/FrameLoader.cpp
     Loader/ImageLoader.cpp
@@ -243,7 +244,6 @@ set(SOURCES
     Namespace.cpp
     NavigationTiming/PerformanceTiming.cpp
     OutOfProcessWebView.cpp
-    Page/BrowsingContext.cpp
     Page/EditEventHandler.cpp
     Page/EventHandler.cpp
     Page/Page.cpp

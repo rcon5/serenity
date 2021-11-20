@@ -38,7 +38,7 @@ SpinlockProtected<Thread::GlobalList>& Thread::all_instances()
     return *s_list;
 }
 
-KResultOr<NonnullRefPtr<Thread>> Thread::try_create(NonnullRefPtr<Process> process)
+ErrorOr<NonnullRefPtr<Thread>> Thread::try_create(NonnullRefPtr<Process> process)
 {
     auto kernel_stack_region = TRY(MM.allocate_kernel_region(default_kernel_stack_size, {}, Memory::Region::Access::ReadWrite, AllocationStrategy::AllocateNow));
     kernel_stack_region->set_stack(true);
@@ -178,7 +178,7 @@ void Thread::block(Kernel::Mutex& lock, SpinlockLocker<Spinlock>& lock_lock, u32
     auto& big_lock = process().big_lock();
     VERIFY((&lock == &big_lock && m_blocking_lock != &big_lock) || !m_blocking_lock);
 
-    auto previous_blocking_lock = m_blocking_lock;
+    auto* previous_blocking_lock = m_blocking_lock;
     m_blocking_lock = &lock;
     m_lock_requested_count = lock_count;
 
@@ -246,7 +246,7 @@ u32 Thread::unblock_from_lock(Kernel::Mutex& lock)
         VERIFY(m_state != Thread::Runnable && m_state != Thread::Running);
         set_state(Thread::Runnable);
     };
-    if (Processor::current_in_irq()) {
+    if (Processor::current_in_irq() != 0) {
         Processor::deferred_call_queue([do_unblock = move(do_unblock), self = make_weak_ptr()]() {
             if (auto this_thread = self.strong_ref())
                 do_unblock();
@@ -267,7 +267,7 @@ void Thread::unblock_from_blocker(Blocker& blocker)
         if (!should_be_stopped() && !is_stopped())
             unblock();
     };
-    if (Processor::current_in_irq()) {
+    if (Processor::current_in_irq() != 0) {
         Processor::deferred_call_queue([do_unblock = move(do_unblock), self = make_weak_ptr()]() {
             if (auto this_thread = self.strong_ref())
                 do_unblock();
@@ -445,12 +445,14 @@ void Thread::relock_process(LockMode previous_locked, u32 lock_count_to_restore)
     }
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const) False positive; We call block<SleepBlocker> which is not const
 auto Thread::sleep(clockid_t clock_id, const Time& duration, Time* remaining_time) -> BlockResult
 {
     VERIFY(state() == Thread::Running);
     return Thread::current()->block<Thread::SleepBlocker>({}, Thread::BlockTimeout(false, &duration, nullptr, clock_id), remaining_time);
 }
 
+// NOLINTNEXTLINE(readability-make-member-function-const) False positive; We call block<SleepBlocker> which is not const
 auto Thread::sleep_until(clockid_t clock_id, const Time& deadline) -> BlockResult
 {
     VERIFY(state() == Thread::Running);
@@ -580,7 +582,8 @@ bool Thread::tick()
         ++m_process->m_ticks_in_user;
         ++m_ticks_in_user;
     }
-    return --m_ticks_left;
+    --m_ticks_left;
+    return m_ticks_left != 0;
 }
 
 void Thread::check_dispatch_pending_signal()
@@ -588,7 +591,7 @@ void Thread::check_dispatch_pending_signal()
     auto result = DispatchSignalResult::Continue;
     {
         SpinlockLocker scheduler_lock(g_scheduler_lock);
-        if (pending_signals_for_state()) {
+        if (pending_signals_for_state() != 0) {
             SpinlockLocker lock(m_lock);
             result = dispatch_one_pending_signal();
         }
@@ -633,11 +636,11 @@ void Thread::send_signal(u8 signal, [[maybe_unused]] Process* sender)
     }
 
     m_pending_signals |= 1 << (signal - 1);
-    m_have_any_unmasked_pending_signals.store(pending_signals_for_state() & ~m_signal_mask, AK::memory_order_release);
+    m_have_any_unmasked_pending_signals.store((pending_signals_for_state() & ~m_signal_mask) != 0, AK::memory_order_release);
 
     if (m_state == Stopped) {
         SpinlockLocker lock(m_lock);
-        if (pending_signals_for_state()) {
+        if (pending_signals_for_state() != 0) {
             dbgln_if(SIGNAL_DEBUG, "Signal: Resuming stopped {} to deliver signal {}", *this, signal);
             resume_from_stopped();
         }
@@ -653,7 +656,7 @@ u32 Thread::update_signal_mask(u32 signal_mask)
     SpinlockLocker lock(g_scheduler_lock);
     auto previous_signal_mask = m_signal_mask;
     m_signal_mask = signal_mask;
-    m_have_any_unmasked_pending_signals.store(pending_signals_for_state() & ~m_signal_mask, AK::memory_order_release);
+    m_have_any_unmasked_pending_signals.store((pending_signals_for_state() & ~m_signal_mask) != 0, AK::memory_order_release);
     return previous_signal_mask;
 }
 
@@ -671,7 +674,7 @@ u32 Thread::signal_mask_block(sigset_t signal_set, bool block)
         m_signal_mask &= ~signal_set;
     else
         m_signal_mask |= signal_set;
-    m_have_any_unmasked_pending_signals.store(pending_signals_for_state() & ~m_signal_mask, AK::memory_order_release);
+    m_have_any_unmasked_pending_signals.store((pending_signals_for_state() & ~m_signal_mask) != 0, AK::memory_order_release);
     return previous_signal_mask;
 }
 
@@ -711,7 +714,7 @@ DispatchSignalResult Thread::dispatch_one_pending_signal()
 
     u8 signal = 1;
     for (; signal < 32; ++signal) {
-        if (signal_candidates & (1 << (signal - 1))) {
+        if ((signal_candidates & (1 << (signal - 1))) != 0) {
             break;
         }
     }
@@ -724,7 +727,7 @@ DispatchSignalResult Thread::try_dispatch_one_pending_signal(u8 signal)
     SpinlockLocker scheduler_lock(g_scheduler_lock);
     SpinlockLocker lock(m_lock);
     u32 signal_candidates = pending_signals_for_state() & ~m_signal_mask;
-    if (!(signal_candidates & (1 << (signal - 1))))
+    if ((signal_candidates & (1 << (signal - 1))) == 0)
         return DispatchSignalResult::Continue;
     return dispatch_signal(signal);
 }
@@ -786,18 +789,16 @@ static DefaultSignalAction default_signal_action(u8 signal)
 bool Thread::should_ignore_signal(u8 signal) const
 {
     VERIFY(signal < 32);
-    auto& action = m_signal_action_data[signal];
+    auto const& action = m_signal_action_data[signal];
     if (action.handler_or_sigaction.is_null())
         return default_signal_action(signal) == DefaultSignalAction::Ignore;
-    if ((sighandler_t)action.handler_or_sigaction.get() == SIG_IGN)
-        return true;
-    return false;
+    return ((sighandler_t)action.handler_or_sigaction.get() == SIG_IGN);
 }
 
 bool Thread::has_signal_handler(u8 signal) const
 {
     VERIFY(signal < 32);
-    auto& action = m_signal_action_data[signal];
+    auto const& action = m_signal_action_data[signal];
     return !action.handler_or_sigaction.is_null();
 }
 
@@ -805,7 +806,7 @@ static void push_value_on_user_stack(FlatPtr& stack, FlatPtr data)
 {
     stack -= sizeof(FlatPtr);
     auto result = copy_to_user((FlatPtr*)stack, &data);
-    VERIFY(result.is_success());
+    VERIFY(!result.is_error());
 }
 
 void Thread::resume_from_stopped()
@@ -853,10 +854,10 @@ DispatchSignalResult Thread::dispatch_signal(u8 signal)
 
     // Mark this signal as handled.
     m_pending_signals &= ~(1 << (signal - 1));
-    m_have_any_unmasked_pending_signals.store(m_pending_signals & ~m_signal_mask, AK::memory_order_release);
+    m_have_any_unmasked_pending_signals.store((m_pending_signals & ~m_signal_mask) != 0, AK::memory_order_release);
 
     auto& process = this->process();
-    auto tracer = process.tracer();
+    auto* tracer = process.tracer();
     if (signal == SIGSTOP || (tracer && default_signal_action(signal) == DefaultSignalAction::DumpCore)) {
         dbgln_if(SIGNAL_DEBUG, "Signal {} stopping this thread", signal);
         set_state(State::Stopped, signal);
@@ -914,13 +915,13 @@ DispatchSignalResult Thread::dispatch_signal(u8 signal)
 
     u32 old_signal_mask = m_signal_mask;
     u32 new_signal_mask = action.mask;
-    if (action.flags & SA_NODEFER)
+    if ((action.flags & SA_NODEFER) == SA_NODEFER)
         new_signal_mask &= ~(1 << (signal - 1));
     else
         new_signal_mask |= 1 << (signal - 1);
 
     m_signal_mask |= new_signal_mask;
-    m_have_any_unmasked_pending_signals.store(m_pending_signals & ~m_signal_mask, AK::memory_order_release);
+    m_have_any_unmasked_pending_signals.store((m_pending_signals & ~m_signal_mask) != 0, AK::memory_order_release);
 
     auto setup_stack = [&](RegisterState& state) {
         FlatPtr stack = state.userspace_sp();
@@ -1027,7 +1028,7 @@ RegisterState& Thread::get_register_dump_from_stack()
     return *trap->regs;
 }
 
-KResultOr<NonnullRefPtr<Thread>> Thread::try_clone(Process& process)
+ErrorOr<NonnullRefPtr<Thread>> Thread::try_clone(Process& process)
 {
     auto clone = TRY(Thread::try_create(process));
     auto signal_action_data_span = m_signal_action_data.span();
@@ -1065,7 +1066,7 @@ void Thread::set_state(State new_state, u8 stop_signal)
     } else if (previous_state == Stopped) {
         m_stop_state = State::Invalid;
         auto& process = this->process();
-        if (process.set_stopped(false) == true) {
+        if (process.set_stopped(false)) {
             process.for_each_thread([&](auto& thread) {
                 if (&thread == this)
                     return;
@@ -1089,7 +1090,7 @@ void Thread::set_state(State new_state, u8 stop_signal)
         // We don't want to restore to Running state, only Runnable!
         m_stop_state = previous_state != Running ? previous_state : Runnable;
         auto& process = this->process();
-        if (process.set_stopped(true) == false) {
+        if (!process.set_stopped(true)) {
             process.for_each_thread([&](auto& thread) {
                 if (&thread == this)
                     return;
@@ -1121,7 +1122,7 @@ struct RecognizedSymbol {
 
 static bool symbolicate(RecognizedSymbol const& symbol, Process& process, StringBuilder& builder)
 {
-    if (!symbol.address)
+    if (symbol.address == 0)
         return false;
 
     bool mask_kernel_addresses = !process.is_superuser();
@@ -1184,11 +1185,11 @@ size_t Thread::thread_specific_region_size() const
     return align_up_to(process().m_master_tls_size, thread_specific_region_alignment()) + sizeof(ThreadSpecificData);
 }
 
-KResult Thread::make_thread_specific_region(Badge<Process>)
+ErrorOr<void> Thread::make_thread_specific_region(Badge<Process>)
 {
     // The process may not require a TLS region, or allocate TLS later with sys$allocate_tls (which is what dynamically loaded programs do)
     if (!process().m_master_tls_region)
-        return KSuccess;
+        return {};
 
     auto range = TRY(process().address_space().try_allocate_range({}, thread_specific_region_size()));
     auto* region = TRY(process().address_space().allocate_region(range, "Thread-specific", PROT_READ | PROT_WRITE));
@@ -1201,10 +1202,10 @@ KResult Thread::make_thread_specific_region(Badge<Process>)
     m_thread_specific_data = VirtualAddress(thread_specific_data);
     thread_specific_data->self = thread_specific_data;
 
-    if (process().m_master_tls_size)
+    if (process().m_master_tls_size != 0)
         memcpy(thread_local_storage, process().m_master_tls_region.unsafe_ptr()->vaddr().as_ptr(), process().m_master_tls_size);
 
-    return KSuccess;
+    return {};
 }
 
 RefPtr<Thread> Thread::from_tid(ThreadID tid)
@@ -1278,7 +1279,7 @@ void Thread::track_lock_release(LockRank rank)
 
 }
 
-void AK::Formatter<Kernel::Thread>::format(FormatBuilder& builder, const Kernel::Thread& value)
+ErrorOr<void> AK::Formatter<Kernel::Thread>::format(FormatBuilder& builder, Kernel::Thread const& value)
 {
     return AK::Formatter<FormatString>::format(
         builder,

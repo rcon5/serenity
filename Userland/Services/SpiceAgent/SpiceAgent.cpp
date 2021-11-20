@@ -133,18 +133,20 @@ void SpiceAgent::on_message_received()
 
         m_just_set_clip = true;
         if (type == ClipboardType::Text) {
-            auto anon_buffer = Core::AnonymousBuffer::create_with_size(data_buffer.size());
+            auto anon_buffer_or_error = Core::AnonymousBuffer::create_with_size(data_buffer.size());
+            VERIFY(!anon_buffer_or_error.is_error());
+            auto anon_buffer = anon_buffer_or_error.release_value();
             memcpy(anon_buffer.data<void>(), data_buffer.data(), data_buffer.size());
             m_clipboard_connection.async_set_clipboard_data(anon_buffer, "text/plain", {});
             return;
         } else {
             RefPtr<Gfx::Bitmap> bitmap;
             if (type == ClipboardType::PNG) {
-                bitmap = Gfx::load_png_from_memory(data_buffer.data(), data_buffer.size());
+                bitmap = Gfx::PNGImageDecoderPlugin(data_buffer.data(), data_buffer.size()).frame(0).image;
             } else if (type == ClipboardType::BMP) {
-                bitmap = Gfx::load_bmp_from_memory(data_buffer.data(), data_buffer.size());
+                bitmap = Gfx::BMPImageDecoderPlugin(data_buffer.data(), data_buffer.size()).frame(0).image;
             } else if (type == ClipboardType::JPG) {
-                bitmap = Gfx::load_jpg_from_memory(data_buffer.data(), data_buffer.size());
+                bitmap = Gfx::JPGImageDecoderPlugin(data_buffer.data(), data_buffer.size()).frame(0).image;
             } else {
                 dbgln("Unknown clipboard type: {}", (u32)type);
                 return;

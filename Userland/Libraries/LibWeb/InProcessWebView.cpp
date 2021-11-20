@@ -13,13 +13,13 @@
 #include <LibGUI/Scrollbar.h>
 #include <LibGUI/Window.h>
 #include <LibGfx/ShareableBitmap.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLAnchorElement.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
 #include <LibWeb/InProcessWebView.h>
 #include <LibWeb/Layout/InitialContainingBlock.h>
 #include <LibWeb/Layout/TextNode.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <LibWeb/Page/BrowsingContext.h>
 #include <LibWeb/Page/EventHandler.h>
 #include <LibWeb/Painting/PaintContext.h>
 #include <LibWeb/UIEvents/MouseEvent.h>
@@ -119,8 +119,8 @@ void InProcessWebView::page_did_request_image_context_menu(const Gfx::IntPoint& 
         return;
     Gfx::ShareableBitmap shareable_bitmap;
     if (bitmap)
-        shareable_bitmap = Gfx::ShareableBitmap(*bitmap);
-    on_image_context_menu_request(url, screen_relative_rect().location().translated(to_widget_position(content_position)), shareable_bitmap);
+        shareable_bitmap = bitmap->to_shareable_bitmap();
+    on_image_context_menu_request(url, screen_relative_rect().location().translated(to_widget_position(content_position)), move(shareable_bitmap));
 }
 
 void InProcessWebView::page_did_click_link(const AK::URL& url, const String& target, unsigned modifiers)
@@ -295,7 +295,7 @@ void InProcessWebView::reload()
     load(url());
 }
 
-void InProcessWebView::load_html(const StringView& html, const AK::URL& url)
+void InProcessWebView::load_html(StringView html, const AK::URL& url)
 {
     page().top_level_browsing_context().loader().load_html(html, url);
 }

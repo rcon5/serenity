@@ -7,6 +7,7 @@
 #include <AK/JsonObject.h>
 #include <AK/JsonValue.h>
 #include <LibCompress/Gzip.h>
+#include <LibCore/File.h>
 #include <LibCoredump/Reader.h>
 #include <signal_numbers.h>
 #include <string.h>
@@ -58,7 +59,7 @@ Reader::Reader(ReadonlyBytes coredump_bytes)
     VERIFY(m_notes_segment_index != -1);
 }
 
-Optional<ByteBuffer> Reader::decompress_coredump(const ReadonlyBytes& raw_coredump)
+Optional<ByteBuffer> Reader::decompress_coredump(ReadonlyBytes raw_coredump)
 {
     auto decompressed_coredump = Compress::GzipDecompressor::decompress_all(raw_coredump);
     if (!decompressed_coredump.has_value())
@@ -148,7 +149,7 @@ const JsonObject Reader::process_info() const
     if (!process_info_notes_entry)
         return {};
     auto process_info_json_value = JsonValue::from_string(process_info_notes_entry->json_data);
-    if (!process_info_json_value.has_value())
+    if (process_info_json_value.is_error())
         return {};
     if (!process_info_json_value.value().is_object())
         return {};
@@ -246,7 +247,7 @@ HashMap<String, String> Reader::metadata() const
     if (!metadata_notes_entry)
         return {};
     auto metadata_json_value = JsonValue::from_string(metadata_notes_entry->json_data);
-    if (!metadata_json_value.has_value())
+    if (metadata_json_value.is_error())
         return {};
     if (!metadata_json_value.value().is_object())
         return {};
@@ -273,7 +274,7 @@ const Reader::LibraryData* Reader::library_containing(FlatPtr address) const
     auto name = region->object_name();
 
     String path;
-    if (name.contains(".so"))
+    if (Core::File::looks_like_shared_library(name))
         path = String::formatted("/usr/lib/{}", name);
     else {
         path = name;

@@ -222,7 +222,19 @@ u32 to_unicode_uppercase(u32 code_point)
 #endif
 }
 
-String to_unicode_lowercase_full(StringView const& string, [[maybe_unused]] Optional<StringView> locale)
+Optional<StringView> code_point_display_name([[maybe_unused]] u32 code_point)
+{
+#if ENABLE_UNICODE_DATA
+    auto name = Detail::code_point_display_name(code_point);
+    if (name.is_null())
+        return {};
+    return name;
+#else
+    return {};
+#endif
+}
+
+String to_unicode_lowercase_full(StringView string, [[maybe_unused]] Optional<StringView> locale)
 {
 #if ENABLE_UNICODE_DATA
     Utf8View view { string };
@@ -251,7 +263,7 @@ String to_unicode_lowercase_full(StringView const& string, [[maybe_unused]] Opti
 #endif
 }
 
-String to_unicode_uppercase_full(StringView const& string, [[maybe_unused]] Optional<StringView> locale)
+String to_unicode_uppercase_full(StringView string, [[maybe_unused]] Optional<StringView> locale)
 {
 #if ENABLE_UNICODE_DATA
     Utf8View view { string };
@@ -280,7 +292,7 @@ String to_unicode_uppercase_full(StringView const& string, [[maybe_unused]] Opti
 #endif
 }
 
-Optional<GeneralCategory> general_category_from_string([[maybe_unused]] StringView const& general_category)
+Optional<GeneralCategory> general_category_from_string([[maybe_unused]] StringView general_category)
 {
 #if ENABLE_UNICODE_DATA
     return Detail::general_category_from_string(general_category);
@@ -298,7 +310,7 @@ bool code_point_has_general_category([[maybe_unused]] u32 code_point, [[maybe_un
 #endif
 }
 
-Optional<Property> property_from_string([[maybe_unused]] StringView const& property)
+Optional<Property> property_from_string([[maybe_unused]] StringView property)
 {
 #if ENABLE_UNICODE_DATA
     return Detail::property_from_string(property);
@@ -383,7 +395,7 @@ bool is_ecma262_property([[maybe_unused]] Property property)
 #endif
 }
 
-Optional<Script> script_from_string([[maybe_unused]] StringView const& script)
+Optional<Script> script_from_string([[maybe_unused]] StringView script)
 {
 #if ENABLE_UNICODE_DATA
     return Detail::script_from_string(script);

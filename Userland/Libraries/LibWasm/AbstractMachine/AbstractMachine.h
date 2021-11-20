@@ -311,7 +311,7 @@ public:
                 return false;
         }
         auto previous_size = m_elements.size();
-        if (!m_elements.try_resize(new_size))
+        if (m_elements.try_resize(new_size).is_error())
             return false;
         for (size_t i = previous_size; i < m_elements.size(); ++i)
             m_elements[i] = fill_value;
@@ -349,7 +349,7 @@ public:
                 return false;
         }
         auto previous_size = m_size;
-        if (!m_data.try_resize(new_size))
+        if (m_data.try_resize(new_size).is_error())
             return false;
         m_size = new_size;
         // The spec requires that we zero out everything on grow
@@ -373,6 +373,7 @@ public:
 
     auto is_mutable() const { return m_mutable; }
     auto& value() const { return m_value; }
+    GlobalType type() const { return { m_value.type(), is_mutable() }; }
     void set_value(Value value)
     {
         VERIFY(is_mutable());
@@ -489,6 +490,8 @@ class AbstractMachine {
 public:
     explicit AbstractMachine() = default;
 
+    // Validate a module; permanently sets the module's validity status.
+    ErrorOr<void, ValidationError> validate(Module&);
     // Load and instantiate a module, and link it into this interpreter.
     InstantiationResult instantiate(Module const&, Vector<ExternValue>);
     Result invoke(FunctionAddress, Vector<Value>);

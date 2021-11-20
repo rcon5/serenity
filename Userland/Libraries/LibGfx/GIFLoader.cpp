@@ -6,8 +6,6 @@
 
 #include <AK/Array.h>
 #include <AK/Debug.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
 #include <AK/Math.h>
 #include <AK/Memory.h>
 #include <AK/MemoryStream.h>
@@ -81,23 +79,6 @@ struct GIFLoadingContext {
     size_t current_frame { 0 };
     RefPtr<Gfx::Bitmap> prev_frame_buffer;
 };
-
-RefPtr<Gfx::Bitmap> load_gif(String const& path)
-{
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    return load_gif_from_memory((u8 const*)file_or_error.value()->data(), file_or_error.value()->size(), LexicalPath::canonicalized_path(path));
-}
-
-RefPtr<Gfx::Bitmap> load_gif_from_memory(u8 const* data, size_t length, String const& mmap_name)
-{
-    GIFImageDecoderPlugin gif_decoder(data, length);
-    auto bitmap = gif_decoder.bitmap();
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded GIF: {}", bitmap->size(), mmap_name));
-    return bitmap;
-}
 
 enum class GIFFormat {
     GIF87a,
@@ -292,12 +273,18 @@ static bool decode_frame(GIFLoadingContext& context, size_t frame_index)
     size_t start_frame = context.current_frame + 1;
     if (context.state < GIFLoadingContext::State::FrameComplete) {
         start_frame = 0;
-        context.frame_buffer = Bitmap::try_create(BitmapFormat::BGRA8888, { context.logical_screen.width, context.logical_screen.height });
-        if (!context.frame_buffer)
-            return false;
-        context.prev_frame_buffer = Bitmap::try_create(BitmapFormat::BGRA8888, { context.logical_screen.width, context.logical_screen.height });
-        if (!context.prev_frame_buffer)
-            return false;
+        {
+            auto bitmap_or_error = Bitmap::try_create(BitmapFormat::BGRA8888, { context.logical_screen.width, context.logical_screen.height });
+            if (bitmap_or_error.is_error())
+                return false;
+            context.frame_buffer = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
+        }
+        {
+            auto bitmap_or_error = Bitmap::try_create(BitmapFormat::BGRA8888, { context.logical_screen.width, context.logical_screen.height });
+            if (bitmap_or_error.is_error())
+                return false;
+            context.prev_frame_buffer = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
+        }
     } else if (frame_index < context.current_frame) {
         start_frame = 0;
     }
@@ -636,14 +623,6 @@ IntSize GIFImageDecoderPlugin::size()
     return { m_context->logical_screen.width, m_context->logical_screen.height };
 }
 
-RefPtr<Gfx::Bitmap> GIFImageDecoderPlugin::bitmap()
-{
-    if (m_context->state < GIFLoadingContext::State::FrameComplete) {
-        return frame(0).image;
-    }
-    return m_context->frame_buffer;
-}
-
 void GIFImageDecoderPlugin::set_volatile()
 {
     if (m_context->frame_buffer) {
@@ -733,8 +712,14 @@ ImageFrameDescriptor GIFImageDecoderPlugin::frame(size_t i)
         m_context->error_state = GIFLoadingContext::ErrorState::FailedToDecodeAllFrames;
     }
 
+    auto image_or_error = m_context->frame_buffer->clone();
+    if (image_or_error.is_error()) {
+        m_context->error_state = GIFLoadingContext::ErrorState::FailedToDecodeAllFrames;
+        return {};
+    }
+
     ImageFrameDescriptor frame {};
-    frame.image = m_context->frame_buffer->clone();
+    frame.image = image_or_error.release_value_but_fixme_should_propagate_errors();
     frame.duration = m_context->images.at(i).duration * 10;
 
     if (frame.duration <= 10) {

@@ -47,8 +47,8 @@ private:
     HashMap<String, ByteBuffer> m_data;
 };
 
-String guess_mime_type_based_on_filename(const StringView&);
+String guess_mime_type_based_on_filename(StringView);
 
-Optional<String> guess_mime_type_based_on_sniffed_bytes(const ReadonlyBytes&);
+Optional<String> guess_mime_type_based_on_sniffed_bytes(ReadonlyBytes);
 
 }

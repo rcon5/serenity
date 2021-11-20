@@ -36,15 +36,15 @@ int main(int argc, char** argv)
     if (!file->open(Core::OpenMode::ReadOnly))
         return 1;
 
-    auto json = JsonValue::from_string(file->read_all());
-    VERIFY(json.has_value());
-    VERIFY(json.value().is_object());
+    auto json = JsonValue::from_string(file->read_all()).release_value_but_fixme_should_propagate_errors();
+    VERIFY(json.is_object());
 
     StringBuilder builder;
     SourceGenerator generator { builder };
     generator.append(R"~~~(
 #pragma once
 
+#include <AK/NonnullRefPtr.h>
 #include <AK/StringView.h>
 #include <AK/Traits.h>
 #include <LibWeb/Forward.h>
@@ -59,7 +59,7 @@ enum class PropertyID {
     Vector<String> shorthand_property_ids;
     Vector<String> longhand_property_ids;
 
-    json.value().as_object().for_each_member([&](auto& name, auto& value) {
+    json.as_object().for_each_member([&](auto& name, auto& value) {
         VERIFY(value.is_object());
         if (value.as_object().has("longhands"))
             shorthand_property_ids.append(name);
@@ -101,11 +101,10 @@ enum class PropertyID {
 };
 
 PropertyID property_id_from_camel_case_string(StringView);
-PropertyID property_id_from_string(const StringView&);
+PropertyID property_id_from_string(StringView);
 const char* string_from_property_id(PropertyID);
 bool is_inherited_property(PropertyID);
-bool is_pseudo_property(PropertyID);
-RefPtr<StyleValue> property_initial_value(PropertyID);
+NonnullRefPtr<StyleValue> property_initial_value(PropertyID);
 
 bool property_accepts_value(PropertyID, StyleValue&);
 size_t property_maximum_value_count(PropertyID);

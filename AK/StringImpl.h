@@ -60,7 +60,7 @@ public:
     {
         if (length() != other.length())
             return false;
-        return !__builtin_memcmp(characters(), other.characters(), length());
+        return __builtin_memcmp(characters(), other.characters(), length()) == 0;
     }
 
     unsigned hash() const
@@ -109,9 +109,9 @@ inline size_t allocation_size_for_stringimpl(size_t length)
 
 template<>
 struct Formatter<StringImpl> : Formatter<StringView> {
-    void format(FormatBuilder& builder, const StringImpl& value)
+    ErrorOr<void> format(FormatBuilder& builder, StringImpl const& value)
     {
-        Formatter<StringView>::format(builder, { value.characters(), value.length() });
+        return Formatter<StringView>::format(builder, { value.characters(), value.length() });
     }
 };
 

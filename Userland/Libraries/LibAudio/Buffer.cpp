@@ -45,16 +45,16 @@ i32 Buffer::allocate_id()
 }
 
 template<typename SampleReader>
-static void read_samples_from_stream(InputMemoryStream& stream, SampleReader read_sample, Vector<Frame>& samples, int num_channels)
+static void read_samples_from_stream(InputMemoryStream& stream, SampleReader read_sample, Vector<Sample>& samples, int num_channels)
 {
-    double norm_l = 0;
-    double norm_r = 0;
+    double left_channel_sample = 0;
+    double right_channel_sample = 0;
 
     switch (num_channels) {
     case 1:
         for (;;) {
-            norm_l = read_sample(stream);
-            samples.append(Frame(norm_l));
+            left_channel_sample = read_sample(stream);
+            samples.append(Sample(left_channel_sample));
 
             if (stream.handle_any_error()) {
                 break;
@@ -63,9 +63,9 @@ static void read_samples_from_stream(InputMemoryStream& stream, SampleReader rea
         break;
     case 2:
         for (;;) {
-            norm_l = read_sample(stream);
-            norm_r = read_sample(stream);
-            samples.append(Frame(norm_l, norm_r));
+            left_channel_sample = read_sample(stream);
+            right_channel_sample = read_sample(stream);
+            samples.append(Sample(left_channel_sample, right_channel_sample));
 
             if (stream.handle_any_error()) {
                 break;
@@ -130,7 +130,7 @@ RefPtr<Buffer> Buffer::from_pcm_data(ReadonlyBytes data, int num_channels, PcmSa
 
 RefPtr<Buffer> Buffer::from_pcm_stream(InputMemoryStream& stream, int num_channels, PcmSampleFormat sample_format, int num_samples)
 {
-    Vector<Frame> fdata;
+    Vector<Sample> fdata;
     fdata.ensure_capacity(num_samples);
 
     switch (sample_format) {
@@ -189,7 +189,7 @@ template Vector<double> ResampleHelper<double>::resample(Vector<double>);
 
 NonnullRefPtr<Buffer> resample_buffer(ResampleHelper<double>& resampler, Buffer const& to_resample)
 {
-    Vector<Frame> resampled;
+    Vector<Sample> resampled;
     resampled.ensure_capacity(to_resample.sample_count() * ceil_div(resampler.source(), resampler.target()));
     for (size_t i = 0; i < static_cast<size_t>(to_resample.sample_count()); ++i) {
         auto sample = to_resample.samples()[i];

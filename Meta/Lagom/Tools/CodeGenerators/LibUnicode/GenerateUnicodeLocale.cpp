@@ -20,7 +20,6 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/DirIterator.h>
 #include <LibCore/File.h>
-#include <LibUnicode/Locale.h>
 
 using StringIndexType = u16;
 constexpr auto s_string_index_type = "u16"sv;
@@ -41,27 +40,25 @@ struct Locale {
     HashMap<String, StringIndexType> languages;
     HashMap<String, StringIndexType> territories;
     HashMap<String, StringIndexType> scripts;
-    HashMap<String, StringIndexType> currencies;
+    HashMap<String, StringIndexType> long_currencies;
+    HashMap<String, StringIndexType> short_currencies;
+    HashMap<String, StringIndexType> narrow_currencies;
+    HashMap<String, StringIndexType> numeric_currencies;
     HashMap<String, StringIndexType> keywords;
     Vector<ListPatterns> list_patterns;
 };
 
-struct CanonicalLanguageID {
-    StringIndexType language { 0 };
-    StringIndexType script { 0 };
-    StringIndexType region { 0 };
-    Vector<StringIndexType> variants {};
-};
-
 struct LanguageMapping {
-    CanonicalLanguageID key {};
-    CanonicalLanguageID alias {};
+    CanonicalLanguageID<StringIndexType> key {};
+    CanonicalLanguageID<StringIndexType> alias {};
 };
 
 struct UnicodeLocaleData {
-    Vector<String> unique_strings;
-    HashMap<StringView, StringIndexType> unique_string_indices;
+    UniqueStringStorage<StringIndexType> unique_strings;
+
     HashMap<String, Locale> locales;
+    Vector<Alias> locale_aliases;
+
     Vector<String> languages;
     Vector<String> territories;
     Vector<String> scripts;
@@ -80,84 +77,13 @@ struct UnicodeLocaleData {
     size_t max_variant_size { 0 };
 };
 
-static StringIndexType ensure_unique_string(UnicodeLocaleData& locale_data, String string)
-{
-    // We maintain a set of unique strings in two structures: a vector which owns the unique string,
-    // and a hash map which maps that string to its index in the vector. The vector is to ensure the
-    // strings are generated in an easily known order, and the map is to allow quickly deciding if a
-    // string is actually unique (otherwise, we'd have to linear-search the vector for each string).
-    //
-    // Also note that index 0 will be reserved for the empty string, so the index returned from this
-    // method is actually the real index in the vector + 1.
-    if (auto index = locale_data.unique_string_indices.get(string); index.has_value())
-        return *index;
-
-    locale_data.unique_strings.append(move(string));
-    size_t index = locale_data.unique_strings.size();
-
-    // There are currently on the order of 46K unique strings in UnicodeLocale.cpp.
-    // If that number reaches 2^16, bump the StringIndexType alias to a u32.
-    VERIFY(index < NumericLimits<StringIndexType>::max());
-
-    auto string_index = static_cast<StringIndexType>(index);
-    locale_data.unique_string_indices.set(locale_data.unique_strings.last(), string_index);
-
-    return string_index;
-}
-
-static StringView get_unique_string(UnicodeLocaleData& locale_data, StringIndexType index)
-{
-    if (index == 0)
-        return {};
-
-    VERIFY(index <= locale_data.unique_strings.size());
-    return locale_data.unique_strings.at(index - 1);
-}
-
-static Optional<CanonicalLanguageID> parse_language(UnicodeLocaleData& locale_data, StringView language)
-{
-    CanonicalLanguageID language_id {};
-
-    auto segments = language.split_view('-');
-    VERIFY(!segments.is_empty());
-    size_t index = 0;
-
-    if (Unicode::is_unicode_language_subtag(segments[index])) {
-        language_id.language = ensure_unique_string(locale_data, segments[index]);
-        if (segments.size() == ++index)
-            return language_id;
-    } else {
-        return {};
-    }
-
-    if (Unicode::is_unicode_script_subtag(segments[index])) {
-        language_id.script = ensure_unique_string(locale_data, segments[index]);
-        if (segments.size() == ++index)
-            return language_id;
-    }
-
-    if (Unicode::is_unicode_region_subtag(segments[index])) {
-        language_id.region = ensure_unique_string(locale_data, segments[index]);
-        if (segments.size() == ++index)
-            return language_id;
-    }
-
-    while (index < segments.size()) {
-        if (!Unicode::is_unicode_variant_subtag(segments[index]))
-            return {};
-        language_id.variants.append(ensure_unique_string(locale_data, segments[index++]));
-    }
-
-    return language_id;
-}
-
 static Optional<LanguageMapping> parse_language_mapping(UnicodeLocaleData& locale_data, StringView key, StringView alias)
 {
-    auto parsed_key = parse_language(locale_data, key);
+    auto parsed_key = CanonicalLanguageID<StringIndexType>::parse(locale_data.unique_strings, key);
     if (!parsed_key.has_value())
         return {};
 
-    auto parsed_alias = parse_language(locale_data, alias);
+    auto parsed_alias = CanonicalLanguageID<StringIndexType>::parse(locale_data.unique_strings, alias);
     if (!parsed_alias.has_value())
         return {};
 
@@ -173,10 +99,9 @@ static void parse_core_aliases(String core_supplemental_path, UnicodeLocaleData&
     auto core_aliases_file_or_error = Core::File::open(core_aliases_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!core_aliases_file_or_error.is_error());
 
-    auto core_aliases = JsonParser(core_aliases_file_or_error.value()->read_all()).parse();
-    VERIFY(core_aliases.has_value());
+    auto core_aliases = JsonValue::from_string(core_aliases_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& supplemental_object = core_aliases->as_object().get("supplemental"sv);
+    auto const& supplemental_object = core_aliases.as_object().get("supplemental"sv);
     auto const& metadata_object = supplemental_object.as_object().get("metadata"sv);
     auto const& alias_object = metadata_object.as_object().get("alias"sv);
 
@@ -193,7 +118,7 @@ static void parse_core_aliases(String core_supplemental_path, UnicodeLocaleData&
                 locale_data.max_variant_size = max(mapping->alias.variants.size(), locale_data.max_variant_size);
                 locale_data.complex_mappings.append(mapping.release_value());
             } else {
-                alias_map.set(key, ensure_unique_string(locale_data, alias));
+                alias_map.set(key, locale_data.unique_strings.ensure(alias));
             }
         });
     };
@@ -214,10 +139,9 @@ static void parse_likely_subtags(String core_supplemental_path, UnicodeLocaleDat
     auto likely_subtags_file_or_error = Core::File::open(likely_subtags_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!likely_subtags_file_or_error.is_error());
 
-    auto likely_subtags = JsonParser(likely_subtags_file_or_error.value()->read_all()).parse();
-    VERIFY(likely_subtags.has_value());
+    auto likely_subtags = JsonValue::from_string(likely_subtags_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& supplemental_object = likely_subtags->as_object().get("supplemental"sv);
+    auto const& supplemental_object = likely_subtags.as_object().get("supplemental"sv);
     auto const& likely_subtags_object = supplemental_object.as_object().get("likelySubtags"sv);
 
     likely_subtags_object.as_object().for_each_member([&](auto const& key, JsonValue const& value) {
@@ -240,10 +164,9 @@ static void parse_identity(String locale_path, UnicodeLocaleData& locale_data, L
     auto languages_file_or_error = Core::File::open(languages_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!languages_file_or_error.is_error());
 
-    auto languages = JsonParser(languages_file_or_error.value()->read_all()).parse();
-    VERIFY(languages.has_value());
+    auto languages = JsonValue::from_string(languages_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& main_object = languages->as_object().get("main"sv);
+    auto const& main_object = languages.as_object().get("main"sv);
     auto const& locale_object = main_object.as_object().get(languages_path.parent().basename());
     auto const& identity_object = locale_object.as_object().get("identity"sv);
     auto const& language_string = identity_object.as_object().get("language"sv);
@@ -276,10 +199,9 @@ static void parse_locale_languages(String locale_path, UnicodeLocaleData& locale
     auto languages_file_or_error = Core::File::open(languages_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!languages_file_or_error.is_error());
 
-    auto languages = JsonParser(languages_file_or_error.value()->read_all()).parse();
-    VERIFY(languages.has_value());
+    auto languages = JsonValue::from_string(languages_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& main_object = languages->as_object().get("main"sv);
+    auto const& main_object = languages.as_object().get("main"sv);
     auto const& locale_object = main_object.as_object().get(languages_path.parent().basename());
     auto const& locale_display_names_object = locale_object.as_object().get("localeDisplayNames"sv);
     auto const& languages_object = locale_display_names_object.as_object().get("languages"sv);
@@ -288,7 +210,7 @@ static void parse_locale_languages(String locale_path, UnicodeLocaleData& locale
         if (!locale_data.languages.contains_slow(key))
             return;
 
-        auto index = ensure_unique_string(locale_data, value.as_string());
+        auto index = locale_data.unique_strings.ensure(value.as_string());
         locale.languages.set(key, index);
     });
 }
@@ -302,10 +224,9 @@ static void parse_locale_territories(String locale_path, UnicodeLocaleData& loca
     auto territories_file_or_error = Core::File::open(territories_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!territories_file_or_error.is_error());
 
-    auto territories = JsonParser(territories_file_or_error.value()->read_all()).parse();
-    VERIFY(territories.has_value());
+    auto territories = JsonValue::from_string(territories_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& main_object = territories->as_object().get("main"sv);
+    auto const& main_object = territories.as_object().get("main"sv);
     auto const& locale_object = main_object.as_object().get(territories_path.parent().basename());
     auto const& locale_display_names_object = locale_object.as_object().get("localeDisplayNames"sv);
     auto const& territories_object = locale_display_names_object.as_object().get("territories"sv);
@@ -314,7 +235,7 @@ static void parse_locale_territories(String locale_path, UnicodeLocaleData& loca
         if (!locale_data.territories.contains_slow(key))
             return;
 
-        auto index = ensure_unique_string(locale_data, value.as_string());
+        auto index = locale_data.unique_strings.ensure(value.as_string());
         locale.territories.set(key, index);
     });
 }
@@ -328,16 +249,15 @@ static void parse_locale_scripts(String locale_path, UnicodeLocaleData& locale_d
     auto scripts_file_or_error = Core::File::open(scripts_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!scripts_file_or_error.is_error());
 
-    auto scripts = JsonParser(scripts_file_or_error.value()->read_all()).parse();
-    VERIFY(scripts.has_value());
+    auto scripts = JsonValue::from_string(scripts_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& main_object = scripts->as_object().get("main"sv);
+    auto const& main_object = scripts.as_object().get("main"sv);
     auto const& locale_object = main_object.as_object().get(scripts_path.parent().basename());
     auto const& locale_display_names_object = locale_object.as_object().get("localeDisplayNames"sv);
     auto const& scripts_object = locale_display_names_object.as_object().get("scripts"sv);
 
     scripts_object.as_object().for_each_member([&](auto const& key, JsonValue const& value) {
-        auto index = ensure_unique_string(locale_data, value.as_string());
+        auto index = locale_data.unique_strings.ensure(value.as_string());
         locale.scripts.set(key, index);
 
         if (!locale_data.scripts.contains_slow(key))
@@ -354,10 +274,9 @@ static void parse_locale_list_patterns(String misc_path, UnicodeLocaleData& loca
     auto list_patterns_file_or_error = Core::File::open(list_patterns_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!list_patterns_file_or_error.is_error());
 
-    auto list_patterns = JsonParser(list_patterns_file_or_error.value()->read_all()).parse();
-    VERIFY(list_patterns.has_value());
+    auto list_patterns = JsonValue::from_string(list_patterns_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& main_object = list_patterns->as_object().get("main"sv);
+    auto const& main_object = list_patterns.as_object().get("main"sv);
     auto const& locale_object = main_object.as_object().get(list_patterns_path.parent().basename());
     auto const& list_patterns_object = locale_object.as_object().get("listPatterns"sv);
 
@@ -383,10 +302,10 @@ static void parse_locale_list_patterns(String misc_path, UnicodeLocaleData& loca
         auto type = list_pattern_type(key);
         auto style = list_pattern_style(key);
 
-        auto start = ensure_unique_string(locale_data, value.as_object().get("start"sv).as_string());
-        auto middle = ensure_unique_string(locale_data, value.as_object().get("middle"sv).as_string());
-        auto end = ensure_unique_string(locale_data, value.as_object().get("end"sv).as_string());
-        auto pair = ensure_unique_string(locale_data, value.as_object().get("2"sv).as_string());
+        auto start = locale_data.unique_strings.ensure(value.as_object().get("start"sv).as_string());
+        auto middle = locale_data.unique_strings.ensure(value.as_object().get("middle"sv).as_string());
+        auto end = locale_data.unique_strings.ensure(value.as_object().get("end"sv).as_string());
+        auto pair = locale_data.unique_strings.ensure(value.as_object().get("2"sv).as_string());
 
         if (!locale_data.list_pattern_types.contains_slow(type))
             locale_data.list_pattern_types.append(type);
@@ -406,19 +325,23 @@ static void parse_locale_currencies(String numbers_path, UnicodeLocaleData& loca
     auto currencies_file_or_error = Core::File::open(currencies_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!currencies_file_or_error.is_error());
 
-    auto currencies = JsonParser(currencies_file_or_error.value()->read_all()).parse();
-    VERIFY(currencies.has_value());
+    auto currencies = JsonValue::from_string(currencies_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& main_object = currencies->as_object().get("main"sv);
+    auto const& main_object = currencies.as_object().get("main"sv);
     auto const& locale_object = main_object.as_object().get(currencies_path.parent().basename());
     auto const& locale_numbers_object = locale_object.as_object().get("numbers"sv);
     auto const& currencies_object = locale_numbers_object.as_object().get("currencies"sv);
 
     currencies_object.as_object().for_each_member([&](auto const& key, JsonValue const& value) {
-        auto const& display_name = value.as_object().get("displayName"sv);
+        auto const& long_name = value.as_object().get("displayName"sv);
+        auto const& short_name = value.as_object().get("symbol"sv);
+        auto const& narrow_name = value.as_object().get("symbol-alt-narrow"sv);
+        auto const& numeric_name = value.as_object().get("displayName-count-other"sv);
 
-        auto index = ensure_unique_string(locale_data, display_name.as_string());
-        locale.currencies.set(key, index);
+        locale.long_currencies.set(key, locale_data.unique_strings.ensure(long_name.as_string()));
+        locale.short_currencies.set(key, locale_data.unique_strings.ensure(short_name.as_string()));
+        locale.narrow_currencies.set(key, narrow_name.is_null() ? 0 : locale_data.unique_strings.ensure(narrow_name.as_string()));
+        locale.numeric_currencies.set(key, locale_data.unique_strings.ensure(numeric_name.is_null() ? long_name.as_string() : numeric_name.as_string()));
 
         if (!locale_data.currencies.contains_slow(key))
             locale_data.currencies.append(key);
@@ -436,10 +359,9 @@ static void parse_numeric_keywords(String locale_numbers_path, UnicodeLocaleData
     auto numbers_file_or_error = Core::File::open(numbers_path.string(), Core::OpenMode::ReadOnly);
     VERIFY(!numbers_file_or_error.is_error());
 
-    auto numbers = JsonParser(numbers_file_or_error.value()->read_all()).parse();
-    VERIFY(numbers.has_value());
+    auto numbers = JsonValue::from_string(numbers_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
 
-    auto const& main_object = numbers->as_object().get("main"sv);
+    auto const& main_object = numbers.as_object().get("main"sv);
     auto const& locale_object = main_object.as_object().get(numbers_path.parent().basename());
     auto const& locale_numbers_object = locale_object.as_object().get("numbers"sv);
     auto const& default_numbering_system_object = locale_numbers_object.as_object().get("defaultNumberingSystem"sv);
@@ -454,29 +376,97 @@ static void parse_numeric_keywords(String locale_numbers_path, UnicodeLocaleData
             keyword_values.append(move(keyword_value));
     });
 
+    locale_numbers_object.as_object().for_each_member([&](auto const& key, JsonValue const& value) {
+        if (!key.starts_with("defaultNumberingSystem-alt-"sv))
+            return;
+
+        auto keyword_value = value.as_string();
+        if (!keyword_values.contains_slow(keyword_value))
+            keyword_values.append(move(keyword_value));
+    });
+
     StringBuilder builder;
     builder.join(',', keyword_values);
 
-    auto index = ensure_unique_string(locale_data, builder.build());
+    auto index = locale_data.unique_strings.ensure(builder.build());
     locale.keywords.set(key, index);
 
     if (!locale_data.keywords.contains_slow(key))
         locale_data.keywords.append(key);
 }
 
-static Core::DirIterator path_to_dir_iterator(String path)
+static void parse_default_content_locales(String core_path, UnicodeLocaleData& locale_data)
 {
-    LexicalPath lexical_path(move(path));
-    lexical_path = lexical_path.append("main"sv);
-    VERIFY(Core::File::is_directory(lexical_path.string()));
+    LexicalPath default_content_path(move(core_path));
+    default_content_path = default_content_path.append("defaultContent.json"sv);
+    VERIFY(Core::File::exists(default_content_path.string()));
 
-    Core::DirIterator iterator(lexical_path.string(), Core::DirIterator::SkipParentAndBaseDir);
-    if (iterator.has_error()) {
-        warnln("{}: {}", lexical_path.string(), iterator.error_string());
-        VERIFY_NOT_REACHED();
-    }
+    auto default_content_file_or_error = Core::File::open(default_content_path.string(), Core::OpenMode::ReadOnly);
+    VERIFY(!default_content_file_or_error.is_error());
 
-    return iterator;
+    auto default_content = JsonValue::from_string(default_content_file_or_error.value()->read_all()).release_value_but_fixme_should_propagate_errors();
+    auto const& default_content_array = default_content.as_object().get("defaultContent"sv);
+
+    default_content_array.as_array().for_each([&](JsonValue const& value) {
+        auto locale = value.as_string();
+        StringView default_locale = locale;
+
+        while (true) {
+            if (locale_data.locales.contains(default_locale))
+                break;
+
+            auto pos = default_locale.find_last('-');
+            if (!pos.has_value())
+                return;
+
+            default_locale = default_locale.substring_view(0, *pos);
+        }
+
+        if (default_locale != locale)
+            locale_data.locale_aliases.append({ default_locale, move(locale) });
+    });
+}
+
+static void define_aliases_without_scripts(UnicodeLocaleData& locale_data)
+{
+    // From ECMA-402: https://tc39.es/ecma402/#sec-internal-slots
+    //
+    //     For locales that include a script subtag in addition to language and region, the
+    //     corresponding locale without a script subtag must also be supported.
+    //
+    // So we define aliases for locales that contain all three subtags, but we must also take
+    // care to handle when the locale itself or the locale without a script subtag are an alias
+    // by way of default-content locales.
+    auto find_alias = [&](auto const& locale) {
+        return locale_data.locale_aliases.find_if([&](auto const& alias) { return locale == alias.alias; });
+    };
+
+    auto append_alias_without_script = [&](auto const& locale) {
+        auto parsed_locale = CanonicalLanguageID<StringIndexType>::parse(locale_data.unique_strings, locale);
+        VERIFY(parsed_locale.has_value());
+
+        if ((parsed_locale->language == 0) || (parsed_locale->script == 0) || (parsed_locale->region == 0))
+            return;
+
+        auto locale_without_script = String::formatted("{}-{}",
+            locale_data.unique_strings.get(parsed_locale->language),
+            locale_data.unique_strings.get(parsed_locale->region));
+
+        if (locale_data.locales.contains(locale_without_script))
+            return;
+        if (find_alias(locale_without_script) != locale_data.locale_aliases.end())
+            return;
+
+        if (auto it = find_alias(locale); it != locale_data.locale_aliases.end())
+            locale_data.locale_aliases.append({ it->name, locale_without_script });
+        else
+            locale_data.locale_aliases.append({ locale, locale_without_script });
+    };
+
+    for (auto const& locale : locale_data.locales)
+        append_alias_without_script(locale.key);
+    for (auto const& locale : locale_data.locale_aliases)
+        append_alias_without_script(locale.alias);
 }
 
 static void parse_all_locales(String core_path, String locale_names_path, String misc_path, String numbers_path, UnicodeLocaleData& locale_data)
@@ -486,7 +476,7 @@ static void parse_all_locales(String core_path, String locale_names_path, String
     auto misc_iterator = path_to_dir_iterator(move(misc_path));
     auto numbers_iterator = path_to_dir_iterator(move(numbers_path));
 
-    LexicalPath core_supplemental_path(move(core_path));
+    LexicalPath core_supplemental_path(core_path);
     core_supplemental_path = core_supplemental_path.append("supplemental"sv);
     VERIFY(Core::File::is_directory(core_supplemental_path.string()));
 
@@ -494,15 +484,15 @@ static void parse_all_locales(String core_path, String locale_names_path, String
     parse_likely_subtags(core_supplemental_path.string(), locale_data);
 
     auto remove_variants_from_path = [&](String path) -> Optional<String> {
-        auto parsed_locale = parse_language(locale_data, LexicalPath::basename(path));
+        auto parsed_locale = CanonicalLanguageID<StringIndexType>::parse(locale_data.unique_strings, LexicalPath::basename(path));
         if (!parsed_locale.has_value())
             return {};
 
         StringBuilder builder;
-        builder.append(get_unique_string(locale_data, parsed_locale->language));
-        if (auto script = get_unique_string(locale_data, parsed_locale->script); !script.is_empty())
+        builder.append(locale_data.unique_strings.get(parsed_locale->language));
+        if (auto script = locale_data.unique_strings.get(parsed_locale->script); !script.is_empty())
             builder.appendff("-{}", script);
-        if (auto region = get_unique_string(locale_data, parsed_locale->region); !region.is_empty())
+        if (auto region = locale_data.unique_strings.get(parsed_locale->region); !region.is_empty())
             builder.appendff("-{}", region);
 
         return builder.build();
@@ -558,6 +548,9 @@ static void parse_all_locales(String core_path, String locale_names_path, String
         parse_locale_currencies(numbers_path, locale_data, locale);
         parse_numeric_keywords(numbers_path, locale_data, locale);
     }
+
+    parse_default_content_locales(move(core_path), locale_data);
+    define_aliases_without_scripts(locale_data);
 }
 
 static String format_identifier(StringView owner, String identifier)
@@ -566,7 +559,9 @@ static String format_identifier(StringView owner, String identifier)
 
     if (all_of(identifier, is_ascii_digit))
         return String::formatted("{}_{}", owner[0], identifier);
-    return identifier.to_titlecase();
+    if (is_ascii_lower_alpha(identifier[0]))
+        return String::formatted("{:c}{}", to_ascii_uppercase(identifier[0]), identifier.substring_view(1));
+    return identifier;
 }
 
 static void generate_unicode_locale_header(Core::File& file, UnicodeLocaleData& locale_data)
@@ -574,83 +569,61 @@ static void generate_unicode_locale_header(Core::File& file, UnicodeLocaleData& 
     StringBuilder builder;
     SourceGenerator generator { builder };
 
-    auto generate_enum = [&](StringView name, StringView default_, Vector<String>& values) {
-        quick_sort(values);
-
-        generator.set("name", name);
-        generator.set("underlying", ((values.size() + !default_.is_empty()) < 256) ? "u8"sv : "u16"sv);
-
-        generator.append(R"~~~(
-enum class @name@ : @underlying@ {)~~~");
-
-        if (!default_.is_empty()) {
-            generator.set("default", default_);
-            generator.append(R"~~~(
-    @default@,)~~~");
-        }
-
-        for (auto const& value : values) {
-            generator.set("value", format_identifier(name, value));
-            generator.append(R"~~~(
-    @value@,)~~~");
-        }
-
-        generator.append(R"~~~(
-};
-)~~~");
-    };
-
     generator.append(R"~~~(
 #pragma once
 
 #include <AK/Optional.h>
 #include <AK/StringView.h>
 #include <AK/Types.h>
+#include <AK/Vector.h>
 #include <LibUnicode/Forward.h>
 
 namespace Unicode {
 )~~~");
 
     auto locales = locale_data.locales.keys();
-    generate_enum("Locale"sv, "None"sv, locales);
-    generate_enum("Language"sv, {}, locale_data.languages);
-    generate_enum("Territory"sv, {}, locale_data.territories);
-    generate_enum("ScriptTag"sv, {}, locale_data.scripts);
-    generate_enum("Currency"sv, {}, locale_data.currencies);
-    generate_enum("Key"sv, {}, locale_data.keywords);
-    generate_enum("Variant"sv, {}, locale_data.variants);
-    generate_enum("ListPatternType"sv, {}, locale_data.list_pattern_types);
-    generate_enum("ListPatternStyle"sv, {}, locale_data.list_pattern_styles);
+    generate_enum(generator, format_identifier, "Locale"sv, "None"sv, locales, locale_data.locale_aliases);
+    generate_enum(generator, format_identifier, "Language"sv, {}, locale_data.languages);
+    generate_enum(generator, format_identifier, "Territory"sv, {}, locale_data.territories);
+    generate_enum(generator, format_identifier, "ScriptTag"sv, {}, locale_data.scripts);
+    generate_enum(generator, format_identifier, "Currency"sv, {}, locale_data.currencies);
+    generate_enum(generator, format_identifier, "Key"sv, {}, locale_data.keywords);
+    generate_enum(generator, format_identifier, "Variant"sv, {}, locale_data.variants);
+    generate_enum(generator, format_identifier, "ListPatternType"sv, {}, locale_data.list_pattern_types);
+    generate_enum(generator, format_identifier, "ListPatternStyle"sv, {}, locale_data.list_pattern_styles);
 
     generator.append(R"~~~(
 namespace Detail {
 
-Optional<Locale> locale_from_string(StringView const& locale);
+Optional<Locale> locale_from_string(StringView locale);
 
 Optional<StringView> get_locale_language_mapping(StringView locale, StringView language);
-Optional<Language> language_from_string(StringView const& language);
-Optional<StringView> resolve_language_alias(StringView const& language);
+Optional<Language> language_from_string(StringView language);
+Optional<StringView> resolve_language_alias(StringView language);
 
 Optional<StringView> get_locale_territory_mapping(StringView locale, StringView territory);
-Optional<Territory> territory_from_string(StringView const& territory);
-Optional<StringView> resolve_territory_alias(StringView const& territory);
+Optional<Territory> territory_from_string(StringView territory);
+Optional<StringView> resolve_territory_alias(StringView territory);
 
 Optional<StringView> get_locale_script_tag_mapping(StringView locale, StringView script_tag);
-Optional<ScriptTag> script_tag_from_string(StringView const& script_tag);
-Optional<StringView> resolve_script_tag_alias(StringView const& script_tag);
+Optional<ScriptTag> script_tag_from_string(StringView script_tag);
+Optional<StringView> resolve_script_tag_alias(StringView script_tag);
 
-Optional<StringView> get_locale_currency_mapping(StringView locale, StringView currency);
-Optional<Currency> currency_from_string(StringView const& currency);
+Optional<StringView> get_locale_long_currency_mapping(StringView locale, StringView currency);
+Optional<StringView> get_locale_short_currency_mapping(StringView locale, StringView currency);
+Optional<StringView> get_locale_narrow_currency_mapping(StringView locale, StringView currency);
+Optional<StringView> get_locale_numeric_currency_mapping(StringView locale, StringView currency);
+Optional<Currency> currency_from_string(StringView currency);
 
 Optional<StringView> get_locale_key_mapping(StringView locale, StringView key);
-Optional<Key> key_from_string(StringView const& key);
+Optional<Key> key_from_string(StringView key);
 
 Optional<ListPatterns> get_locale_list_pattern_mapping(StringView locale, StringView list_pattern_type, StringView list_pattern_style);
-Optional<ListPatternType> list_pattern_type_from_string(StringView const& list_pattern_type);
-Optional<ListPatternStyle> list_pattern_style_from_string(StringView const& list_pattern_style);
+Optional<ListPatternType> list_pattern_type_from_string(StringView list_pattern_type);
+Optional<ListPatternStyle> list_pattern_style_from_string(StringView list_pattern_style);
 
-Optional<StringView> resolve_variant_alias(StringView const& variant);
-Optional<StringView> resolve_subdivision_alias(StringView const& subdivision);
+Optional<StringView> resolve_variant_alias(StringView variant);
+Optional<StringView> resolve_subdivision_alias(StringView subdivision);
 
 void resolve_complex_language_aliases(Unicode::LanguageID& language_id);
 
@@ -670,7 +643,6 @@ static void generate_unicode_locale_implementation(Core::File& file, UnicodeLoca
     StringBuilder builder;
     SourceGenerator generator { builder };
     generator.set("string_index_type"sv, s_string_index_type);
-    generator.set("strings_size"sv, String::number(locale_data.unique_strings.size()));
     generator.set("locales_size"sv, String::number(locale_data.locales.size()));
     generator.set("territories_size", String::number(locale_data.territories.size()));
     generator.set("variants_size", String::number(locale_data.max_variant_size));
@@ -682,7 +654,7 @@ static void generate_unicode_locale_implementation(Core::File& file, UnicodeLoca
 #include <LibUnicode/Locale.h>
 #include <LibUnicode/UnicodeLocale.h>
 
-namespace Unicode {
+namespace Unicode::Detail {
 
 struct Patterns {
     ListPatternType type;
@@ -694,33 +666,7 @@ struct Patterns {
 };
 )~~~");
 
-    generator.append(R"~~~(
-static constexpr Array<StringView, @strings_size@ + 1> s_string_list { {
-    {})~~~");
-
-    constexpr size_t max_strings_per_row = 30;
-    size_t strings_in_current_row = 1;
-
-    for (auto const& string : locale_data.unique_strings) {
-        if (strings_in_current_row++ > 0)
-            generator.append(", ");
-
-        generator.append(String::formatted("\"{}\"sv", string));
-
-        if (strings_in_current_row == max_strings_per_row) {
-            strings_in_current_row = 0;
-            generator.append(",\n    ");
-        }
-    }
-
-    generator.append(R"~~~(
-} };
-)~~~");
-
-    auto format_mapping_name = [](StringView format, StringView name) {
-        auto mapping_name = name.to_lowercase_string().replace("-"sv, "_"sv, true);
-        return String::formatted(format, mapping_name);
-    };
+    locale_data.unique_strings.generate(generator);
 
     auto append_index = [&](auto index) {
         generator.append(String::formatted(", {}", index));
@@ -798,51 +744,15 @@ static constexpr Array<Patterns, @size@> @name@ { {)~~~");
 )~~~");
     };
 
-    auto append_mapping = [&](StringView type, StringView name, StringView format, auto format_list_callback) {
-        Vector<String> mapping_names;
-
-        for (auto const& locale : locale_data.locales) {
-            auto mapping_name = format_mapping_name(format, locale.key);
-            format_list_callback(mapping_name, locale.value);
-            mapping_names.append(move(mapping_name));
-        }
-
-        quick_sort(mapping_names);
-
-        generator.set("type", type);
-        generator.set("name", name);
-        generator.set("size", String::number(locale_data.locales.size()));
-        generator.append(R"~~~(
-static constexpr Array<Span<@type@ const>, @size@> @name@ { {
-    )~~~");
-
-        constexpr size_t max_values_per_row = 10;
-        size_t values_in_current_row = 0;
-
-        for (auto& mapping_name : mapping_names) {
-            if (values_in_current_row++ > 0)
-                generator.append(" ");
-
-            generator.set("name", move(mapping_name));
-            generator.append("@name@.span(),");
-
-            if (values_in_current_row == max_values_per_row) {
-                values_in_current_row = 0;
-                generator.append("\n    ");
-            }
-        }
-
-        generator.append(R"~~~(
-} };
-)~~~");
-    };
-
-    append_mapping(s_string_index_type, "s_languages"sv, "s_languages_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.languages, value.languages); });
-    append_mapping(s_string_index_type, "s_territories"sv, "s_territories_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.territories, value.territories); });
-    append_mapping(s_string_index_type, "s_scripts"sv, "s_scripts_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.scripts, value.scripts); });
-    append_mapping(s_string_index_type, "s_currencies"sv, "s_currencies_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.currencies, value.currencies); });
-    append_mapping(s_string_index_type, "s_keywords"sv, "s_keywords_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.keywords, value.keywords); });
-    append_mapping("Patterns"sv, "s_list_patterns"sv, "s_list_patterns_{}", [&](auto const& name, auto const& value) { append_list_patterns(name, value.list_patterns); });
+    generate_mapping(generator, locale_data.locales, s_string_index_type, "s_languages"sv, "s_languages_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.languages, value.languages); });
+    generate_mapping(generator, locale_data.locales, s_string_index_type, "s_territories"sv, "s_territories_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.territories, value.territories); });
+    generate_mapping(generator, locale_data.locales, s_string_index_type, "s_scripts"sv, "s_scripts_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.scripts, value.scripts); });
+    generate_mapping(generator, locale_data.locales, s_string_index_type, "s_long_currencies"sv, "s_long_currencies_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.currencies, value.long_currencies); });
+    generate_mapping(generator, locale_data.locales, s_string_index_type, "s_short_currencies"sv, "s_short_currencies_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.currencies, value.short_currencies); });
+    generate_mapping(generator, locale_data.locales, s_string_index_type, "s_narrow_currencies"sv, "s_narrow_currencies_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.currencies, value.narrow_currencies); });
+    generate_mapping(generator, locale_data.locales, s_string_index_type, "s_numeric_currencies"sv, "s_numeric_currencies_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.currencies, value.numeric_currencies); });
+    generate_mapping(generator, locale_data.locales, s_string_index_type, "s_keywords"sv, "s_keywords_{}", [&](auto const& name, auto const& value) { append_string_index_list(name, locale_data.keywords, value.keywords); });
+    generate_mapping(generator, locale_data.locales, "Patterns"sv, "s_list_patterns"sv, "s_list_patterns_{}", [&](auto const& name, auto const& value) { append_list_patterns(name, value.list_patterns); });
 
     generator.append(R"~~~(
 struct CanonicalLanguageID {
@@ -899,8 +809,8 @@ static constexpr Array<LanguageMapping, @size@> s_@name@ { {
 )~~~");
 
         quick_sort(mappings, [&](auto const& lhs, auto const& rhs) {
-            auto const& lhs_language = get_unique_string(locale_data, lhs.key.language);
-            auto const& rhs_language = get_unique_string(locale_data, rhs.key.language);
+            auto const& lhs_language = locale_data.unique_strings.get(lhs.key.language);
+            auto const& rhs_language = locale_data.unique_strings.get(rhs.key.language);
 
             // Sort the keys such that "und" language tags are at the end, as those are less specific.
             if (lhs_language.starts_with("und"sv) && !rhs_language.starts_with("und"sv))
@@ -1022,12 +932,11 @@ static LanguageMapping const* resolve_likely_subtag(Unicode::LanguageID const& l
     return nullptr;
 }
 
-namespace Detail {
 )~~~");
 
-    auto append_mapping_search = [&](StringView enum_title, StringView enum_snake, StringView collection_name) {
-        generator.set("enum_title", enum_title);
+    auto append_mapping_search = [&](StringView enum_snake, StringView from_string_name, StringView collection_name) {
         generator.set("enum_snake", enum_snake);
+        generator.set("from_string_name", from_string_name);
         generator.set("collection_name", collection_name);
         generator.append(R"~~~(
 Optional<StringView> get_locale_@enum_snake@_mapping(StringView locale, StringView @enum_snake@)
@@ -1036,7 +945,7 @@ Optional<StringView> get_locale_@enum_snake@_mapping(StringView locale, StringVi
     if (!locale_value.has_value())
         return {};
 
-    auto @enum_snake@_value = @enum_snake@_from_string(@enum_snake@);
+    auto @enum_snake@_value = @from_string_name@_from_string(@enum_snake@);
     if (!@enum_snake@_value.has_value())
         return {};
 
@@ -1054,12 +963,14 @@ Optional<StringView> get_locale_@enum_snake@_mapping(StringView locale, StringVi
 )~~~");
     };
 
-    auto append_from_string = [&](StringView enum_title, StringView enum_snake, auto const& values) {
+    auto append_from_string = [&](StringView enum_title, StringView enum_snake, auto const& values, Vector<Alias> const& aliases = {}) {
         HashValueMap<String> hashes;
         hashes.ensure_capacity(values.size());
 
         for (auto const& value : values)
             hashes.set(value.hash(), format_identifier(enum_title, value));
+        for (auto const& alias : aliases)
+            hashes.set(alias.alias.hash(), format_identifier(enum_title, alias.alias));
 
         generate_value_from_string(generator, "{}_from_string"sv, enum_title, enum_snake, move(hashes));
     };
@@ -1074,24 +985,27 @@ Optional<StringView> get_locale_@enum_snake@_mapping(StringView locale, StringVi
         generate_value_from_string(generator, "resolve_{}_alias"sv, s_string_index_type, enum_snake, move(hashes), "StringView"sv, "s_string_list[{}]"sv);
     };
 
-    append_from_string("Locale"sv, "locale"sv, locale_data.locales.keys());
+    append_from_string("Locale"sv, "locale"sv, locale_data.locales.keys(), locale_data.locale_aliases);
 
-    append_mapping_search("Language"sv, "language"sv, "s_languages"sv);
+    append_mapping_search("language"sv, "language"sv, "s_languages"sv);
     append_from_string("Language"sv, "language"sv, locale_data.languages);
     append_alias_search("language"sv, locale_data.language_aliases);
 
-    append_mapping_search("Territory"sv, "territory"sv, "s_territories"sv);
+    append_mapping_search("territory"sv, "territory"sv, "s_territories"sv);
     append_from_string("Territory"sv, "territory"sv, locale_data.territories);
     append_alias_search("territory"sv, locale_data.territory_aliases);
 
-    append_mapping_search("ScriptTag"sv, "script_tag"sv, "s_scripts"sv);
+    append_mapping_search("script_tag"sv, "script_tag"sv, "s_scripts"sv);
     append_from_string("ScriptTag"sv, "script_tag"sv, locale_data.scripts);
     append_alias_search("script_tag"sv, locale_data.script_aliases);
 
-    append_mapping_search("Currency"sv, "currency"sv, "s_currencies"sv);
+    append_mapping_search("long_currency"sv, "currency"sv, "s_long_currencies"sv);
+    append_mapping_search("short_currency"sv, "currency"sv, "s_short_currencies"sv);
+    append_mapping_search("narrow_currency"sv, "currency"sv, "s_narrow_currencies"sv);
+    append_mapping_search("numeric_currency"sv, "currency"sv, "s_numeric_currencies"sv);
     append_from_string("Currency"sv, "currency"sv, locale_data.currencies);
 
-    append_mapping_search("Key"sv, "key"sv, "s_keywords"sv);
+    append_mapping_search("key"sv, "key"sv, "s_keywords"sv);
     append_from_string("Key"sv, "key"sv, locale_data.keywords);
 
     append_alias_search("variant"sv, locale_data.variant_aliases);
@@ -1195,8 +1109,6 @@ Optional<String> resolve_most_likely_territory(Unicode::LanguageID const& langua
     if (auto const* likely_subtag = resolve_likely_subtag(language_id); likely_subtag != nullptr)
         return s_string_list[likely_subtag->alias.region];
     return {};
-}
-
 }
 
 }

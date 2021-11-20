@@ -21,7 +21,7 @@ static const Gfx::Bitmap& heat_gradient()
 {
     static RefPtr<Gfx::Bitmap> bitmap;
     if (!bitmap) {
-        bitmap = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRx8888, { 101, 1 });
+        bitmap = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRx8888, { 101, 1 }).release_value_but_fixme_should_propagate_errors();
         GUI::Painter painter(*bitmap);
         painter.fill_rect_with_gradient(Orientation::Horizontal, bitmap->rect(), Color::from_rgb(0xffc080), Color::from_rgb(0xff3000));
     }
@@ -97,6 +97,10 @@ DisassemblyModel::DisassemblyModel(Profile& profile, ProfileNode& node)
         dbgln("DisassemblyModel: symbol not found");
         return;
     }
+    if (!symbol.value().raw_data().length()) {
+        dbgln("DisassemblyModel: Found symbol without code");
+        return;
+    }
     VERIFY(symbol.has_value());
 
     auto symbol_offset_from_function_start = node.address() - base_address - symbol->value();
@@ -119,7 +123,7 @@ DisassemblyModel::DisassemblyModel(Profile& profile, ProfileNode& node)
             break;
 
         auto insn = disassembler.next();
-        if (!insn.has_value())
+        if (!insn.has_value() || !insn.value().is_valid())
             break;
         FlatPtr address_in_profiled_program = node.address() + offset_into_symbol;
 

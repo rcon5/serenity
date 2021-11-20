@@ -7,7 +7,7 @@
 #pragma once
 
 // NOTE: This macro works with any result type that has the expected APIs.
-//       It's designed with AK::Result and Kernel::KResult in mind.
+//       It's designed with AK::Result and AK::Error in mind.
 
 #define TRY(expression)                               \
     ({                                                \
@@ -15,4 +15,11 @@
         if (_temporary_result.is_error())             \
             return _temporary_result.release_error(); \
         _temporary_result.release_value();            \
+    })
+
+#define MUST(expression)                       \
+    ({                                         \
+        auto _temporary_result = (expression); \
+        VERIFY(!_temporary_result.is_error()); \
+        _temporary_result.release_value();     \
     })

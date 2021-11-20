@@ -117,15 +117,15 @@ Field::Field(GUI::Label& flag_label, GUI::Label& time_label, GUI::Button& face_b
         m_time_label.set_text(String::formatted("{}.{}", m_time_elapsed / 10, m_time_elapsed % 10));
     };
     m_timer->set_interval(100);
-    m_mine_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/mine.png");
-    m_flag_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/flag.png");
-    m_badflag_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/badflag.png");
-    m_consider_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/consider.png");
-    m_default_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-default.png");
-    m_good_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-good.png");
-    m_bad_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-bad.png");
+    m_mine_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/mine.png").release_value_but_fixme_should_propagate_errors();
+    m_flag_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/flag.png").release_value_but_fixme_should_propagate_errors();
+    m_badflag_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/badflag.png").release_value_but_fixme_should_propagate_errors();
+    m_consider_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/consider.png").release_value_but_fixme_should_propagate_errors();
+    m_default_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-default.png").release_value_but_fixme_should_propagate_errors();
+    m_good_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-good.png").release_value_but_fixme_should_propagate_errors();
+    m_bad_face_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/minesweeper/face-bad.png").release_value_but_fixme_should_propagate_errors();
     for (int i = 0; i < 8; ++i)
-        m_number_bitmap[i] = Gfx::Bitmap::try_load_from_file(String::formatted("/res/icons/minesweeper/{}.png", i + 1));
+        m_number_bitmap[i] = Gfx::Bitmap::try_load_from_file(String::formatted("/res/icons/minesweeper/{}.png", i + 1)).release_value_but_fixme_should_propagate_errors();
     // Square with mine will be filled with background color later, i.e. red
     m_mine_palette.set_color(Gfx::ColorRole::Base, Color::from_rgb(0xff4040));
 
@@ -140,12 +140,16 @@ Field::Field(GUI::Label& flag_label, GUI::Label& time_label, GUI::Button& face_b
         int mine_count = Config::read_i32("Minesweeper", "Game", "MineCount", 10);
         int rows = Config::read_i32("Minesweeper", "Game", "Rows", 9);
         int columns = Config::read_i32("Minesweeper", "Game", "Columns", 9);
+        auto difficulty_string = Config::read_string("Minesweeper", "Game", "Difficulty", "beginner");
+        auto difficulty = difficulty_from_string(difficulty_string);
 
         // Do a quick sanity check to make sure the user hasn't tried anything crazy
-        if (mine_count > rows * columns || rows <= 0 || columns <= 0 || mine_count <= 0)
-            set_field_size(9, 9, 10);
+        if (!difficulty.has_value() || mine_count > rows * columns || rows <= 0 || columns <= 0 || mine_count <= 0)
+            set_field_difficulty(Difficulty::Beginner);
+        else if (difficulty.value() == Difficulty::Custom)
+            set_field_size(Difficulty::Custom, rows, columns, mine_count);
         else
-            set_field_size(rows, columns, mine_count);
+            set_field_difficulty(difficulty.value());
 
         set_single_chording(single_chording);
     }
@@ -481,7 +485,27 @@ void Field::set_chord_preview(Square& square, bool chord_preview)
     });
 }
 
-void Field::set_field_size(size_t rows, size_t columns, size_t mine_count)
+void Field::set_field_difficulty(Difficulty difficulty)
+{
+    switch (difficulty) {
+    case Difficulty::Beginner:
+        set_field_size(difficulty, 9, 9, 10);
+        break;
+    case Difficulty::Intermediate:
+        set_field_size(difficulty, 16, 16, 40);
+        break;
+    case Difficulty::Expert:
+        set_field_size(difficulty, 16, 30, 99);
+        break;
+    case Difficulty::Madwoman:
+        set_field_size(difficulty, 32, 60, 350);
+        break;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
+
+void Field::set_field_size(Difficulty difficulty, size_t rows, size_t columns, size_t mine_count)
 {
     if (m_rows == rows && m_columns == columns && m_mine_count == mine_count)
         return;
@@ -489,7 +513,9 @@ void Field::set_field_size(size_t rows, size_t columns, size_t mine_count)
         Config::write_i32("Minesweeper", "Game", "MineCount", mine_count);
         Config::write_i32("Minesweeper", "Game", "Rows", rows);
         Config::write_i32("Minesweeper", "Game", "Columns", columns);
+        Config::write_string("Minesweeper", "Game", "Difficulty", difficulty_to_string(difficulty));
     }
+    m_difficulty = difficulty;
     m_rows = rows;
     m_columns = columns;
     m_mine_count = mine_count;

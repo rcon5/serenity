@@ -122,12 +122,12 @@ TerminalWidget::TerminalWidget(int ptm_fd, bool automatic_size_policy)
 
     m_terminal.set_size(Config::read_i32("Terminal", "Window", "Width", 80), Config::read_i32("Terminal", "Window", "Height", 25));
 
-    m_copy_action = GUI::Action::create("&Copy", { Mod_Ctrl | Mod_Shift, Key_C }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-copy.png"), [this](auto&) {
+    m_copy_action = GUI::Action::create("&Copy", { Mod_Ctrl | Mod_Shift, Key_C }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/edit-copy.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
         copy();
     });
     m_copy_action->set_swallow_key_event_when_disabled(true);
 
-    m_paste_action = GUI::Action::create("&Paste", { Mod_Ctrl | Mod_Shift, Key_V }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/paste.png"), [this](auto&) {
+    m_paste_action = GUI::Action::create("&Paste", { Mod_Ctrl | Mod_Shift, Key_V }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/paste.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
         paste();
     });
     m_paste_action->set_swallow_key_event_when_disabled(true);
@@ -458,7 +458,7 @@ void TerminalWidget::set_window_progress(int value, int max)
     window()->set_progress((int)roundf(progress));
 }
 
-void TerminalWidget::set_window_title(const StringView& title)
+void TerminalWidget::set_window_title(StringView title)
 {
     if (!Utf8View(title).validate()) {
         dbgln("TerminalWidget: Attempted to set window title to invalid UTF-8 string");
@@ -649,7 +649,7 @@ static u32 to_lowercase_code_point(u32 code_point)
     return code_point;
 }
 
-VT::Range TerminalWidget::find_next(const StringView& needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
+VT::Range TerminalWidget::find_next(StringView needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
 {
     if (needle.is_empty())
         return {};
@@ -681,7 +681,7 @@ VT::Range TerminalWidget::find_next(const StringView& needle, const VT::Position
     return {};
 }
 
-VT::Range TerminalWidget::find_previous(const StringView& needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
+VT::Range TerminalWidget::find_previous(StringView needle, const VT::Position& start, bool case_sensitivity, bool should_wrap)
 {
     if (needle.is_empty())
         return {};
@@ -822,7 +822,18 @@ void TerminalWidget::mousemove_event(GUI::MouseEvent& event)
     if (attribute.href_id != m_hovered_href_id) {
         if (m_active_href_id.is_null() || m_active_href_id == attribute.href_id) {
             m_hovered_href_id = attribute.href_id;
-            m_hovered_href = attribute.href;
+            auto handlers = Desktop::Launcher::get_handlers_for_url(attribute.href);
+            if (!handlers.is_empty()) {
+                auto path = URL(attribute.href).path();
+                auto name = LexicalPath::basename(path);
+                if (path == handlers[0]) {
+                    m_hovered_href = String::formatted("Execute {}", name);
+                } else {
+                    m_hovered_href = String::formatted("Open {} with {}", name, LexicalPath::basename(handlers[0]));
+                }
+            } else {
+                m_hovered_href = attribute.href;
+            }
         } else {
             m_hovered_href_id = {};
             m_hovered_href = {};
@@ -1159,7 +1170,7 @@ void TerminalWidget::update_paste_action()
     m_paste_action->set_enabled(GUI::Clipboard::the().mime_type().starts_with("text/") && !GUI::Clipboard::the().data().is_empty());
 }
 
-void TerminalWidget::set_color_scheme(const StringView& name)
+void TerminalWidget::set_color_scheme(StringView name)
 {
     if (name.contains('/')) {
         dbgln("Shenanigans! Color scheme names can't contain slashes.");
@@ -1248,7 +1259,7 @@ void TerminalWidget::set_font_and_resize_to_fit(const Gfx::Font& font)
 
 // Used for sending data that was not directly typed by the user.
 // This basically wraps the code that handles sending the escape sequence in bracketed paste mode.
-void TerminalWidget::send_non_user_input(const ReadonlyBytes& bytes)
+void TerminalWidget::send_non_user_input(ReadonlyBytes bytes)
 {
     constexpr StringView leading_control_sequence = "\e[200~";
     constexpr StringView trailing_control_sequence = "\e[201~";

@@ -456,4 +456,18 @@ TEST_CASE(canonicalize_unicode_locale_id)
     test("ZH-XIANG"sv, "hsn"sv);
     test("ja-latn-hepburn-heploc"sv, "ja-Latn-alalc97"sv);
     test("JA-LATN-HEPBURN-HEPLOC"sv, "ja-Latn-alalc97"sv);
+
+    // Default content.
+    test("en-us"sv, "en-US"sv);
+    test("EN-US"sv, "en-US"sv);
+    test("zh-Hans-CN"sv, "zh-Hans-CN"sv);
+    test("ZH-HANS-CN"sv, "zh-Hans-CN"sv);
+}
+
+TEST_CASE(supports_locale_aliases)
+{
+    EXPECT(Unicode::is_locale_available("zh"sv));
+    EXPECT(Unicode::is_locale_available("zh-Hant"sv));
+    EXPECT(Unicode::is_locale_available("zh-TW"sv));
+    EXPECT(Unicode::is_locale_available("zh-Hant-TW"sv));
 }

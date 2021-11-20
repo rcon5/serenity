@@ -7,6 +7,7 @@
 #pragma once
 
 #include <AK/Concepts.h>
+#include <AK/Error.h>
 #include <AK/Noncopyable.h>
 #include <AK/kmalloc.h>
 
@@ -118,9 +119,9 @@ protected:
     {
         Node* candidate = nullptr;
         while (node) {
-            if (key == node->key) {
+            if (key == node->key)
                 return node;
-            } else if (key < node->key) {
+            if (key < node->key) {
                 node = node->left_child;
             } else {
                 candidate = node;
@@ -137,11 +138,10 @@ protected:
         Node* temp = m_root;
         while (temp) {
             parent = temp;
-            if (node->key < temp->key) {
+            if (node->key < temp->key)
                 temp = temp->left_child;
-            } else {
+            else
                 temp = temp->right_child;
-            }
         }
         if (!parent) { // new root
             node->color = Color::Black;
@@ -149,11 +149,11 @@ protected:
             m_size = 1;
             m_minimum = node;
             return;
-        } else if (node->key < parent->key) { // we are the left child
-            parent->left_child = node;
-        } else { // we are the right child
-            parent->right_child = node;
         }
+        if (node->key < parent->key) // we are the left child
+            parent->left_child = node;
+        else // we are the right child
+            parent->right_child = node;
         node->parent = parent;
 
         if (node->parent->parent) // no fixups to be done for a height <= 2 tree
@@ -351,14 +351,13 @@ protected:
             while (node->left_child)
                 node = node->left_child;
             return node;
-        } else {
-            auto temp = node->parent;
-            while (temp && node == temp->right_child) {
-                node = temp;
-                temp = temp->parent;
-            }
-            return temp;
         }
+        auto temp = node->parent;
+        while (temp && node == temp->right_child) {
+            node = temp;
+            temp = temp->parent;
+        }
+        return temp;
     }
 
     static Node* predecessor(Node* node)
@@ -369,14 +368,13 @@ protected:
             while (node->right_child)
                 node = node->right_child;
             return node;
-        } else {
-            auto temp = node->parent;
-            while (temp && node == temp->left_child) {
-                node = temp;
-                temp = temp->parent;
-            }
-            return temp;
         }
+        auto temp = node->parent;
+        while (temp && node == temp->left_child) {
+            node = temp;
+            temp = temp->parent;
+        }
+        return temp;
     }
 
     Node* m_root { nullptr };
@@ -456,19 +454,18 @@ public:
         insert(key, V(value));
     }
 
-    [[nodiscard]] bool try_insert(K key, V&& value)
+    ErrorOr<void> try_insert(K key, V&& value)
     {
         auto* node = new (nothrow) Node(key, move(value));
         if (!node)
-            return false;
+            return Error::from_errno(ENOMEM);
         BaseTree::insert(node);
-        return true;
+        return {};
     }
 
     void insert(K key, V&& value)
     {
-        auto success = try_insert(key, move(value));
-        VERIFY(success);
+        MUST(try_insert(key, move(value)));
     }
 
     using Iterator = RedBlackTreeIterator<RedBlackTree, V>;

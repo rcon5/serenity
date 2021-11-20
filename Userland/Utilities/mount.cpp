@@ -16,7 +16,7 @@
 #include <string.h>
 #include <unistd.h>
 
-static int parse_options(const StringView& options)
+static int parse_options(StringView options)
 {
     int flags = 0;
     Vector<StringView> parts = options.split_view(',');
@@ -124,10 +124,9 @@ static bool print_mounts()
     }
 
     auto content = df->read_all();
-    auto json = JsonValue::from_string(content);
-    VERIFY(json.has_value());
+    auto json = JsonValue::from_string(content).release_value_but_fixme_should_propagate_errors();
 
-    json.value().as_array().for_each([](auto& value) {
+    json.as_array().for_each([](auto& value) {
         auto& fs_object = value.as_object();
         auto class_name = fs_object.get("class_name").to_string();
         auto mount_point = fs_object.get("mount_point").to_string();

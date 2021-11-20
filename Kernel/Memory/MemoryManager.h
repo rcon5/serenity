@@ -100,6 +100,7 @@ struct MemoryManagerData {
     PhysicalAddress m_last_quickmap_pt;
 };
 
+// NOLINTNEXTLINE(readability-redundant-declaration) FIXME: Why do we declare this here *and* in Thread.h?
 extern RecursiveSpinlock s_mm_lock;
 
 // This class represents a set of committed physical pages.
@@ -171,7 +172,7 @@ public:
         Yes
     };
 
-    KResultOr<CommittedPhysicalPageSet> commit_user_physical_pages(size_t page_count);
+    ErrorOr<CommittedPhysicalPageSet> commit_user_physical_pages(size_t page_count);
     void uncommit_user_physical_pages(Badge<CommittedPhysicalPageSet>, size_t page_count);
 
     NonnullRefPtr<PhysicalPage> allocate_committed_user_physical_page(Badge<CommittedPhysicalPageSet>, ShouldZeroFill = ShouldZeroFill::Yes);
@@ -180,11 +181,11 @@ public:
     NonnullRefPtrVector<PhysicalPage> allocate_contiguous_supervisor_physical_pages(size_t size);
     void deallocate_physical_page(PhysicalAddress);
 
-    KResultOr<NonnullOwnPtr<Region>> allocate_contiguous_kernel_region(size_t, StringView name, Region::Access access, Region::Cacheable = Region::Cacheable::Yes);
-    KResultOr<NonnullOwnPtr<Region>> allocate_kernel_region(size_t, StringView name, Region::Access access, AllocationStrategy strategy = AllocationStrategy::Reserve, Region::Cacheable = Region::Cacheable::Yes);
-    KResultOr<NonnullOwnPtr<Region>> allocate_kernel_region(PhysicalAddress, size_t, StringView name, Region::Access access, Region::Cacheable = Region::Cacheable::Yes);
-    KResultOr<NonnullOwnPtr<Region>> allocate_kernel_region_with_vmobject(VMObject&, size_t, StringView name, Region::Access access, Region::Cacheable = Region::Cacheable::Yes);
-    KResultOr<NonnullOwnPtr<Region>> allocate_kernel_region_with_vmobject(VirtualRange const&, VMObject&, StringView name, Region::Access access, Region::Cacheable = Region::Cacheable::Yes);
+    ErrorOr<NonnullOwnPtr<Region>> allocate_contiguous_kernel_region(size_t, StringView name, Region::Access access, Region::Cacheable = Region::Cacheable::Yes);
+    ErrorOr<NonnullOwnPtr<Region>> allocate_kernel_region(size_t, StringView name, Region::Access access, AllocationStrategy strategy = AllocationStrategy::Reserve, Region::Cacheable = Region::Cacheable::Yes);
+    ErrorOr<NonnullOwnPtr<Region>> allocate_kernel_region(PhysicalAddress, size_t, StringView name, Region::Access access, Region::Cacheable = Region::Cacheable::Yes);
+    ErrorOr<NonnullOwnPtr<Region>> allocate_kernel_region_with_vmobject(VMObject&, size_t, StringView name, Region::Access access, Region::Cacheable = Region::Cacheable::Yes);
+    ErrorOr<NonnullOwnPtr<Region>> allocate_kernel_region_with_vmobject(VirtualRange const&, VMObject&, StringView name, Region::Access access, Region::Cacheable = Region::Cacheable::Yes);
 
     struct SystemMemoryInfo {
         PhysicalSize user_physical_pages { 0 };
@@ -238,6 +239,8 @@ public:
 
     PhysicalPageEntry& get_physical_page_entry(PhysicalAddress);
     PhysicalAddress get_physical_address(PhysicalPage const&);
+
+    void copy_physical_page(PhysicalPage&, u8 page_buffer[PAGE_SIZE]);
 
 private:
     MemoryManager();

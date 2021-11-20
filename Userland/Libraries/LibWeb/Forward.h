@@ -19,6 +19,7 @@ class Crypto;
 
 namespace Web::CSS {
 class BackgroundRepeatStyleValue;
+class BackgroundSizeStyleValue;
 class BackgroundStyleValue;
 class BorderRadiusStyleValue;
 class BorderStyleValue;
@@ -53,6 +54,7 @@ class MediaQueryList;
 class MediaQueryListEvent;
 class NumericStyleValue;
 class OverflowStyleValue;
+class PositionStyleValue;
 class PropertyOwningCSSStyleDeclaration;
 class Screen;
 class Selector;
@@ -113,6 +115,7 @@ class DOMRectReadOnly;
 }
 
 namespace Web::HTML {
+class BrowsingContext;
 class CanvasRenderingContext2D;
 class CloseEvent;
 class DOMParser;
@@ -252,13 +255,13 @@ class LineBox;
 class LineBoxFragment;
 class Node;
 class NodeWithStyle;
+class NodeWithStyleAndBoxModelMetrics;
 class RadioButton;
 class ReplacedBox;
 class TextNode;
 }
 
 namespace Web {
-class BrowsingContext;
 class EditEventHandler;
 class EventHandler;
 class FrameLoader;

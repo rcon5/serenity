@@ -8,13 +8,13 @@
 
 #include <AK/Assertions.h>
 #include <AK/Atomic.h>
+#include <AK/Error.h>
 #include <AK/Format.h>
 #include <AK/NonnullRefPtr.h>
 #include <AK/StdLibExtras.h>
 #include <AK/Traits.h>
 #include <AK/Types.h>
 #ifdef KERNEL
-#    include <Kernel/API/KResult.h>
 #    include <Kernel/Arch/Processor.h>
 #    include <Kernel/Arch/ScopedCritical.h>
 #endif
@@ -35,7 +35,7 @@ struct RefPtrTraits {
 
     ALWAYS_INLINE static FlatPtr as_bits(T* ptr)
     {
-        VERIFY(!((FlatPtr)ptr & 1));
+        VERIFY(((FlatPtr)ptr & 1) == 0);
         return (FlatPtr)ptr;
     }
 
@@ -49,13 +49,13 @@ struct RefPtrTraits {
 
     ALWAYS_INLINE static bool is_null(FlatPtr bits)
     {
-        return !(bits & ~(FlatPtr)1);
+        return (bits & ~(FlatPtr)1) == 0;
     }
 
     ALWAYS_INLINE static FlatPtr exchange(Atomic<FlatPtr>& atomic_var, FlatPtr new_value)
     {
         // Only exchange when lock is not held
-        VERIFY(!(new_value & 1));
+        VERIFY((new_value & 1) == 0);
         FlatPtr expected = atomic_var.load(AK::MemoryOrder::memory_order_relaxed);
         for (;;) {
             expected &= ~(FlatPtr)1; // only if lock bit is not set
@@ -71,7 +71,7 @@ struct RefPtrTraits {
     ALWAYS_INLINE static bool exchange_if_null(Atomic<FlatPtr>& atomic_var, FlatPtr new_value)
     {
         // Only exchange when lock is not held
-        VERIFY(!(new_value & 1));
+        VERIFY((new_value & 1) == 0);
         for (;;) {
             FlatPtr expected = default_null_value; // only if lock bit is not set
             if (atomic_var.compare_exchange_strong(expected, new_value, AK::MemoryOrder::memory_order_acq_rel))
@@ -95,19 +95,19 @@ struct RefPtrTraits {
         FlatPtr bits;
         for (;;) {
             bits = atomic_var.fetch_or(1, AK::MemoryOrder::memory_order_acq_rel);
-            if (!(bits & 1))
+            if ((bits & 1) == 0)
                 break;
 #ifdef KERNEL
             Kernel::Processor::wait_check();
 #endif
         }
-        VERIFY(!(bits & 1));
+        VERIFY((bits & 1) == 0);
         return bits;
     }
 
     ALWAYS_INLINE static void unlock(Atomic<FlatPtr>& atomic_var, FlatPtr new_value)
     {
-        VERIFY(!(new_value & 1));
+        VERIFY((new_value & 1) == 0);
         atomic_var.store(new_value, AK::MemoryOrder::memory_order_release);
     }
 
@@ -445,9 +445,9 @@ private:
 
 template<typename T>
 struct Formatter<RefPtr<T>> : Formatter<const T*> {
-    void format(FormatBuilder& builder, const RefPtr<T>& value)
+    ErrorOr<void> format(FormatBuilder& builder, RefPtr<T> const& value)
     {
-        Formatter<const T*>::format(builder, value.ptr());
+        return Formatter<const T*>::format(builder, value.ptr());
     }
 };
 
@@ -498,16 +498,14 @@ inline RefPtr<T> try_make_ref_counted(Args&&... args)
     return adopt_ref_if_nonnull(new (nothrow) T { forward<Args>(args)... });
 }
 
-#ifdef KERNEL
 template<typename T>
-inline Kernel::KResultOr<NonnullRefPtr<T>> adopt_nonnull_ref_or_enomem(T* object)
+inline ErrorOr<NonnullRefPtr<T>> adopt_nonnull_ref_or_enomem(T* object)
 {
     auto result = adopt_ref_if_nonnull(object);
     if (!result)
-        return ENOMEM;
+        return Error::from_errno(ENOMEM);
     return result.release_nonnull();
 }
-#endif
 
 }
 

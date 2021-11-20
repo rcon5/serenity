@@ -837,7 +837,10 @@ static bool parse_and_run(JS::Interpreter& interpreter, StringView source, Strin
 
             if (s_run_bytecode) {
                 JS::Bytecode::Interpreter bytecode_interpreter(interpreter.global_object(), interpreter.realm());
-                bytecode_interpreter.run(executable);
+                auto result = bytecode_interpreter.run(executable);
+                // Since all the error handling code uses vm.exception() we just rethrow any exception we got here.
+                if (result.is_error())
+                    vm->throw_exception(interpreter.global_object(), result.throw_completion().value());
             } else {
                 return true;
             }
@@ -918,7 +921,7 @@ static JS::ThrowCompletionOr<JS::Value> load_json_impl(JS::VM& vm, JS::GlobalObj
         return vm.throw_completion<JS::Error>(global_object, String::formatted("Failed to open '{}': {}", filename, file->error_string()));
     auto file_contents = file->read_all();
     auto json = JsonValue::from_string(file_contents);
-    if (!json.has_value())
+    if (json.is_error())
         return vm.throw_completion<JS::SyntaxError>(global_object, JS::ErrorType::JsonMalformed);
     return JS::JSONObject::parse_json_value(global_object, json.value());
 }
@@ -1308,7 +1311,7 @@ int main(int argc, char** argv)
 
             Vector<Line::CompletionSuggestion> results;
 
-            Function<void(JS::Shape const&, StringView const&)> list_all_properties = [&results, &list_all_properties](JS::Shape const& shape, auto& property_pattern) {
+            Function<void(JS::Shape const&, StringView)> list_all_properties = [&results, &list_all_properties](JS::Shape const& shape, auto property_pattern) {
                 for (auto const& descriptor : shape.property_table()) {
                     if (!descriptor.key.is_string())
                         continue;

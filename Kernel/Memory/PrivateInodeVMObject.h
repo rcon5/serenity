@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <AK/Bitmap.h>
 #include <Kernel/Memory/InodeVMObject.h>
 #include <Kernel/UnixTypes.h>
 
@@ -18,8 +17,8 @@ class PrivateInodeVMObject final : public InodeVMObject {
 public:
     virtual ~PrivateInodeVMObject() override;
 
-    static KResultOr<NonnullRefPtr<PrivateInodeVMObject>> try_create_with_inode(Inode&);
-    virtual KResultOr<NonnullRefPtr<VMObject>> try_clone() override;
+    static ErrorOr<NonnullRefPtr<PrivateInodeVMObject>> try_create_with_inode(Inode&);
+    virtual ErrorOr<NonnullRefPtr<VMObject>> try_clone() override;
 
 private:
     virtual bool is_private_inode() const override { return true; }

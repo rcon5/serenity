@@ -7,12 +7,12 @@
 
 #include <LibGfx/Painter.h>
 #include <LibWeb/DOM/Document.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLBodyElement.h>
 #include <LibWeb/HTML/HTMLHtmlElement.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/Box.h>
 #include <LibWeb/Layout/FormattingContext.h>
-#include <LibWeb/Page/BrowsingContext.h>
 #include <LibWeb/Painting/BackgroundPainting.h>
 #include <LibWeb/Painting/BorderPainting.h>
 #include <LibWeb/Painting/ShadowPainting.h>
@@ -72,9 +72,7 @@ void Box::paint_background(PaintContext& context)
 
     Gfx::IntRect background_rect;
     Color background_color = computed_values().background_color();
-    const Gfx::Bitmap* background_image = this->background_image() ? this->background_image()->bitmap() : nullptr;
-    CSS::Repeat background_repeat_x = computed_values().background_repeat_x();
-    CSS::Repeat background_repeat_y = computed_values().background_repeat_y();
+    auto* background_layers = &computed_values().background_layers();
 
     if (is_root_element()) {
         // CSS 2.1 Appendix E.2: If the element is a root element, paint the background over the entire canvas.
@@ -83,10 +81,8 @@ void Box::paint_background(PaintContext& context)
         // Section 2.11.2: If the computed value of background-image on the root element is none and its background-color is transparent,
         // user agents must instead propagate the computed values of the background properties from that element’s first HTML BODY child element.
         if (document().html_element()->should_use_body_background_properties()) {
+            background_layers = document().background_layers();
             background_color = document().background_color(context.palette());
-            background_image = document().background_image();
-            background_repeat_x = document().background_repeat_x();
-            background_repeat_y = document().background_repeat_y();
         }
     } else {
         background_rect = enclosing_int_rect(padded_rect());
@@ -97,13 +93,7 @@ void Box::paint_background(PaintContext& context)
     if (computed_values().border_top().width || computed_values().border_right().width || computed_values().border_bottom().width || computed_values().border_left().width)
         background_rect = enclosing_int_rect(bordered_rect());
 
-    auto background_data = Painting::BackgroundData {
-        .color = background_color,
-        .image = background_image,
-        .repeat_x = background_repeat_x,
-        .repeat_y = background_repeat_y
-    };
-    Painting::paint_background(context, background_rect, background_data, normalized_border_radius_data());
+    Painting::paint_background(context, *this, background_rect, background_color, background_layers, normalized_border_radius_data());
 }
 
 void Box::paint_box_shadow(PaintContext& context)

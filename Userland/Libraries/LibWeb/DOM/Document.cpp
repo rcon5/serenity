@@ -36,6 +36,7 @@
 #include <LibWeb/DOM/Window.h>
 #include <LibWeb/Dump.h>
 #include <LibWeb/HTML/AttributeNames.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/EventLoop/EventLoop.h>
 #include <LibWeb/HTML/EventNames.h>
 #include <LibWeb/HTML/HTMLAnchorElement.h>
@@ -56,7 +57,6 @@
 #include <LibWeb/Layout/TreeBuilder.h>
 #include <LibWeb/Namespace.h>
 #include <LibWeb/Origin.h>
-#include <LibWeb/Page/BrowsingContext.h>
 #include <LibWeb/Page/Page.h>
 #include <LibWeb/SVG/TagNames.h>
 #include <LibWeb/UIEvents/EventNames.h>
@@ -300,13 +300,13 @@ void Document::set_title(const String& title)
     }
 }
 
-void Document::attach_to_browsing_context(Badge<BrowsingContext>, BrowsingContext& browsing_context)
+void Document::attach_to_browsing_context(Badge<HTML::BrowsingContext>, HTML::BrowsingContext& browsing_context)
 {
     m_browsing_context = browsing_context;
     update_layout();
 }
 
-void Document::detach_from_browsing_context(Badge<BrowsingContext>, BrowsingContext& browsing_context)
+void Document::detach_from_browsing_context(Badge<HTML::BrowsingContext>, HTML::BrowsingContext& browsing_context)
 {
     VERIFY(&browsing_context == m_browsing_context);
     tear_down_layout_tree();
@@ -353,7 +353,7 @@ Color Document::background_color(const Palette& palette) const
     return color;
 }
 
-RefPtr<Gfx::Bitmap> Document::background_image() const
+Vector<CSS::BackgroundLayerData> const* Document::background_layers() const
 {
     auto* body_element = body();
     if (!body_element)
@@ -363,36 +363,7 @@ RefPtr<Gfx::Bitmap> Document::background_image() const
     if (!body_layout_node)
         return {};
 
-    auto background_image = body_layout_node->background_image();
-    if (!background_image)
-        return {};
-    return background_image->bitmap();
-}
-
-CSS::Repeat Document::background_repeat_x() const
-{
-    auto* body_element = body();
-    if (!body_element)
-        return CSS::Repeat::Repeat;
-
-    auto* body_layout_node = body_element->layout_node();
-    if (!body_layout_node)
-        return CSS::Repeat::Repeat;
-
-    return body_layout_node->computed_values().background_repeat_x();
-}
-
-CSS::Repeat Document::background_repeat_y() const
-{
-    auto* body_element = body();
-    if (!body_element)
-        return CSS::Repeat::Repeat;
-
-    auto* body_layout_node = body_element->layout_node();
-    if (!body_layout_node)
-        return CSS::Repeat::Repeat;
-
-    return body_layout_node->computed_values().background_repeat_y();
+    return &body_layout_node->background_layers();
 }
 
 // https://html.spec.whatwg.org/multipage/urls-and-fetching.html#parse-a-url
@@ -705,7 +676,7 @@ JS::Interpreter& Document::interpreter()
     return *m_interpreter;
 }
 
-JS::Value Document::run_javascript(const StringView& source, const StringView& filename)
+JS::Value Document::run_javascript(StringView source, StringView filename)
 {
     auto parser = JS::Parser(JS::Lexer(source, filename));
     auto program = parser.parse_program();

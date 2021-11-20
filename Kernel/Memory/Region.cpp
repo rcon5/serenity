@@ -38,6 +38,11 @@ Region::Region(VirtualRange const& range, NonnullRefPtr<VMObject> vmobject, size
 
 Region::~Region()
 {
+    if (is_writable() && vmobject().is_shared_inode()) {
+        // FIXME: This is very aggressive. Find a way to do less work!
+        (void)static_cast<SharedInodeVMObject&>(vmobject()).sync();
+    }
+
     m_vmobject->remove_region(*this);
 
     MM.unregister_region(*this);
@@ -50,7 +55,7 @@ Region::~Region()
     }
 }
 
-KResultOr<NonnullOwnPtr<Region>> Region::try_clone()
+ErrorOr<NonnullOwnPtr<Region>> Region::try_clone()
 {
     VERIFY(Process::has_current());
 
@@ -144,12 +149,12 @@ size_t Region::amount_shared() const
     return bytes;
 }
 
-KResultOr<NonnullOwnPtr<Region>> Region::try_create_user_accessible(VirtualRange const& range, NonnullRefPtr<VMObject> vmobject, size_t offset_in_vmobject, OwnPtr<KString> name, Region::Access access, Cacheable cacheable, bool shared)
+ErrorOr<NonnullOwnPtr<Region>> Region::try_create_user_accessible(VirtualRange const& range, NonnullRefPtr<VMObject> vmobject, size_t offset_in_vmobject, OwnPtr<KString> name, Region::Access access, Cacheable cacheable, bool shared)
 {
     return adopt_nonnull_own_or_enomem(new (nothrow) Region(range, move(vmobject), offset_in_vmobject, move(name), access, cacheable, shared));
 }
 
-KResultOr<NonnullOwnPtr<Region>> Region::try_create_kernel_only(VirtualRange const& range, NonnullRefPtr<VMObject> vmobject, size_t offset_in_vmobject, OwnPtr<KString> name, Region::Access access, Cacheable cacheable)
+ErrorOr<NonnullOwnPtr<Region>> Region::try_create_kernel_only(VirtualRange const& range, NonnullRefPtr<VMObject> vmobject, size_t offset_in_vmobject, OwnPtr<KString> name, Region::Access access, Cacheable cacheable)
 {
     return adopt_nonnull_own_or_enomem(new (nothrow) Region(range, move(vmobject), offset_in_vmobject, move(name), access, cacheable, false));
 }
@@ -253,7 +258,7 @@ void Region::set_page_directory(PageDirectory& page_directory)
     m_page_directory = page_directory;
 }
 
-KResult Region::map(PageDirectory& page_directory, ShouldFlushTLB should_flush_tlb)
+ErrorOr<void> Region::map(PageDirectory& page_directory, ShouldFlushTLB should_flush_tlb)
 {
     SpinlockLocker page_lock(page_directory.get_lock());
     SpinlockLocker lock(s_mm_lock);
@@ -274,7 +279,7 @@ KResult Region::map(PageDirectory& page_directory, ShouldFlushTLB should_flush_t
         if (should_flush_tlb == ShouldFlushTLB::Yes)
             MemoryManager::flush_tlb(m_page_directory, vaddr(), page_index);
         if (page_index == page_count())
-            return KSuccess;
+            return {};
     }
     return ENOMEM;
 }

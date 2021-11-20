@@ -36,10 +36,12 @@ protected:
     bool check_processor_chain_valid_with_initial_type(SignalType initial_type) const;
 
     // Subclasses override to provide the base signal to the processing chain
-    virtual Signal current_clips_signal() = 0;
+    virtual void compute_current_clips_signal() = 0;
 
     NonnullRefPtrVector<Processor> m_processor_chain;
-    NonnullRefPtr<Transport> const m_transport;
+    NonnullRefPtr<Transport> m_transport;
+    // The current signal is stored here, to prevent unnecessary reallocation.
+    Signal m_current_signal { Audio::Sample {} };
 };
 
 class NoteTrack final : public Track {
@@ -50,7 +52,7 @@ public:
     NonnullRefPtrVector<NoteClip> const& clips() const { return m_clips; }
 
 protected:
-    virtual Signal current_clips_signal() override;
+    void compute_current_clips_signal() override;
 
 private:
     NonnullRefPtrVector<NoteClip> m_clips;
@@ -64,7 +66,7 @@ public:
     NonnullRefPtrVector<AudioClip> const& clips() const { return m_clips; }
 
 protected:
-    virtual Signal current_clips_signal() override;
+    void compute_current_clips_signal() override;
 
 private:
     NonnullRefPtrVector<AudioClip> m_clips;

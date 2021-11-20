@@ -27,12 +27,13 @@ static in_addr_t* __gethostbyname_address_list_buffer[2];
 
 static hostent __gethostbyaddr_buffer;
 static in_addr_t* __gethostbyaddr_address_list_buffer[2];
-// XXX: IPCCompiler depends on LibC. Because of this, it cannot be compiled
+// IPCCompiler depends on LibC. Because of this, it cannot be compiled
 // before LibC is. However, the lookup magic can only be obtained from the
 // endpoint itself if IPCCompiler has compiled the IPC file, so this creates
 // a chicken-and-egg situation. Because of this, the LookupServer endpoint magic
 // is hardcoded here.
-static constexpr i32 lookup_server_endpoint_magic = 9001;
+// Keep the name synchronized with LookupServer/LookupServer.ipc.
+static constexpr u32 lookup_server_endpoint_magic = "LookupServer"sv.hash();
 
 // Get service entry buffers and file information for the getservent() family of functions.
 static FILE* services_file = nullptr;
@@ -114,7 +115,7 @@ hostent* gethostbyname(const char* name)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 name_length;
     } request_header = {
@@ -138,7 +139,7 @@ hostent* gethostbyname(const char* name)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 code;
         u64 addresses_count;
@@ -214,7 +215,7 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 address_length;
     } request_header = {
@@ -238,7 +239,7 @@ hostent* gethostbyaddr(const void* addr, socklen_t addr_size, int type)
 
     struct [[gnu::packed]] {
         u32 message_size;
-        i32 endpoint_magic;
+        u32 endpoint_magic;
         i32 message_id;
         i32 code;
         i32 name_length;
@@ -459,7 +460,7 @@ static bool fill_getserv_buffers(const char* line, ssize_t read)
                 break;
             }
             auto alias = split_line[i].to_byte_buffer();
-            if (!alias.try_append("\0", sizeof(char)))
+            if (alias.try_append("\0", sizeof(char)).is_error())
                 return false;
             __getserv_alias_list_buffer.append(move(alias));
         }
@@ -629,7 +630,7 @@ static bool fill_getproto_buffers(const char* line, ssize_t read)
             if (split_line[i].starts_with('#'))
                 break;
             auto alias = split_line[i].to_byte_buffer();
-            if (!alias.try_append("\0", sizeof(char)))
+            if (alias.try_append("\0", sizeof(char)).is_error())
                 return false;
             __getproto_alias_list_buffer.append(move(alias));
         }

@@ -123,10 +123,6 @@ add_custom_command(
 
 set(SOURCES ${LIBC_SOURCES} ${AK_SOURCES} ${ELF_SOURCES} ${ASM_SOURCES})
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++")
-endif()
-
 # Prevent GCC from removing null checks by marking the `FILE*` argument non-null
 set_source_files_properties(stdio.cpp PROPERTIES COMPILE_FLAGS "-fno-builtin-fputc -fno-builtin-fputs -fno-builtin-fwrite")
 
@@ -139,7 +135,7 @@ add_custom_target(LibCStatic
         COMMAND ${CMAKE_AR} -x $<TARGET_FILE:ssp>
         COMMAND ${CMAKE_AR} -x $<TARGET_FILE:LibSystemStatic>
         COMMAND ${CMAKE_AR} -x $<TARGET_FILE:LibUBSanitizerStatic>
-        COMMAND ${CMAKE_AR} -qcs ${CMAKE_CURRENT_BINARY_DIR}/libc.a *.o
+        COMMAND ${CMAKE_AR} -rcs ${CMAKE_CURRENT_BINARY_DIR}/libc.a *.o
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
         DEPENDS LibCStaticWithoutDeps ssp LibSystemStatic LibUBSanitizerStatic
         )

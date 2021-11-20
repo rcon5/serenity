@@ -31,18 +31,18 @@ mode_t SysFSComponent::permissions() const
     return S_IRUSR | S_IRGRP | S_IROTH;
 }
 
-KResult SysFSDirectory::traverse_as_directory(unsigned fsid, Function<bool(FileSystem::DirectoryEntryView const&)> callback) const
+ErrorOr<void> SysFSDirectory::traverse_as_directory(FileSystemID fsid, Function<ErrorOr<void>(FileSystem::DirectoryEntryView const&)> callback) const
 {
     MutexLocker locker(SysFSComponentRegistry::the().get_lock());
     VERIFY(m_parent_directory);
-    callback({ ".", { fsid, component_index() }, 0 });
-    callback({ "..", { fsid, m_parent_directory->component_index() }, 0 });
+    TRY(callback({ ".", { fsid, component_index() }, 0 }));
+    TRY(callback({ "..", { fsid, m_parent_directory->component_index() }, 0 }));
 
     for (auto& component : m_components) {
         InodeIdentifier identifier = { fsid, component.component_index() };
-        callback({ component.name(), identifier, 0 });
+        TRY(callback({ component.name(), identifier, 0 }));
     }
-    return KSuccess;
+    return {};
 }
 
 RefPtr<SysFSComponent> SysFSDirectory::lookup(StringView name)
@@ -66,12 +66,12 @@ SysFSDirectory::SysFSDirectory(StringView name, SysFSDirectory const& parent_dir
 {
 }
 
-KResultOr<NonnullRefPtr<SysFSInode>> SysFSDirectory::to_inode(SysFS const& sysfs_instance) const
+ErrorOr<NonnullRefPtr<SysFSInode>> SysFSDirectory::to_inode(SysFS const& sysfs_instance) const
 {
     return TRY(SysFSDirectoryInode::try_create(sysfs_instance, *this));
 }
 
-KResultOr<NonnullRefPtr<SysFSInode>> SysFSComponent::to_inode(SysFS const& sysfs_instance) const
+ErrorOr<NonnullRefPtr<SysFSInode>> SysFSComponent::to_inode(SysFS const& sysfs_instance) const
 {
     return SysFSInode::try_create(sysfs_instance, *this);
 }

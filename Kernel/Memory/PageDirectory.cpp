@@ -37,12 +37,12 @@ UNMAP_AFTER_INIT NonnullRefPtr<PageDirectory> PageDirectory::must_create_kernel_
 
     // make sure this starts in a new page directory to make MemoryManager::initialize_physical_pages() happy
     FlatPtr start_of_range = ((FlatPtr)end_of_kernel_image & ~(FlatPtr)0x1fffff) + 0x200000;
-    directory->m_range_allocator.initialize_with_range(VirtualAddress(start_of_range), KERNEL_PD_END - start_of_range);
+    MUST(directory->m_range_allocator.initialize_with_range(VirtualAddress(start_of_range), KERNEL_PD_END - start_of_range));
 
     return directory;
 }
 
-KResultOr<NonnullRefPtr<PageDirectory>> PageDirectory::try_create_for_userspace(VirtualRangeAllocator const* parent_range_allocator)
+ErrorOr<NonnullRefPtr<PageDirectory>> PageDirectory::try_create_for_userspace(VirtualRangeAllocator const* parent_range_allocator)
 {
     constexpr FlatPtr userspace_range_base = 0x00800000;
     FlatPtr const userspace_range_ceiling = USER_RANGE_CEILING;
@@ -50,11 +50,11 @@ KResultOr<NonnullRefPtr<PageDirectory>> PageDirectory::try_create_for_userspace(
     auto directory = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) PageDirectory));
 
     if (parent_range_allocator) {
-        directory->m_range_allocator.initialize_from_parent(*parent_range_allocator);
+        TRY(directory->m_range_allocator.initialize_from_parent(*parent_range_allocator));
     } else {
         size_t random_offset = (get_fast_random<u8>() % 32 * MiB) & PAGE_MASK;
         u32 base = userspace_range_base + random_offset;
-        directory->m_range_allocator.initialize_with_range(VirtualAddress(base), userspace_range_ceiling - base);
+        TRY(directory->m_range_allocator.initialize_with_range(VirtualAddress(base), userspace_range_ceiling - base));
     }
 
     // NOTE: Take the MM lock since we need it for quickmap.

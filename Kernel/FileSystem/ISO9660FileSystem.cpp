@@ -46,7 +46,7 @@ public:
     ISO::DirectoryRecordHeader const* operator*() { return m_current_header; }
 
     // Recurses into subdirectories. May fail.
-    KResultOr<bool> next()
+    ErrorOr<bool> next()
     {
         if (done())
             return false;
@@ -55,10 +55,7 @@ public:
         if (has_flag(m_current_header->file_flags, ISO::FileFlags::Directory)) {
             dbgln_if(ISO9660_VERY_DEBUG, "next(): Recursing");
             {
-                bool result = m_directory_stack.try_append(move(m_current_directory));
-                if (!result) {
-                    return ENOMEM;
-                }
+                TRY(m_directory_stack.try_append(move(m_current_directory)));
             }
 
             dbgln_if(ISO9660_VERY_DEBUG, "next(): Pushed into directory stack");
@@ -148,10 +145,10 @@ public:
     }
 
 private:
-    KResult read_directory_contents()
+    ErrorOr<void> read_directory_contents()
     {
         m_current_directory.entry = TRY(m_fs.directory_entry_for_record({}, m_current_header));
-        return KSuccess;
+        return {};
     }
 
     void get_header()
@@ -171,7 +168,7 @@ private:
     Vector<DirectoryState> m_directory_stack;
 };
 
-KResultOr<NonnullRefPtr<ISO9660FS>> ISO9660FS::try_create(OpenFileDescription& description)
+ErrorOr<NonnullRefPtr<ISO9660FS>> ISO9660FS::try_create(OpenFileDescription& description)
 {
     return adopt_nonnull_ref_or_enomem(new (nothrow) ISO9660FS(description));
 }
@@ -187,12 +184,12 @@ ISO9660FS::~ISO9660FS()
 {
 }
 
-KResult ISO9660FS::initialize()
+ErrorOr<void> ISO9660FS::initialize()
 {
     TRY(BlockBasedFileSystem::initialize());
     TRY(parse_volume_set());
     TRY(create_root_inode());
-    return KSuccess;
+    return {};
 }
 
 Inode& ISO9660FS::root_inode()
@@ -211,7 +208,7 @@ unsigned ISO9660FS::total_inode_count() const
     if (!m_cached_inode_count) {
         auto result = calculate_inode_count();
         if (result.is_error()) {
-            // FIXME: This should be able to return a KResult.
+            // FIXME: This should be able to return a ErrorOr<void>.
             return 0;
         }
     }
@@ -228,7 +225,7 @@ u8 ISO9660FS::internal_file_type_to_directory_entry_type(const DirectoryEntryVie
     return DT_REG;
 }
 
-KResult ISO9660FS::parse_volume_set()
+ErrorOr<void> ISO9660FS::parse_volume_set()
 {
     VERIFY(!m_primary_volume);
 
@@ -278,10 +275,10 @@ all_headers_read:
     }
 
     m_logical_block_size = LittleEndian { m_primary_volume->logical_block_size.little };
-    return KSuccess;
+    return {};
 }
 
-KResult ISO9660FS::create_root_inode()
+ErrorOr<void> ISO9660FS::create_root_inode()
 {
     if (!m_primary_volume) {
         dbgln_if(ISO9660_DEBUG, "Primary volume doesn't exist, can't create root inode");
@@ -289,10 +286,10 @@ KResult ISO9660FS::create_root_inode()
     }
 
     m_root_inode = TRY(ISO9660Inode::try_create_from_directory_record(*this, m_primary_volume->root_directory_record_header, {}));
-    return KSuccess;
+    return {};
 }
 
-KResult ISO9660FS::calculate_inode_count() const
+ErrorOr<void> ISO9660FS::calculate_inode_count() const
 {
     if (!m_primary_volume) {
         dbgln_if(ISO9660_DEBUG, "Primary volume doesn't exist, can't calculate inode count");
@@ -323,13 +320,13 @@ KResult ISO9660FS::calculate_inode_count() const
     }));
 
     m_cached_inode_count = inode_count;
-    return KSuccess;
+    return {};
 }
 
-KResult ISO9660FS::visit_directory_record(ISO::DirectoryRecordHeader const& record, Function<KResultOr<RecursionDecision>(ISO::DirectoryRecordHeader const*)> const& visitor) const
+ErrorOr<void> ISO9660FS::visit_directory_record(ISO::DirectoryRecordHeader const& record, Function<ErrorOr<RecursionDecision>(ISO::DirectoryRecordHeader const*)> const& visitor) const
 {
     if (!has_flag(record.file_flags, ISO::FileFlags::Directory)) {
-        return KSuccess;
+        return {};
     }
 
     ISO9660DirectoryIterator iterator { const_cast<ISO9660FS&>(*this), record };
@@ -342,7 +339,7 @@ KResult ISO9660FS::visit_directory_record(ISO::DirectoryRecordHeader const& reco
             if (!has_moved) {
                 // If next() hasn't moved then we have read through all the
                 // directories, and can exit.
-                return KSuccess;
+                return {};
             }
 
             continue;
@@ -352,20 +349,20 @@ KResult ISO9660FS::visit_directory_record(ISO::DirectoryRecordHeader const& reco
                 if (iterator.skip())
                     break;
                 if (!iterator.go_up())
-                    return KSuccess;
+                    return {};
             }
 
             continue;
         }
         case RecursionDecision::Break:
-            return KSuccess;
+            return {};
         }
     }
 
-    return KSuccess;
+    return {};
 }
 
-KResultOr<NonnullRefPtr<ISO9660FS::DirectoryEntry>> ISO9660FS::directory_entry_for_record(Badge<ISO9660DirectoryIterator>, ISO::DirectoryRecordHeader const* record)
+ErrorOr<NonnullRefPtr<ISO9660FS::DirectoryEntry>> ISO9660FS::directory_entry_for_record(Badge<ISO9660DirectoryIterator>, ISO::DirectoryRecordHeader const* record)
 {
     u32 extent_location = LittleEndian { record->extent_location.little };
     u32 data_length = LittleEndian { record->data_length.little };
@@ -407,7 +404,7 @@ u32 ISO9660FS::calculate_directory_entry_cache_key(ISO::DirectoryRecordHeader co
     return LittleEndian { record.extent_location.little };
 }
 
-KResultOr<size_t> ISO9660Inode::read_bytes(off_t offset, size_t size, UserOrKernelBuffer& buffer, OpenFileDescription*) const
+ErrorOr<size_t> ISO9660Inode::read_bytes(off_t offset, size_t size, UserOrKernelBuffer& buffer, OpenFileDescription*) const
 {
     MutexLocker inode_locker(m_inode_lock);
 
@@ -450,9 +447,10 @@ InodeMetadata ISO9660Inode::metadata() const
     return m_metadata;
 }
 
-KResult ISO9660Inode::traverse_as_directory(Function<bool(FileSystem::DirectoryEntryView const&)> visitor) const
+ErrorOr<void> ISO9660Inode::traverse_as_directory(Function<ErrorOr<void>(FileSystem::DirectoryEntryView const&)> visitor) const
 {
     Array<u8, max_file_identifier_length> file_identifier_buffer;
+    ErrorOr<void> result;
 
     return fs().visit_directory_record(m_record, [&](ISO::DirectoryRecordHeader const* record) {
         StringView filename = get_normalized_filename(*record, file_identifier_buffer);
@@ -461,15 +459,15 @@ KResult ISO9660Inode::traverse_as_directory(Function<bool(FileSystem::DirectoryE
         InodeIdentifier id { fsid(), get_inode_index(*record, filename) };
         auto entry = FileSystem::DirectoryEntryView(filename, id, static_cast<u8>(record->file_flags));
 
-        if (!visitor(entry)) {
+        result = visitor(entry);
+        if (result.is_error())
             return RecursionDecision::Break;
-        }
 
         return RecursionDecision::Continue;
     });
 }
 
-KResultOr<NonnullRefPtr<Inode>> ISO9660Inode::lookup(StringView name)
+ErrorOr<NonnullRefPtr<Inode>> ISO9660Inode::lookup(StringView name)
 {
     RefPtr<Inode> inode;
     Array<u8, max_file_identifier_length> file_identifier_buffer;
@@ -481,8 +479,8 @@ KResultOr<NonnullRefPtr<Inode>> ISO9660Inode::lookup(StringView name)
             auto maybe_inode = ISO9660Inode::try_create_from_directory_record(fs(), *record, filename);
             if (maybe_inode.is_error()) {
                 // FIXME: The Inode API does not handle allocation failures very
-                //        well... we can't return a KResultOr from here. It
-                //        would be nice if we could return a KResult(Or) from
+                //        well... we can't return a ErrorOr from here. It
+                //        would be nice if we could return a ErrorOr<void>(Or) from
                 //        any place where allocation may happen.
                 dbgln("Could not allocate inode for lookup!");
             } else {
@@ -499,57 +497,57 @@ KResultOr<NonnullRefPtr<Inode>> ISO9660Inode::lookup(StringView name)
     return inode.release_nonnull();
 }
 
-KResult ISO9660Inode::flush_metadata()
+ErrorOr<void> ISO9660Inode::flush_metadata()
 {
-    return KSuccess;
+    return {};
 }
 
-KResultOr<size_t> ISO9660Inode::write_bytes(off_t, size_t, const UserOrKernelBuffer&, OpenFileDescription*)
-{
-    return EROFS;
-}
-
-KResultOr<NonnullRefPtr<Inode>> ISO9660Inode::create_child(StringView, mode_t, dev_t, UserID, GroupID)
+ErrorOr<size_t> ISO9660Inode::write_bytes(off_t, size_t, const UserOrKernelBuffer&, OpenFileDescription*)
 {
     return EROFS;
 }
 
-KResult ISO9660Inode::add_child(Inode&, const StringView&, mode_t)
+ErrorOr<NonnullRefPtr<Inode>> ISO9660Inode::create_child(StringView, mode_t, dev_t, UserID, GroupID)
 {
     return EROFS;
 }
 
-KResult ISO9660Inode::remove_child(const StringView&)
+ErrorOr<void> ISO9660Inode::add_child(Inode&, StringView, mode_t)
 {
     return EROFS;
 }
 
-KResult ISO9660Inode::chmod(mode_t)
+ErrorOr<void> ISO9660Inode::remove_child(StringView)
 {
     return EROFS;
 }
 
-KResult ISO9660Inode::chown(UserID, GroupID)
+ErrorOr<void> ISO9660Inode::chmod(mode_t)
 {
     return EROFS;
 }
 
-KResult ISO9660Inode::truncate(u64)
+ErrorOr<void> ISO9660Inode::chown(UserID, GroupID)
 {
     return EROFS;
 }
 
-KResult ISO9660Inode::set_atime(time_t)
+ErrorOr<void> ISO9660Inode::truncate(u64)
 {
     return EROFS;
 }
 
-KResult ISO9660Inode::set_ctime(time_t)
+ErrorOr<void> ISO9660Inode::set_atime(time_t)
 {
     return EROFS;
 }
 
-KResult ISO9660Inode::set_mtime(time_t)
+ErrorOr<void> ISO9660Inode::set_ctime(time_t)
+{
+    return EROFS;
+}
+
+ErrorOr<void> ISO9660Inode::set_mtime(time_t)
 {
     return EROFS;
 }
@@ -558,7 +556,7 @@ void ISO9660Inode::one_ref_left()
 {
 }
 
-ISO9660Inode::ISO9660Inode(ISO9660FS& fs, ISO::DirectoryRecordHeader const& record, StringView const& name)
+ISO9660Inode::ISO9660Inode(ISO9660FS& fs, ISO::DirectoryRecordHeader const& record, StringView name)
     : Inode(fs, get_inode_index(record, name))
     , m_record(record)
 {
@@ -570,7 +568,7 @@ ISO9660Inode::~ISO9660Inode()
 {
 }
 
-KResultOr<NonnullRefPtr<ISO9660Inode>> ISO9660Inode::try_create_from_directory_record(ISO9660FS& fs, ISO::DirectoryRecordHeader const& record, StringView const& name)
+ErrorOr<NonnullRefPtr<ISO9660Inode>> ISO9660Inode::try_create_from_directory_record(ISO9660FS& fs, ISO::DirectoryRecordHeader const& record, StringView name)
 {
     return adopt_nonnull_ref_or_enomem(new (nothrow) ISO9660Inode(fs, record, name));
 }
@@ -653,7 +651,7 @@ StringView ISO9660Inode::get_normalized_filename(ISO::DirectoryRecordHeader cons
     return { buffer.data(), filename.length() };
 }
 
-InodeIndex ISO9660Inode::get_inode_index(ISO::DirectoryRecordHeader const& record, StringView const& name)
+InodeIndex ISO9660Inode::get_inode_index(ISO::DirectoryRecordHeader const& record, StringView name)
 {
     if (name.is_null()) {
         // NOTE: This is the index of the root inode.

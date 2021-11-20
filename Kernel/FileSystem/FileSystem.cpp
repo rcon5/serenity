@@ -16,9 +16,9 @@
 namespace Kernel {
 
 static u32 s_lastFileSystemID;
-static Singleton<HashMap<u32, FileSystem*>> s_file_system_map;
+static Singleton<HashMap<FileSystemID, FileSystem*>> s_file_system_map;
 
-static HashMap<u32, FileSystem*>& all_file_systems()
+static HashMap<FileSystemID, FileSystem*>& all_file_systems()
 {
     return *s_file_system_map;
 }
@@ -34,7 +34,7 @@ FileSystem::~FileSystem()
     s_file_system_map->remove(m_fsid);
 }
 
-FileSystem* FileSystem::from_fsid(u32 id)
+FileSystem* FileSystem::from_fsid(FileSystemID id)
 {
     auto it = all_file_systems().find(id);
     if (it != all_file_systems().end())
@@ -42,7 +42,7 @@ FileSystem* FileSystem::from_fsid(u32 id)
     return nullptr;
 }
 
-FileSystem::DirectoryEntryView::DirectoryEntryView(const StringView& n, InodeIdentifier i, u8 ft)
+FileSystem::DirectoryEntryView::DirectoryEntryView(StringView n, InodeIdentifier i, u8 ft)
     : name(n)
     , inode(i)
     , file_type(ft)

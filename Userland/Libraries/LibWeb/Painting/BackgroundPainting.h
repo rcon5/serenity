@@ -8,18 +8,12 @@
 
 #include <LibGfx/Forward.h>
 #include <LibWeb/CSS/StyleValue.h>
+#include <LibWeb/Forward.h>
 #include <LibWeb/Painting/BorderPainting.h>
 #include <LibWeb/Painting/PaintContext.h>
 
 namespace Web::Painting {
 
-struct BackgroundData {
-    Color color;
-    Gfx::Bitmap const* image;
-    CSS::Repeat repeat_x;
-    CSS::Repeat repeat_y;
-};
-
-void paint_background(PaintContext&, Gfx::IntRect const&, BackgroundData const&, BorderRadiusData const&);
+void paint_background(PaintContext&, Layout::NodeWithStyleAndBoxModelMetrics const&, Gfx::IntRect const&, Color background_color, Vector<CSS::BackgroundLayerData> const*, BorderRadiusData const&);
 
 }

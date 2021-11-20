@@ -5,6 +5,7 @@
  */
 
 #include <AK/Debug.h>
+#include <AK/JsonArray.h>
 #include <AK/LexicalPath.h>
 #include <AK/SourceGenerator.h>
 #include <LibGemini/Document.h>
@@ -13,22 +14,23 @@
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/DOM/ElementFactory.h>
 #include <LibWeb/DOM/Text.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLIFrameElement.h>
 #include <LibWeb/HTML/Parser/HTMLParser.h>
+#include <LibWeb/ImageDecoding.h>
 #include <LibWeb/Loader/FrameLoader.h>
 #include <LibWeb/Loader/ResourceLoader.h>
-#include <LibWeb/Page/BrowsingContext.h>
 #include <LibWeb/Page/Page.h>
 
 namespace Web {
 
 static RefPtr<Gfx::Bitmap> s_default_favicon_bitmap;
 
-FrameLoader::FrameLoader(BrowsingContext& browsing_context)
+FrameLoader::FrameLoader(HTML::BrowsingContext& browsing_context)
     : m_browsing_context(browsing_context)
 {
     if (!s_default_favicon_bitmap) {
-        s_default_favicon_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/filetype-html.png");
+        s_default_favicon_bitmap = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/filetype-html.png").release_value_but_fixme_should_propagate_errors();
         VERIFY(s_default_favicon_bitmap);
     }
 }
@@ -71,13 +73,14 @@ static bool build_text_document(DOM::Document& document, const ByteBuffer& data)
     return true;
 }
 
-static bool build_image_document(DOM::Document& document, const ByteBuffer& data)
+static bool build_image_document(DOM::Document& document, ByteBuffer const& data)
 {
-    auto image_decoder = Gfx::ImageDecoder::try_create(data.bytes());
-    if (!image_decoder)
+    NonnullRefPtr decoder = image_decoder_client();
+    auto image = decoder->decode_image(data);
+    if (!image.has_value() || image->frames.is_empty())
         return false;
-    auto frame = image_decoder->frame(0);
-    auto bitmap = frame.image;
+    auto const& frame = image->frames[0];
+    auto const& bitmap = frame.bitmap;
     if (!bitmap)
         return false;
 
@@ -175,15 +178,12 @@ bool FrameLoader::load(LoadRequest& request, Type type)
                 if (data.is_empty())
                     return;
                 RefPtr<Gfx::Bitmap> favicon_bitmap;
-                auto decoder = Gfx::ImageDecoder::try_create(data);
-                if (!decoder) {
-                    dbgln("No image decoder plugin for favicon {}", favicon_url);
+                auto decoded_image = image_decoder_client().decode_image(data);
+                if (!decoded_image.has_value() || decoded_image->frames.is_empty()) {
+                    dbgln("Could not decode favicon {}", favicon_url);
                 } else {
-                    favicon_bitmap = decoder->frame(0).image;
-                    if (!favicon_bitmap)
-                        dbgln("Could not decode favicon {}", favicon_url);
-                    else
-                        dbgln_if(IMAGE_DECODER_DEBUG, "Decoded favicon, {}", favicon_bitmap->size());
+                    favicon_bitmap = decoded_image->frames[0].bitmap;
+                    dbgln_if(IMAGE_DECODER_DEBUG, "Decoded favicon, {}", favicon_bitmap->size());
                 }
                 load_favicon(favicon_bitmap);
             },
@@ -210,7 +210,7 @@ bool FrameLoader::load(const AK::URL& url, Type type)
     return load(request, type);
 }
 
-void FrameLoader::load_html(const StringView& html, const AK::URL& url)
+void FrameLoader::load_html(StringView html, const AK::URL& url)
 {
     auto document = DOM::Document::create(url);
     HTML::HTMLParser parser(document, html, "utf-8");
@@ -294,10 +294,15 @@ void FrameLoader::resource_did_load()
         return;
     }
 
-    // FIXME: Support multiple instances of the Set-Cookie response header.
     auto set_cookie = resource()->response_headers().get("Set-Cookie");
-    if (set_cookie.has_value())
-        document->set_cookie(set_cookie.value(), Cookie::Source::Http);
+    if (set_cookie.has_value()) {
+        auto set_cookie_json_value = MUST(JsonValue::from_string(set_cookie.value()));
+        VERIFY(set_cookie_json_value.type() == JsonValue::Type::Array);
+        for (const auto& set_cookie_entry : set_cookie_json_value.as_array().values()) {
+            VERIFY(set_cookie_entry.type() == JsonValue::Type::String);
+            document->set_cookie(set_cookie_entry.as_string(), Cookie::Source::Http);
+        }
+    }
 
     if (!url.fragment().is_empty())
         browsing_context().scroll_to_anchor(url.fragment());

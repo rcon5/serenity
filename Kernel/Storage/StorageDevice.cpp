@@ -26,7 +26,7 @@ StringView StorageDevice::class_name() const
     return "StorageDevice"sv;
 }
 
-KResultOr<size_t> StorageDevice::read(OpenFileDescription&, u64 offset, UserOrKernelBuffer& outbuf, size_t len)
+ErrorOr<size_t> StorageDevice::read(OpenFileDescription&, u64 offset, UserOrKernelBuffer& outbuf, size_t len)
 {
     unsigned index = offset / block_size();
     u16 whole_blocks = len / block_size();
@@ -93,7 +93,7 @@ bool StorageDevice::can_read(const OpenFileDescription&, size_t offset) const
     return offset < (max_addressable_block() * block_size());
 }
 
-KResultOr<size_t> StorageDevice::write(OpenFileDescription&, u64 offset, const UserOrKernelBuffer& inbuf, size_t len)
+ErrorOr<size_t> StorageDevice::write(OpenFileDescription&, u64 offset, const UserOrKernelBuffer& inbuf, size_t len)
 {
     unsigned index = offset / block_size();
     u16 whole_blocks = len / block_size();
@@ -188,17 +188,17 @@ bool StorageDevice::can_write(const OpenFileDescription&, size_t offset) const
     return offset < (max_addressable_block() * block_size());
 }
 
-KResult StorageDevice::ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg)
+ErrorOr<void> StorageDevice::ioctl(OpenFileDescription&, unsigned request, Userspace<void*> arg)
 {
     switch (request) {
     case STORAGE_DEVICE_GET_SIZE: {
         size_t disk_size = m_max_addressable_block * block_size();
-        return copy_to_user(Userspace<size_t*>(arg), &disk_size);
+        return copy_to_user(static_ptr_cast<size_t*>(arg), &disk_size);
         break;
     }
     case STORAGE_DEVICE_GET_BLOCK_SIZE: {
         size_t size = block_size();
-        return copy_to_user(Userspace<size_t*>(arg), &size);
+        return copy_to_user(static_ptr_cast<size_t*>(arg), &size);
         break;
     }
     default:

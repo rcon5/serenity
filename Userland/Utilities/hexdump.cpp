@@ -8,14 +8,23 @@
 #include <LibCore/ArgsParser.h>
 #include <LibCore/File.h>
 #include <ctype.h>
+#include <string.h>
 
 static constexpr size_t LINE_LENGTH_BYTES = 16;
+
+enum class State {
+    Print,
+    PrintFiller,
+    SkipPrint
+};
 
 int main(int argc, char** argv)
 {
     Core::ArgsParser args_parser;
     const char* path = nullptr;
+    bool verbose = false;
     args_parser.add_positional_argument(path, "Input", "input", Core::ArgsParser::Required::No);
+    args_parser.add_option(verbose, "Display all input data", "verbose", 'v');
 
     args_parser.parse(argc, argv);
 
@@ -58,22 +67,55 @@ int main(int argc, char** argv)
     };
 
     Array<u8, BUFSIZ> contents;
+    Span<u8> previous_line;
     static_assert(LINE_LENGTH_BYTES * 2 <= contents.size(), "Buffer is too small?!");
     size_t contents_size = 0;
 
     int nread;
-    do {
+    auto state = State::Print;
+    while (true) {
         nread = file->read(&contents[contents_size], BUFSIZ - contents_size);
+        if (nread <= 0)
+            break;
         contents_size += nread;
-        // Print as many complete lines as we can (possibly none).
+
         size_t offset;
         for (offset = 0; offset + LINE_LENGTH_BYTES - 1 < contents_size; offset += LINE_LENGTH_BYTES) {
-            print_line(&contents[offset], LINE_LENGTH_BYTES);
+            if (verbose) {
+                print_line(&contents[offset], LINE_LENGTH_BYTES);
+                continue;
+            }
+
+            auto current_line = contents.span().slice(offset, LINE_LENGTH_BYTES);
+            bool is_same_contents = (current_line == previous_line);
+            if (!is_same_contents)
+                state = State::Print;
+            else if (is_same_contents && (state != State::SkipPrint))
+                state = State::PrintFiller;
+
+            // Coalesce repeating lines
+            switch (state) {
+            case State::Print:
+                print_line(&contents[offset], LINE_LENGTH_BYTES);
+                break;
+            case State::PrintFiller:
+                outln("*");
+                state = State::SkipPrint;
+                break;
+            case State::SkipPrint:
+                break;
+            }
+            previous_line = current_line;
         }
+
         contents_size -= offset;
-        // Regions cannot overlap due to above static_assert.
-        memcpy(&contents[0], &contents[offset], contents_size);
-    } while (nread);
+        VERIFY(contents_size < LINE_LENGTH_BYTES);
+        // If we managed to make the buffer exactly full, &contents[BUFSIZ] would blow up.
+        if (contents_size > 0) {
+            // Regions cannot overlap due to above static_assert.
+            memcpy(&contents[0], &contents[offset], contents_size);
+        }
+    }
     VERIFY(contents_size <= LINE_LENGTH_BYTES - 1);
     if (contents_size > 0)
         print_line(&contents[0], contents_size);

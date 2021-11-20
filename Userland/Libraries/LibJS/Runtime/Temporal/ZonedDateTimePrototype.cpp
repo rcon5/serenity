@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021, Luke Wilde <lukew@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -64,7 +65,20 @@ void ZonedDateTimePrototype::initialize(GlobalObject& global_object)
     define_native_accessor(vm.names.eraYear, era_year_getter, {}, Attribute::Configurable);
 
     u8 attr = Attribute::Writable | Attribute::Configurable;
+    define_native_function(vm.names.with, with, 1, attr);
+    define_native_function(vm.names.withPlainTime, with_plain_time, 0, attr);
+    define_native_function(vm.names.withPlainDate, with_plain_date, 1, attr);
+    define_native_function(vm.names.withTimeZone, with_time_zone, 1, attr);
+    define_native_function(vm.names.withCalendar, with_calendar, 1, attr);
+    define_native_function(vm.names.add, add, 1, attr);
+    define_native_function(vm.names.subtract, subtract, 1, attr);
+    define_native_function(vm.names.round, round, 1, attr);
+    define_native_function(vm.names.equals, equals, 1, attr);
+    define_native_function(vm.names.toString, to_string, 0, attr);
+    define_native_function(vm.names.toLocaleString, to_locale_string, 0, attr);
+    define_native_function(vm.names.toJSON, to_json, 0, attr);
     define_native_function(vm.names.valueOf, value_of, 0, attr);
+    define_native_function(vm.names.startOfDay, start_of_day, 0, attr);
     define_native_function(vm.names.toInstant, to_instant, 0, attr);
     define_native_function(vm.names.toPlainDate, to_plain_date, 0, attr);
     define_native_function(vm.names.toPlainTime, to_plain_time, 0, attr);
@@ -701,11 +715,439 @@ JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::era_year_getter)
     return TRY(calendar_era_year(global_object, calendar, *plain_date_time));
 }
 
+// 6.3.30 Temporal.ZonedDateTime.prototype.with ( temporalZonedDateTimeLike [ , options ] ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.with
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::with)
+{
+    auto temporal_zoned_date_time_like = vm.argument(0);
+
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. If Type(temporalZonedDateTimeLike) is not Object, then
+    if (!temporal_zoned_date_time_like.is_object()) {
+        // a. Throw a TypeError exception.
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAnObject, temporal_zoned_date_time_like.to_string_without_side_effects());
+    }
+
+    // 4. Perform ? RejectObjectWithCalendarOrTimeZone(temporalZonedDateTimeLike).
+    TRY(reject_object_with_calendar_or_time_zone(global_object, temporal_zoned_date_time_like.as_object()));
+
+    // 5. Let calendar be zonedDateTime.[[Calendar]].
+    auto& calendar = zoned_date_time->calendar();
+
+    // 6. Let fieldNames be ? CalendarFields(calendar, « "day", "hour", "microsecond", "millisecond", "minute", "month", "monthCode", "nanosecond", "second", "year" »).
+    auto field_names = TRY(calendar_fields(global_object, calendar, { "day"sv, "hour"sv, "microsecond"sv, "millisecond"sv, "minute"sv, "month"sv, "monthCode"sv, "nanosecond"sv, "second"sv, "year"sv }));
+
+    // 7. Append "offset" to fieldNames.
+    field_names.append("offset"sv);
+
+    // 8. Let partialZonedDateTime be ? PreparePartialTemporalFields(temporalZonedDateTimeLike, fieldNames).
+    auto* partial_zoned_date_time = TRY(prepare_partial_temporal_fields(global_object, temporal_zoned_date_time_like.as_object(), field_names));
+
+    // 9. Set options to ? GetOptionsObject(options).
+    auto* options = TRY(get_options_object(global_object, vm.argument(1)));
+
+    // 10. Let disambiguation be ? ToTemporalDisambiguation(options).
+    auto disambiguation = TRY(to_temporal_disambiguation(global_object, *options));
+
+    // 11. Let offset be ? ToTemporalOffset(options, "prefer").
+    auto offset = TRY(to_temporal_offset(global_object, *options, "prefer"sv));
+
+    // 12. Let timeZone be zonedDateTime.[[TimeZone]].
+    auto& time_zone = zoned_date_time->time_zone();
+
+    // 13. Append "timeZone" to fieldNames.
+    field_names.append("timeZone"sv);
+
+    // 14. Let fields be ? PrepareTemporalFields(zonedDateTime, fieldNames, « "timeZone", "offset" »).
+    auto* fields = TRY(prepare_temporal_fields(global_object, *zoned_date_time, field_names, { "timeZone"sv, "offset"sv }));
+
+    // 15. Set fields to ? CalendarMergeFields(calendar, fields, partialZonedDateTime).
+    fields = TRY(calendar_merge_fields(global_object, calendar, *fields, *partial_zoned_date_time));
+
+    // 16. Set fields to ? PrepareTemporalFields(fields, fieldNames, « "timeZone", "offset" »).
+    fields = TRY(prepare_temporal_fields(global_object, *fields, field_names, { "timeZone"sv, "offset"sv }));
+
+    // 17. Let offsetString be ! Get(fields, "offset").
+    auto offset_string = MUST(fields->get(vm.names.offset));
+
+    // 18. Assert: Type(offsetString) is String.
+    VERIFY(offset_string.is_string());
+
+    // 19. Let dateTimeResult be ? InterpretTemporalDateTimeFields(calendar, fields, options).
+    auto date_time_result = TRY(interpret_temporal_date_time_fields(global_object, calendar, *fields, *options));
+
+    // 20. Let offsetNanoseconds be ? ParseTimeZoneOffsetString(offsetString).
+    auto offset_nanoseconds = TRY(parse_time_zone_offset_string(global_object, offset_string.as_string().string()));
+
+    // 21. Let epochNanoseconds be ? InterpretISODateTimeOffset(dateTimeResult.[[Year]], dateTimeResult.[[Month]], dateTimeResult.[[Day]], dateTimeResult.[[Hour]], dateTimeResult.[[Minute]], dateTimeResult.[[Second]], dateTimeResult.[[Millisecond]], dateTimeResult.[[Microsecond]], dateTimeResult.[[Nanosecond]], option, offsetNanoseconds, timeZone, disambiguation, offset, match exactly).
+    auto* epoch_nanoseconds = TRY(interpret_iso_date_time_offset(global_object, date_time_result.year, date_time_result.month, date_time_result.day, date_time_result.hour, date_time_result.minute, date_time_result.second, date_time_result.millisecond, date_time_result.microsecond, date_time_result.nanosecond, OffsetBehavior::Option, offset_nanoseconds, &time_zone, disambiguation, offset, MatchBehavior::MatchExactly));
+
+    // 22. Return ! CreateTemporalZonedDateTime(epochNanoseconds, timeZone, calendar).
+    return MUST(create_temporal_zoned_date_time(global_object, *epoch_nanoseconds, time_zone, calendar));
+}
+
+// 6.3.31 Temporal.ZonedDateTime.prototype.withPlainTime ( [ plainTimeLike ] ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.withplaintime
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::with_plain_time)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    PlainTime* plain_time = nullptr;
+
+    // 3. If plainTimeLike is undefined, then
+    if (vm.argument(0).is_undefined()) {
+        // a. Let plainTime be ? CreateTemporalTime(0, 0, 0, 0, 0, 0).
+        plain_time = TRY(create_temporal_time(global_object, 0, 0, 0, 0, 0, 0));
+    }
+    // 4. Else,
+    else {
+        // a. Let plainTime be ? ToTemporalTime(plainTimeLike).
+        plain_time = TRY(to_temporal_time(global_object, vm.argument(0)));
+    }
+
+    // 5. Let timeZone be zonedDateTime.[[TimeZone]].
+    auto& time_zone = zoned_date_time->time_zone();
+
+    // 6. Let instant be ! CreateTemporalInstant(zonedDateTime.[[Nanoseconds]]).
+    auto* instant = MUST(create_temporal_instant(global_object, zoned_date_time->nanoseconds()));
+
+    // 7. Let calendar be zonedDateTime.[[Calendar]].
+    auto& calendar = zoned_date_time->calendar();
+
+    // 8. Let plainDateTime be ? BuiltinTimeZoneGetPlainDateTimeFor(timeZone, instant, calendar).
+    auto* plain_date_time = TRY(builtin_time_zone_get_plain_date_time_for(global_object, &time_zone, *instant, calendar));
+
+    // 9. Let resultPlainDateTime be ? CreateTemporalDateTime(plainDateTime.[[ISOYear]], plainDateTime.[[ISOMonth]], plainDateTime.[[ISODay]], plainTime.[[ISOHour]], plainTime.[[ISOMinute]], plainTime.[[ISOSecond]], plainTime.[[ISOMillisecond]], plainTime.[[ISOMicrosecond]], plainTime.[[ISONanosecond]], calendar).
+    auto* result_plain_date_time = TRY(create_temporal_date_time(global_object, plain_date_time->iso_year(), plain_date_time->iso_month(), plain_date_time->iso_day(), plain_time->iso_hour(), plain_time->iso_minute(), plain_time->iso_second(), plain_time->iso_millisecond(), plain_time->iso_microsecond(), plain_time->iso_nanosecond(), calendar));
+
+    // 10. Set instant to ? BuiltinTimeZoneGetInstantFor(timeZone, resultPlainDateTime, "compatible").
+    instant = TRY(builtin_time_zone_get_instant_for(global_object, &time_zone, *result_plain_date_time, "compatible"sv));
+
+    // 11. Return ! CreateTemporalZonedDateTime(instant.[[Nanoseconds]], timeZone, calendar).
+    return MUST(create_temporal_zoned_date_time(global_object, instant->nanoseconds(), time_zone, calendar));
+}
+
+// 6.3.32 Temporal.ZonedDateTime.prototype.withPlainDate ( plainDateLike ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.withplaindate
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::with_plain_date)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Let plainDate be ? ToTemporalDate(plainDateLike).
+    auto* plain_date = TRY(to_temporal_date(global_object, vm.argument(0)));
+
+    // 4. Let timeZone be zonedDateTime.[[TimeZone]].
+    auto& time_zone = zoned_date_time->time_zone();
+
+    // 5. Let instant be ! CreateTemporalInstant(zonedDateTime.[[Nanoseconds]]).
+    auto* instant = MUST(create_temporal_instant(global_object, zoned_date_time->nanoseconds()));
+
+    // 6. Let plainDateTime be ? BuiltinTimeZoneGetPlainDateTimeFor(timeZone, instant, zonedDateTime.[[Calendar]]).
+    auto* plain_date_time = TRY(builtin_time_zone_get_plain_date_time_for(global_object, &time_zone, *instant, zoned_date_time->calendar()));
+
+    // 7. Let calendar be ? ConsolidateCalendars(zonedDateTime.[[Calendar]], plainDate.[[Calendar]]).
+    auto* calendar = TRY(consolidate_calendars(global_object, zoned_date_time->calendar(), plain_date->calendar()));
+
+    // 8. Let resultPlainDateTime be ? CreateTemporalDateTime(plainDate.[[ISOYear]], plainDate.[[ISOMonth]], plainDate.[[ISODay]], plainDateTime.[[ISOHour]], plainDateTime.[[ISOMinute]], plainDateTime.[[ISOSecond]], plainDateTime.[[ISOMillisecond]], plainDateTime.[[ISOMicrosecond]], plainDateTime.[[ISONanosecond]], calendar).
+    auto* result_plain_date_time = TRY(create_temporal_date_time(global_object, plain_date->iso_year(), plain_date->iso_month(), plain_date->iso_day(), plain_date_time->iso_hour(), plain_date_time->iso_minute(), plain_date_time->iso_second(), plain_date_time->iso_millisecond(), plain_date_time->iso_microsecond(), plain_date_time->iso_nanosecond(), *calendar));
+
+    // 9. Set instant to ? BuiltinTimeZoneGetInstantFor(timeZone, resultPlainDateTime, "compatible").
+    instant = TRY(builtin_time_zone_get_instant_for(global_object, &time_zone, *result_plain_date_time, "compatible"sv));
+
+    // 10. Return ! CreateTemporalZonedDateTime(instant.[[Nanoseconds]], timeZone, calendar).
+    return MUST(create_temporal_zoned_date_time(global_object, instant->nanoseconds(), time_zone, *calendar));
+}
+
+// 6.3.33 Temporal.ZonedDateTime.prototype.withTimeZone ( timeZoneLike ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.withtimezone
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::with_time_zone)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Let timeZone be ? ToTemporalTimeZone(timeZoneLike).
+    auto* time_zone = TRY(to_temporal_time_zone(global_object, vm.argument(0)));
+
+    // 4. Return ! CreateTemporalZonedDateTime(zonedDateTime.[[Nanoseconds]], timeZone, zonedDateTime.[[Calendar]]).
+    return MUST(create_temporal_zoned_date_time(global_object, zoned_date_time->nanoseconds(), *time_zone, zoned_date_time->calendar()));
+}
+
+// 6.3.34 Temporal.ZonedDateTime.prototype.withCalendar ( calendarLike ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.withcalendar
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::with_calendar)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Let calendar be ? ToTemporalCalendar(calendarLike).
+    auto* calendar = TRY(to_temporal_calendar(global_object, vm.argument(0)));
+
+    // 4. Return ! CreateTemporalZonedDateTime(zonedDateTime.[[Nanoseconds]], zonedDateTime.[[TimeZone]], calendar).
+    return MUST(create_temporal_zoned_date_time(global_object, zoned_date_time->nanoseconds(), zoned_date_time->time_zone(), *calendar));
+}
+
+// 6.3.35 Temporal.ZonedDateTime.prototype.add ( temporalDurationLike [ , options ] ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.add
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::add)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Let duration be ? ToLimitedTemporalDuration(temporalDurationLike, « »).
+    auto duration = TRY(to_limited_temporal_duration(global_object, vm.argument(0), {}));
+
+    // 4. Set options to ? GetOptionsObject(options).
+    auto* options = TRY(get_options_object(global_object, vm.argument(1)));
+
+    // 5. Let timeZone be zonedDateTime.[[TimeZone]].
+    auto& time_zone = zoned_date_time->time_zone();
+
+    // 6. Let calendar be zonedDateTime.[[Calendar]].
+    auto& calendar = zoned_date_time->calendar();
+
+    // 7. Let epochNanoseconds be ? AddZonedDateTime(zonedDateTime.[[Nanoseconds]], timeZone, calendar, duration.[[Years]], duration.[[Months]], duration.[[Weeks]], duration.[[Days]], duration.[[Hours]], duration.[[Minutes]], duration.[[Seconds]], duration.[[Milliseconds]], duration.[[Microseconds]], duration.[[Nanoseconds]], options).
+    auto* epoch_nanoseconds = TRY(add_zoned_date_time(global_object, zoned_date_time->nanoseconds(), &time_zone, calendar, duration.years, duration.months, duration.weeks, duration.days, duration.hours, duration.minutes, duration.seconds, duration.milliseconds, duration.microseconds, duration.nanoseconds, options));
+
+    // 8. Return ! CreateTemporalZonedDateTime(epochNanoseconds, timeZone, calendar).
+    return MUST(create_temporal_zoned_date_time(global_object, *epoch_nanoseconds, time_zone, calendar));
+}
+
+// 6.3.36 Temporal.ZonedDateTime.prototype.subtract ( temporalDurationLike [ , options ] ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.subtract
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::subtract)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Let duration be ? ToLimitedTemporalDuration(temporalDurationLike, « »).
+    auto duration = TRY(to_limited_temporal_duration(global_object, vm.argument(0), {}));
+
+    // 4. Set options to ? GetOptionsObject(options).
+    auto* options = TRY(get_options_object(global_object, vm.argument(1)));
+
+    // 5. Let timeZone be zonedDateTime.[[TimeZone]].
+    auto& time_zone = zoned_date_time->time_zone();
+
+    // 6. Let calendar be zonedDateTime.[[Calendar]].
+    auto& calendar = zoned_date_time->calendar();
+
+    // 7. Let epochNanoseconds be ? AddZonedDateTime(zonedDateTime.[[Nanoseconds]], timeZone, calendar, −duration.[[Years]], −duration.[[Months]], −duration.[[Weeks]], −duration.[[Days]], −duration.[[Hours]], −duration.[[Minutes]], −duration.[[Seconds]], −duration.[[Milliseconds]], −duration.[[Microseconds]], −duration.[[Nanoseconds]], options).
+    auto* epoch_nanoseconds = TRY(add_zoned_date_time(global_object, zoned_date_time->nanoseconds(), &time_zone, calendar, -duration.years, -duration.months, -duration.weeks, -duration.days, -duration.hours, -duration.minutes, -duration.seconds, -duration.milliseconds, -duration.microseconds, -duration.nanoseconds, options));
+
+    // 8. Return ! CreateTemporalZonedDateTime(epochNanoseconds, timeZone, calendar).
+    return MUST(create_temporal_zoned_date_time(global_object, *epoch_nanoseconds, time_zone, calendar));
+}
+
+// 6.3.39 Temporal.ZonedDateTime.prototype.round ( roundTo ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.round
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::round)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. If roundTo is undefined, then
+    if (vm.argument(0).is_undefined()) {
+        // a. Throw a TypeError exception.
+        return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalMissingOptionsObject);
+    }
+
+    Object* round_to;
+
+    // 4. If Type(roundTo) is String, then
+    if (vm.argument(0).is_string()) {
+        // a. Let paramString be roundTo.
+
+        // b. Set roundTo to ! OrdinaryObjectCreate(null).
+        round_to = Object::create(global_object, nullptr);
+
+        // FIXME: "_smallestUnit_" is a spec bug, see https://github.com/tc39/proposal-temporal/pull/1931
+        // c. Perform ! CreateDataPropertyOrThrow(roundTo, "_smallestUnit_", paramString).
+        MUST(round_to->create_data_property_or_throw(vm.names.smallestUnit, vm.argument(0)));
+    }
+    // 5. Else,
+    else {
+        // a. Set roundTo to ? GetOptionsObject(roundTo).
+        round_to = TRY(get_options_object(global_object, vm.argument(0)));
+    }
+
+    // 6. Let smallestUnit be ? ToSmallestTemporalUnit(roundTo, « "year", "month", "week" », undefined).
+    auto smallest_unit_value = TRY(to_smallest_temporal_unit(global_object, *round_to, { "year"sv, "month"sv, "week"sv }, {}));
+
+    // 7. If smallestUnit is undefined, throw a RangeError exception.
+    if (!smallest_unit_value.has_value())
+        return vm.throw_completion<RangeError>(global_object, ErrorType::OptionIsNotValidValue, vm.names.undefined.as_string(), "smallestUnit");
+
+    // NOTE: At this point smallest_unit_value can only be a string
+    auto& smallest_unit = *smallest_unit_value;
+
+    // 8. Let roundingMode be ? ToTemporalRoundingMode(roundTo, "halfExpand").
+    auto rounding_mode = TRY(to_temporal_rounding_mode(global_object, *round_to, "halfExpand"sv));
+
+    // 9. Let roundingIncrement be ? ToTemporalDateTimeRoundingIncrement(options, smallestUnit).
+    auto rounding_increment = TRY(to_temporal_date_time_rounding_increment(global_object, *round_to, smallest_unit));
+
+    // 10. Let timeZone be zonedDateTime.[[TimeZone]].
+    auto& time_zone = zoned_date_time->time_zone();
+
+    // 11. Let instant be ! CreateTemporalInstant(zonedDateTime.[[Nanoseconds]]).
+    auto* instant = MUST(create_temporal_instant(global_object, zoned_date_time->nanoseconds()));
+
+    // 12. Let calendar be zonedDateTime.[[Calendar]].
+    auto& calendar = zoned_date_time->calendar();
+
+    // 13. Let temporalDateTime be ? BuiltinTimeZoneGetPlainDateTimeFor(timeZone, instant, calendar).
+    auto* temporal_date_time = TRY(builtin_time_zone_get_plain_date_time_for(global_object, &time_zone, *instant, calendar));
+
+    // 14. Let isoCalendar be ! GetISO8601Calendar().
+    auto* iso_calendar = get_iso8601_calendar(global_object);
+
+    // 15. Let dtStart be ? CreateTemporalDateTime(temporalDateTime.[[ISOYear]], temporalDateTime.[[ISOMonth]], temporalDateTime.[[ISODay]], 0, 0, 0, 0, 0, 0, isoCalendar).
+    auto* dt_start = TRY(create_temporal_date_time(global_object, temporal_date_time->iso_year(), temporal_date_time->iso_month(), temporal_date_time->iso_day(), 0, 0, 0, 0, 0, 0, *iso_calendar));
+
+    // 16. Let instantStart be ? BuiltinTimeZoneGetInstantFor(timeZone, dtStart, "compatible").
+    auto* instant_start = TRY(builtin_time_zone_get_instant_for(global_object, &time_zone, *dt_start, "compatible"sv));
+
+    // 17. Let startNs be instantStart.[[Nanoseconds]].
+    auto& start_ns = instant_start->nanoseconds();
+
+    // 18. Let endNs be ? AddZonedDateTime(startNs, timeZone, zonedDateTime.[[Calendar]], 0, 0, 0, 1, 0, 0, 0, 0, 0, 0).
+    // TODO: Shouldn't `zonedDateTime.[[Calendar]]` be `calendar` for consistency?
+    auto* end_ns = TRY(add_zoned_date_time(global_object, start_ns, &time_zone, zoned_date_time->calendar(), 0, 0, 0, 1, 0, 0, 0, 0, 0, 0));
+
+    // 19. Let dayLengthNs be ℝ(endNs − startNs).
+    auto day_length_ns = end_ns->big_integer().minus(start_ns.big_integer()).to_double();
+
+    // 20. If dayLengthNs is 0, then
+    if (day_length_ns == 0) {
+        // a. Throw a RangeError exception.
+        return vm.throw_completion<RangeError>(global_object, ErrorType::TemporalZonedDateTimeRoundZeroLengthDay);
+    }
+
+    // 21. Let roundResult be ! RoundISODateTime(temporalDateTime.[[ISOYear]], temporalDateTime.[[ISOMonth]], temporalDateTime.[[ISODay]], temporalDateTime.[[ISOHour]], temporalDateTime.[[ISOMinute]], temporalDateTime.[[ISOSecond]], temporalDateTime.[[ISOMillisecond]], temporalDateTime.[[ISOMicrosecond]], temporalDateTime.[[ISONanosecond]], roundingIncrement, smallestUnit, roundingMode, dayLengthNs).
+    auto round_result = round_iso_date_time(temporal_date_time->iso_year(), temporal_date_time->iso_month(), temporal_date_time->iso_day(), temporal_date_time->iso_hour(), temporal_date_time->iso_minute(), temporal_date_time->iso_second(), temporal_date_time->iso_millisecond(), temporal_date_time->iso_microsecond(), temporal_date_time->iso_nanosecond(), rounding_increment, smallest_unit, rounding_mode, day_length_ns);
+
+    // 22. Let offsetNanoseconds be ? GetOffsetNanosecondsFor(timeZone, instant).
+    auto offset_nanoseconds = TRY(get_offset_nanoseconds_for(global_object, &time_zone, *instant));
+
+    // 23. Let epochNanoseconds be ? InterpretISODateTimeOffset(roundResult.[[Year]], roundResult.[[Month]], roundResult.[[Day]], roundResult.[[Hour]], roundResult.[[Minute]], roundResult.[[Second]], roundResult.[[Millisecond]], roundResult.[[Microsecond]], roundResult.[[Nanosecond]], option, offsetNanoseconds, timeZone, "compatible", "prefer", match exactly).
+    auto* epoch_nanoseconds = TRY(interpret_iso_date_time_offset(global_object, round_result.year, round_result.month, round_result.day, round_result.hour, round_result.minute, round_result.second, round_result.millisecond, round_result.microsecond, round_result.nanosecond, OffsetBehavior::Option, offset_nanoseconds, &time_zone, "compatible"sv, "prefer"sv, MatchBehavior::MatchExactly));
+
+    // 24. Return ! CreateTemporalZonedDateTime(epochNanoseconds, timeZone, calendar).
+    return MUST(create_temporal_zoned_date_time(global_object, *epoch_nanoseconds, time_zone, calendar));
+}
+
+// 6.3.40 Temporal.ZonedDateTime.prototype.equals ( other ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.equals
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::equals)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Set other to ? ToTemporalZonedDateTime(other).
+    auto* other = TRY(to_temporal_zoned_date_time(global_object, vm.argument(0)));
+
+    // 4. If zonedDateTime.[[Nanoseconds]] ≠ other.[[Nanoseconds]], return false.
+    if (zoned_date_time->nanoseconds().big_integer() != other->nanoseconds().big_integer())
+        return Value(false);
+
+    // 5. If ? TimeZoneEquals(zonedDateTime.[[TimeZone]], other.[[TimeZone]]) is false, return false.
+    if (!TRY(time_zone_equals(global_object, zoned_date_time->time_zone(), other->time_zone())))
+        return Value(false);
+
+    // 6. Return ? CalendarEquals(zonedDateTime.[[Calendar]], other.[[Calendar]]).
+    return Value(TRY(calendar_equals(global_object, zoned_date_time->calendar(), other->calendar())));
+}
+
+// 6.3.41 Temporal.ZonedDateTime.prototype.toString ( [ options ] ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.tostring
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::to_string)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Set options to ? GetOptionsObject(options).
+    auto* options = TRY(get_options_object(global_object, vm.argument(0)));
+
+    // 4. Let precision be ? ToSecondsStringPrecision(options).
+    auto precision = TRY(to_seconds_string_precision(global_object, *options));
+
+    // 5. Let roundingMode be ? ToTemporalRoundingMode(options, "trunc").
+    auto rounding_mode = TRY(to_temporal_rounding_mode(global_object, *options, "trunc"));
+
+    // 6. Let showCalendar be ? ToShowCalendarOption(options).
+    auto show_calendar = TRY(to_show_calendar_option(global_object, *options));
+
+    // 7. Let showTimeZone be ? ToShowTimeZoneNameOption(options).
+    auto show_time_zone = TRY(to_show_time_zone_name_option(global_object, *options));
+
+    // 8. Let showOffset be ? ToShowOffsetOption(options).
+    auto show_offset = TRY(to_show_offset_option(global_object, *options));
+
+    // 9. Return ? TemporalZonedDateTimeToString(zonedDateTime, precision.[[Precision]], showCalendar, showTimeZone, showOffset, precision.[[Increment]], precision.[[Unit]], roundingMode).
+    return js_string(vm, TRY(temporal_zoned_date_time_to_string(global_object, *zoned_date_time, precision.precision, show_calendar, show_time_zone, show_offset, precision.increment, precision.unit, rounding_mode)));
+}
+
+// 6.3.42 Temporal.ZonedDateTime.prototype.toLocaleString ( [ locales [ , options ] ] ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.tolocalestring
+// NOTE: This is the minimum toLocaleString implementation for engines without ECMA-402.
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::to_locale_string)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Return ? TemporalZonedDateTimeToString(zonedDateTime, "auto", "auto", "auto", "auto").
+    return js_string(vm, TRY(temporal_zoned_date_time_to_string(global_object, *zoned_date_time, "auto"sv, "auto"sv, "auto"sv, "auto"sv)));
+}
+
+// 6.3.43 Temporal.ZonedDateTime.prototype.toJSON ( ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.tojson
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::to_json)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Return ? TemporalZonedDateTimeToString(zonedDateTime, "auto", "auto", "auto", "auto").
+    return js_string(vm, TRY(temporal_zoned_date_time_to_string(global_object, *zoned_date_time, "auto"sv, "auto"sv, "auto"sv, "auto"sv)));
+}
+
 // 6.3.44 Temporal.ZonedDateTime.prototype.valueOf ( ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.valueof
 JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::value_of)
 {
     // 1. Throw a TypeError exception.
     return vm.throw_completion<TypeError>(global_object, ErrorType::Convert, "Temporal.ZonedDateTime", "a primitive value");
+}
+
+// 6.3.45 Temporal.ZonedDateTime.prototype.startOfDay ( ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.startofday
+JS_DEFINE_NATIVE_FUNCTION(ZonedDateTimePrototype::start_of_day)
+{
+    // 1. Let zonedDateTime be the this value.
+    // 2. Perform ? RequireInternalSlot(zonedDateTime, [[InitializedTemporalZonedDateTime]]).
+    auto* zoned_date_time = TRY(typed_this_object(global_object));
+
+    // 3. Let timeZone be zonedDateTime.[[TimeZone]].
+    auto& time_zone = zoned_date_time->time_zone();
+
+    // 4. Let calendar be zonedDateTime.[[Calendar]].
+    auto& calendar = zoned_date_time->calendar();
+
+    // 5. Let instant be ! CreateTemporalInstant(zonedDateTime.[[Nanoseconds]]).
+    auto* instant = MUST(create_temporal_instant(global_object, zoned_date_time->nanoseconds()));
+
+    // 6. Let temporalDateTime be ? BuiltinTimeZoneGetPlainDateTimeFor(timeZone, instant, calendar).
+    auto* temporal_date_time = TRY(builtin_time_zone_get_plain_date_time_for(global_object, &time_zone, *instant, calendar));
+
+    // 7. Let startDateTime be ? CreateTemporalDateTime(temporalDateTime.[[ISOYear]], temporalDateTime.[[ISOMonth]], temporalDateTime.[[ISODay]], 0, 0, 0, 0, 0, 0, calendar).
+    auto* start_date_time = TRY(create_temporal_date_time(global_object, temporal_date_time->iso_year(), temporal_date_time->iso_month(), temporal_date_time->iso_day(), 0, 0, 0, 0, 0, 0, calendar));
+
+    // 8. Let startInstant be ? BuiltinTimeZoneGetInstantFor(timeZone, startDateTime, "compatible").
+    auto* start_instant = TRY(builtin_time_zone_get_instant_for(global_object, &time_zone, *start_date_time, "compatible"sv));
+
+    // 9. Return ! CreateTemporalZonedDateTime(startInstant.[[Nanoseconds]], timeZone, calendar).
+    return MUST(create_temporal_zoned_date_time(global_object, start_instant->nanoseconds(), time_zone, calendar));
 }
 
 // 6.3.46 Temporal.ZonedDateTime.prototype.toInstant ( ), https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime.prototype.toinstant

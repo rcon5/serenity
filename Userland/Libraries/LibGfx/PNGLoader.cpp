@@ -6,8 +6,7 @@
 
 #include <AK/Debug.h>
 #include <AK/Endian.h>
-#include <AK/LexicalPath.h>
-#include <AK/MappedFile.h>
+#include <AK/Vector.h>
 #include <LibCompress/Zlib.h>
 #include <LibGfx/PNGLoader.h>
 #include <fcntl.h>
@@ -47,7 +46,7 @@ struct [[gnu::packed]] PaletteEntry {
     u8 r;
     u8 g;
     u8 b;
-    //u8 a;
+    // u8 a;
 };
 
 template<typename T>
@@ -166,24 +165,7 @@ private:
     size_t m_size_remaining { 0 };
 };
 
-static RefPtr<Gfx::Bitmap> load_png_impl(const u8*, size_t);
 static bool process_chunk(Streamer&, PNGLoadingContext& context);
-
-RefPtr<Gfx::Bitmap> load_png(String const& path)
-{
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    return load_png_from_memory((u8 const*)file_or_error.value()->data(), file_or_error.value()->size(), LexicalPath::canonicalized_path(path));
-}
-
-RefPtr<Gfx::Bitmap> load_png_from_memory(u8 const* data, size_t length, String const& mmap_name)
-{
-    auto bitmap = load_png_impl(data, length);
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded PNG: {}", bitmap->size(), mmap_name));
-    return bitmap;
-}
 
 ALWAYS_INLINE static u8 paeth_predictor(int a, int b, int c)
 {
@@ -603,13 +585,13 @@ static bool decode_png_bitmap_simple(PNGLoadingContext& context)
         }
     }
 
-    context.bitmap = Bitmap::try_create(context.has_alpha() ? BitmapFormat::BGRA8888 : BitmapFormat::BGRx8888, { context.width, context.height });
-
-    if (!context.bitmap) {
+    auto bitmap_or_error = Bitmap::try_create(context.has_alpha() ? BitmapFormat::BGRA8888 : BitmapFormat::BGRx8888, { context.width, context.height });
+    if (bitmap_or_error.is_error()) {
         context.state = PNGLoadingContext::State::Error;
         return false;
     }
 
+    context.bitmap = bitmap_or_error.release_value();
     return unfilter(context);
 }
 
@@ -705,7 +687,11 @@ static bool decode_adam7_pass(PNGLoadingContext& context, Streamer& streamer, in
         }
     }
 
-    subimage_context.bitmap = Bitmap::try_create(context.bitmap->format(), { subimage_context.width, subimage_context.height });
+    auto bitmap_or_error = Bitmap::try_create(context.bitmap->format(), { subimage_context.width, subimage_context.height });
+    if (bitmap_or_error.is_error())
+        return false;
+
+    subimage_context.bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
     if (!unfilter(subimage_context)) {
         subimage_context.bitmap = nullptr;
         return false;
@@ -723,9 +709,10 @@ static bool decode_adam7_pass(PNGLoadingContext& context, Streamer& streamer, in
 static bool decode_png_adam7(PNGLoadingContext& context)
 {
     Streamer streamer(context.decompression_buffer->data(), context.decompression_buffer->size());
-    context.bitmap = Bitmap::try_create(context.has_alpha() ? BitmapFormat::BGRA8888 : BitmapFormat::BGRx8888, { context.width, context.height });
-    if (!context.bitmap)
+    auto bitmap_or_error = Bitmap::try_create(context.has_alpha() ? BitmapFormat::BGRA8888 : BitmapFormat::BGRx8888, { context.width, context.height });
+    if (bitmap_or_error.is_error())
         return false;
+    context.bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
 
     for (int pass = 1; pass <= 7; ++pass) {
         if (!decode_adam7_pass(context, streamer, pass))
@@ -777,21 +764,6 @@ static bool decode_png_bitmap(PNGLoadingContext& context)
 
     context.state = PNGLoadingContext::State::BitmapDecoded;
     return true;
-}
-
-static RefPtr<Gfx::Bitmap> load_png_impl(const u8* data, size_t data_size)
-{
-    PNGLoadingContext context;
-    context.data = data;
-    context.data_size = data_size;
-
-    if (!decode_png_chunks(context))
-        return nullptr;
-
-    if (!decode_png_bitmap(context))
-        return nullptr;
-
-    return context.bitmap;
 }
 
 static bool is_valid_compression_method(u8 compression_method)
@@ -959,22 +931,6 @@ IntSize PNGImageDecoderPlugin::size()
     return { m_context->width, m_context->height };
 }
 
-RefPtr<Gfx::Bitmap> PNGImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == PNGLoadingContext::State::Error)
-        return nullptr;
-
-    if (m_context->state < PNGLoadingContext::State::BitmapDecoded) {
-        // NOTE: This forces the chunk decoding to happen.
-        bool success = decode_png_bitmap(*m_context);
-        if (!success)
-            return nullptr;
-    }
-
-    VERIFY(m_context->bitmap);
-    return m_context->bitmap;
-}
-
 void PNGImageDecoderPlugin::set_volatile()
 {
     if (m_context->bitmap)
@@ -1012,7 +968,19 @@ ImageFrameDescriptor PNGImageDecoderPlugin::frame(size_t i)
 {
     if (i > 0)
         return {};
-    return { bitmap(), 0 };
+
+    if (m_context->state == PNGLoadingContext::State::Error)
+        return {};
+
+    if (m_context->state < PNGLoadingContext::State::BitmapDecoded) {
+        // NOTE: This forces the chunk decoding to happen.
+        bool success = decode_png_bitmap(*m_context);
+        if (!success)
+            return {};
+    }
+
+    VERIFY(m_context->bitmap);
+    return { m_context->bitmap, 0 };
 }
 
 }

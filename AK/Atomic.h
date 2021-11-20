@@ -51,8 +51,7 @@ template<typename T>
 {
     if (order == memory_order_acq_rel || order == memory_order_release)
         return __atomic_compare_exchange_n(var, &expected, desired, false, memory_order_release, memory_order_acquire);
-    else
-        return __atomic_compare_exchange_n(var, &expected, desired, false, order, order);
+    return __atomic_compare_exchange_n(var, &expected, desired, false, order, order);
 }
 
 template<typename T, typename V = RemoveVolatile<T>>
@@ -60,8 +59,7 @@ template<typename T, typename V = RemoveVolatile<T>>
 {
     if (order == memory_order_acq_rel || order == memory_order_release)
         return __atomic_compare_exchange_n(var, &expected, desired, false, memory_order_release, memory_order_acquire);
-    else
-        return __atomic_compare_exchange_n(var, &expected, desired, false, order, order);
+    return __atomic_compare_exchange_n(var, &expected, desired, false, order, order);
 }
 
 template<typename T, typename V = RemoveVolatile<T>>
@@ -69,8 +67,7 @@ template<typename T, typename V = RemoveVolatile<T>>
 {
     if (order == memory_order_acq_rel || order == memory_order_release)
         return __atomic_compare_exchange_n(const_cast<V**>(var), &expected, nullptr, false, memory_order_release, memory_order_acquire);
-    else
-        return __atomic_compare_exchange_n(const_cast<V**>(var), &expected, nullptr, false, order, order);
+    return __atomic_compare_exchange_n(const_cast<V**>(var), &expected, nullptr, false, order, order);
 }
 
 template<typename T>
@@ -174,8 +171,7 @@ public:
     {
         if (order == memory_order_acq_rel || order == memory_order_release)
             return __atomic_compare_exchange(&m_value, &expected, &desired, false, memory_order_release, memory_order_acquire);
-        else
-            return __atomic_compare_exchange(&m_value, &expected, &desired, false, order, order);
+        return __atomic_compare_exchange(&m_value, &expected, &desired, false, order, order);
     }
 
     ALWAYS_INLINE operator T() const volatile noexcept
@@ -191,6 +187,7 @@ public:
         return *ret;
     }
 
+    // NOLINTNEXTLINE(misc-unconventional-assign-operator) We want operator= to exchange the value, so returning an object of type Atomic& here does not make sense
     ALWAYS_INLINE T operator=(T desired) volatile noexcept
     {
         store(desired);
@@ -238,8 +235,7 @@ public:
     {
         if (order == memory_order_acq_rel || order == memory_order_release)
             return __atomic_compare_exchange_n(&m_value, &expected, desired, false, memory_order_release, memory_order_acquire);
-        else
-            return __atomic_compare_exchange_n(&m_value, &expected, desired, false, order, order);
+        return __atomic_compare_exchange_n(&m_value, &expected, desired, false, order, order);
     }
 
     ALWAYS_INLINE T operator++() volatile noexcept
@@ -322,6 +318,7 @@ public:
         return __atomic_load_n(&m_value, order);
     }
 
+    // NOLINTNEXTLINE(misc-unconventional-assign-operator) We want operator= to exchange the value, so returning an object of type Atomic& here does not make sense
     ALWAYS_INLINE T operator=(T desired) volatile noexcept
     {
         store(desired);
@@ -369,8 +366,7 @@ public:
     {
         if (order == memory_order_acq_rel || order == memory_order_release)
             return __atomic_compare_exchange_n(&m_value, &expected, desired, false, memory_order_release, memory_order_acquire);
-        else
-            return __atomic_compare_exchange_n(&m_value, &expected, desired, false, order, order);
+        return __atomic_compare_exchange_n(&m_value, &expected, desired, false, order, order);
     }
 
     T* operator++() volatile noexcept
@@ -423,6 +419,7 @@ public:
         return __atomic_load_n(&m_value, order);
     }
 
+    // NOLINTNEXTLINE(misc-unconventional-assign-operator) We want operator= to exchange the value, so returning an object of type Atomic& here does not make sense
     T* operator=(T* desired) volatile noexcept
     {
         store(desired);

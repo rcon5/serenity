@@ -26,6 +26,9 @@
 #include <serenity.h>
 #include <stdio.h>
 
+constexpr const char* quick_launch = "QuickLaunch";
+constexpr int quick_launch_button_size = 24;
+
 class TaskbarWidget final : public GUI::Widget {
     C_OBJECT(TaskbarWidget);
 
@@ -78,7 +81,7 @@ TaskbarWindow::TaskbarWindow(NonnullRefPtr<GUI::Menu> start_menu)
     m_task_button_container->set_layout<GUI::HorizontalBoxLayout>();
     m_task_button_container->layout()->set_spacing(3);
 
-    m_default_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/window.png");
+    m_default_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/window.png").release_value_but_fixme_should_propagate_errors();
 
     m_applet_area_container = main_widget.add<GUI::Frame>();
     m_applet_area_container->set_frame_thickness(1);
@@ -108,16 +111,42 @@ void TaskbarWindow::show_desktop_button_clicked(unsigned)
     GUI::WindowManagerServerConnection::the().async_toggle_show_desktop();
 }
 
+void TaskbarWindow::config_key_was_removed(String const& domain, String const& group, String const& key)
+{
+    if (domain == "Taskbar" && group == quick_launch) {
+        auto button = m_quick_launch_bar->find_child_of_type_named<GUI::Button>(key);
+        if (button)
+            m_quick_launch_bar->remove_child(*button);
+    }
+}
+
+void TaskbarWindow::config_string_did_change(String const& domain, String const& group, String const& key, String const& value)
+{
+    if (domain == "Taskbar" && group == quick_launch) {
+        auto af_path = String::formatted("{}/{}", Desktop::AppFile::APP_FILES_DIRECTORY, value);
+        auto af = Desktop::AppFile::open(af_path);
+        if (!af->is_valid())
+            return;
+
+        auto button = m_quick_launch_bar->find_child_of_type_named<GUI::Button>(key);
+        if (button) {
+            set_quick_launch_button_data(*button, key, af);
+        } else {
+            auto& new_button = m_quick_launch_bar->add<GUI::Button>();
+            set_quick_launch_button_data(new_button, key, af);
+        }
+    }
+}
+
 void TaskbarWindow::create_quick_launch_bar()
 {
-    auto& quick_launch_bar = main_widget()->add<GUI::Frame>();
-    quick_launch_bar.set_shrink_to_fit(true);
-    quick_launch_bar.set_layout<GUI::HorizontalBoxLayout>();
-    quick_launch_bar.layout()->set_spacing(0);
-    quick_launch_bar.set_frame_thickness(0);
+    m_quick_launch_bar = main_widget()->add<GUI::Frame>();
+    m_quick_launch_bar->set_shrink_to_fit(true);
+    m_quick_launch_bar->set_layout<GUI::HorizontalBoxLayout>();
+    m_quick_launch_bar->layout()->set_spacing(0);
+    m_quick_launch_bar->set_frame_thickness(0);
 
     auto config = Core::ConfigFile::open_for_app("Taskbar");
-    constexpr const char* quick_launch = "QuickLaunch";
 
     // FIXME: Core::ConfigFile does not keep the order of the entries.
     for (auto& name : config->keys(quick_launch)) {
@@ -126,36 +155,41 @@ void TaskbarWindow::create_quick_launch_bar()
         auto af = Desktop::AppFile::open(af_path);
         if (!af->is_valid())
             continue;
-        auto app_executable = af->executable();
-        auto app_run_in_terminal = af->run_in_terminal();
-        const int button_size = 24;
-        auto& button = quick_launch_bar.add<GUI::Button>();
-        button.set_fixed_size(button_size, button_size);
-        button.set_button_style(Gfx::ButtonStyle::Coolbar);
-        button.set_icon(af->icon().bitmap_for_size(16));
-        button.set_tooltip(af->name());
-        button.on_click = [app_executable, app_run_in_terminal](auto) {
-            pid_t pid = fork();
-            if (pid < 0) {
-                perror("fork");
-            } else if (pid == 0) {
-                if (chdir(Core::StandardPaths::home_directory().characters()) < 0) {
-                    perror("chdir");
-                    exit(1);
-                }
-                if (app_run_in_terminal)
-                    execl("/bin/Terminal", "Terminal", "-e", app_executable.characters(), nullptr);
-                else
-                    execl(app_executable.characters(), app_executable.characters(), nullptr);
-                perror("execl");
-                VERIFY_NOT_REACHED();
-            } else {
-                if (disown(pid) < 0)
-                    perror("disown");
-            }
-        };
+        auto& button = m_quick_launch_bar->add<GUI::Button>();
+        set_quick_launch_button_data(button, name, af);
     }
-    quick_launch_bar.set_fixed_height(24);
+    m_quick_launch_bar->set_fixed_height(24);
+}
+
+void TaskbarWindow::set_quick_launch_button_data(GUI::Button& button, String const& button_name, NonnullRefPtr<Desktop::AppFile> app_file)
+{
+    auto app_executable = app_file->executable();
+    auto app_run_in_terminal = app_file->run_in_terminal();
+    button.set_fixed_size(quick_launch_button_size, quick_launch_button_size);
+    button.set_button_style(Gfx::ButtonStyle::Coolbar);
+    button.set_icon(app_file->icon().bitmap_for_size(16));
+    button.set_tooltip(app_file->name());
+    button.set_name(button_name);
+    button.on_click = [app_executable, app_run_in_terminal](auto) {
+        pid_t pid = fork();
+        if (pid < 0) {
+            perror("fork");
+        } else if (pid == 0) {
+            if (chdir(Core::StandardPaths::home_directory().characters()) < 0) {
+                perror("chdir");
+                exit(1);
+            }
+            if (app_run_in_terminal)
+                execl("/bin/Terminal", "Terminal", "-e", app_executable.characters(), nullptr);
+            else
+                execl(app_executable.characters(), app_executable.characters(), nullptr);
+            perror("execl");
+            VERIFY_NOT_REACHED();
+        } else {
+            if (disown(pid) < 0)
+                perror("disown");
+        }
+    };
 }
 
 void TaskbarWindow::on_screen_rects_change(const Vector<Gfx::IntRect, 4>& rects, size_t main_screen_index)
@@ -227,7 +261,7 @@ void TaskbarWindow::update_window_button(::Window& window, bool show_as_active)
     button->set_text(window.title());
     button->set_tooltip(window.title());
     button->set_checked(show_as_active);
-    button->set_visible(is_window_on_current_virtual_desktop(window));
+    button->set_visible(is_window_on_current_workspace(window));
 }
 
 ::Window* TaskbarWindow::find_window_owner(::Window& window) const
@@ -310,8 +344,11 @@ void TaskbarWindow::wm_event(GUI::WMEvent& event)
                 if (icon->height() != taskbar_icon_size() || icon->width() != taskbar_icon_size()) {
                     auto sw = taskbar_icon_size() / (float)icon->width();
                     auto sh = taskbar_icon_size() / (float)icon->height();
-                    auto scaled_bitmap = icon->scaled(sw, sh);
-                    window->button()->set_icon(move(scaled_bitmap));
+                    auto scaled_bitmap_or_error = icon->scaled(sw, sh);
+                    if (scaled_bitmap_or_error.is_error())
+                        window->button()->set_icon(nullptr);
+                    else
+                        window->button()->set_icon(scaled_bitmap_or_error.release_value());
                 } else {
                     window->button()->set_icon(icon);
                 }
@@ -348,7 +385,7 @@ void TaskbarWindow::wm_event(GUI::WMEvent& event)
         window.set_active(changed_event.is_active());
         window.set_minimized(changed_event.is_minimized());
         window.set_progress(changed_event.progress());
-        window.set_virtual_desktop(changed_event.virtual_desktop_row(), changed_event.virtual_desktop_column());
+        window.set_workspace(changed_event.workspace_row(), changed_event.workspace_column());
 
         auto* window_owner = find_window_owner(window);
         if (window_owner == &window) {
@@ -381,9 +418,9 @@ void TaskbarWindow::wm_event(GUI::WMEvent& event)
             warnln("failed to spawn 'Assistant' when requested via Super+Space");
         break;
     }
-    case GUI::Event::WM_VirtualDesktopChanged: {
-        auto& changed_event = static_cast<GUI::WMVirtualDesktopChangedEvent&>(event);
-        virtual_desktop_change_event(changed_event.current_row(), changed_event.current_column());
+    case GUI::Event::WM_WorkspaceChanged: {
+        auto& changed_event = static_cast<GUI::WMWorkspaceChangedEvent&>(event);
+        workspace_change_event(changed_event.current_row(), changed_event.current_column());
         break;
     }
     default:
@@ -396,19 +433,19 @@ void TaskbarWindow::screen_rects_change_event(GUI::ScreenRectsChangeEvent& event
     on_screen_rects_change(event.rects(), event.main_screen_index());
 }
 
-bool TaskbarWindow::is_window_on_current_virtual_desktop(::Window& window) const
+bool TaskbarWindow::is_window_on_current_workspace(::Window& window) const
 {
-    return window.virtual_desktop_row() == m_current_virtual_desktop_row && window.virtual_desktop_column() == m_current_virtual_desktop_column;
+    return window.workspace_row() == m_current_workspace_row && window.workspace_column() == m_current_workspace_column;
 }
 
-void TaskbarWindow::virtual_desktop_change_event(unsigned current_row, unsigned current_column)
+void TaskbarWindow::workspace_change_event(unsigned current_row, unsigned current_column)
 {
-    m_current_virtual_desktop_row = current_row;
-    m_current_virtual_desktop_column = current_column;
+    m_current_workspace_row = current_row;
+    m_current_workspace_column = current_column;
 
     WindowList::the().for_each_window([&](auto& window) {
         if (auto* button = window.button())
-            button->set_visible(is_window_on_current_virtual_desktop(window));
+            button->set_visible(is_window_on_current_workspace(window));
     });
 }
 

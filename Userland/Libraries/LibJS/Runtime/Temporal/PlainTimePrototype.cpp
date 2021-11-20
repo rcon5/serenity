@@ -195,133 +195,131 @@ JS_DEFINE_NATIVE_FUNCTION(PlainTimePrototype::with)
 
     auto& temporal_time_like = temporal_time_like_argument.as_object();
 
-    // 4. Perform ? RejectTemporalCalendarType(temporalTimeLike).
-    TRY(reject_temporal_calendar_type(global_object, temporal_time_like));
+    // 4. Perform ? RejectObjectWithCalendarOrTimeZone(temporalTimeLike).
+    TRY(reject_object_with_calendar_or_time_zone(global_object, temporal_time_like));
 
-    // 5. Let calendarProperty be ? Get(temporalTimeLike, "calendar").
-    auto calendar_property = TRY(temporal_time_like.get(vm.names.calendar));
-
-    // 6. If calendarProperty is not undefined, then
-    if (!calendar_property.is_undefined()) {
-        // a. Throw a TypeError exception.
-        return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalPlainTimeWithArgumentMustNotHave, "calendar");
-    }
-
-    // 7. Let timeZoneProperty be ? Get(temporalTimeLike, "timeZone").
-    auto time_zone_property = TRY(temporal_time_like.get(vm.names.timeZone));
-
-    // 8. If timeZoneProperty is not undefined, then
-    if (!time_zone_property.is_undefined()) {
-        // a. Throw a TypeError exception.
-        return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalPlainTimeWithArgumentMustNotHave, "timeZone");
-    }
-
-    // 9. Let partialTime be ? ToPartialTime(temporalTimeLike).
+    // 5. Let partialTime be ? ToPartialTime(temporalTimeLike).
     auto partial_time = TRY(to_partial_time(global_object, temporal_time_like));
 
-    // 10. Set options to ? GetOptionsObject(options).
+    // 6. Set options to ? GetOptionsObject(options).
     auto* options = TRY(get_options_object(global_object, vm.argument(1)));
 
-    // 11. Let overflow be ? ToTemporalOverflow(options).
+    // 7. Let overflow be ? ToTemporalOverflow(options).
     auto overflow = TRY(to_temporal_overflow(global_object, *options));
 
-    // 12. If partialTime.[[Hour]] is not undefined, then
+    // 8. If partialTime.[[Hour]] is not undefined, then
     //      a. Let hour be partialTime.[[Hour]].
-    // 13. Else,
+    // 9. Else,
     //      a. Let hour be temporalTime.[[ISOHour]].
     auto hour = partial_time.hour.value_or(temporal_time->iso_hour());
 
-    // 14. If partialTime.[[Minute]] is not undefined, then
+    // 10. If partialTime.[[Minute]] is not undefined, then
     //      a. Let minute be partialTime.[[Minute]].
-    // 15. Else,
+    // 11. Else,
     //      a. Let minute be temporalTime.[[ISOMinute]].
     auto minute = partial_time.minute.value_or(temporal_time->iso_minute());
 
-    // 16. If partialTime.[[Second]] is not undefined, then
+    // 12. If partialTime.[[Second]] is not undefined, then
     //      a. Let second be partialTime.[[Second]].
-    // 17. Else,
+    // 13. Else,
     //      a. Let second be temporalTime.[[ISOSecond]].
     auto second = partial_time.second.value_or(temporal_time->iso_second());
 
-    // 18. If partialTime.[[Millisecond]] is not undefined, then
+    // 14. If partialTime.[[Millisecond]] is not undefined, then
     //      a. Let millisecond be partialTime.[[Millisecond]].
-    // 19. Else,
+    // 15. Else,
     //      a. Let millisecond be temporalTime.[[ISOMillisecond]].
     auto millisecond = partial_time.millisecond.value_or(temporal_time->iso_millisecond());
 
-    // 20. If partialTime.[[Microsecond]] is not undefined, then
+    // 16. If partialTime.[[Microsecond]] is not undefined, then
     //      a. Let microsecond be partialTime.[[Microsecond]].
-    // 21. Else,
+    // 17. Else,
     //      a. Let microsecond be temporalTime.[[ISOMicrosecond]].
     auto microsecond = partial_time.microsecond.value_or(temporal_time->iso_microsecond());
 
-    // 22. If partialTime.[[Nanosecond]] is not undefined, then
+    // 18. If partialTime.[[Nanosecond]] is not undefined, then
     //      a. Let nanosecond be partialTime.[[Nanosecond]].
-    // 23. Else,
+    // 19. Else,
     //      a. Let nanosecond be temporalTime.[[ISONanosecond]].
     auto nanosecond = partial_time.nanosecond.value_or(temporal_time->iso_nanosecond());
 
-    // 24. Let result be ? RegulateTime(hour, minute, second, millisecond, microsecond, nanosecond, overflow).
+    // 20. Let result be ? RegulateTime(hour, minute, second, millisecond, microsecond, nanosecond, overflow).
     auto result = TRY(regulate_time(global_object, hour, minute, second, millisecond, microsecond, nanosecond, overflow));
 
-    // 25. Return ? CreateTemporalTime(result.[[Hour]], result.[[Minute]], result.[[Second]], result.[[Millisecond]], result.[[Microsecond]], result.[[Nanosecond]]).
+    // 21. Return ? CreateTemporalTime(result.[[Hour]], result.[[Minute]], result.[[Second]], result.[[Millisecond]], result.[[Microsecond]], result.[[Nanosecond]]).
     return TRY(create_temporal_time(global_object, result.hour, result.minute, result.second, result.millisecond, result.microsecond, result.nanosecond));
 }
 
-// 4.3.15 Temporal.PlainTime.prototype.round ( options ), https://tc39.es/proposal-temporal/#sec-temporal.plaintime.prototype.round
+// 4.3.15 Temporal.PlainTime.prototype.round ( roundTo ), https://tc39.es/proposal-temporal/#sec-temporal.plaintime.prototype.round
 JS_DEFINE_NATIVE_FUNCTION(PlainTimePrototype::round)
 {
     // 1. Let temporalTime be the this value.
     // 2. Perform ? RequireInternalSlot(temporalTime, [[InitializedTemporalTime]]).
     auto* temporal_time = TRY(typed_this_object(global_object));
 
-    // 3. If options is undefined, then
+    // 3. If roundTo is undefined, then
     if (vm.argument(0).is_undefined()) {
         // a. Throw a TypeError exception.
         return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalMissingOptionsObject);
     }
 
-    // 4. Set options to ? GetOptionsObject(options).
-    auto* options = TRY(get_options_object(global_object, vm.argument(0)));
+    Object* round_to;
 
-    // 5. Let smallestUnit be ? ToSmallestTemporalUnit(options, « "year", "month", "week", "day" », undefined).
-    auto smallest_unit_value = TRY(to_smallest_temporal_unit(global_object, *options, { "year"sv, "month"sv, "week"sv, "day"sv }, {}));
+    // 4. If Type(roundTo) is String, then
+    if (vm.argument(0).is_string()) {
+        // a. Let paramString be roundTo.
 
-    // 6. If smallestUnit is undefined, throw a RangeError exception.
+        // b. Set roundTo to ! OrdinaryObjectCreate(null).
+        round_to = Object::create(global_object, nullptr);
+
+        // FIXME: "_smallestUnit_" is a spec bug, see https://github.com/tc39/proposal-temporal/pull/1931
+        // c. Perform ! CreateDataPropertyOrThrow(roundTo, "_smallestUnit_", paramString).
+        MUST(round_to->create_data_property_or_throw(vm.names.smallestUnit, vm.argument(0)));
+    }
+    // 5. Else,
+    else {
+        // a. Set roundTo to ? GetOptionsObject(roundTo).
+        round_to = TRY(get_options_object(global_object, vm.argument(0)));
+    }
+
+    // 6. Let smallestUnit be ? ToSmallestTemporalUnit(roundTo, « "year", "month", "week", "day" », undefined).
+    auto smallest_unit_value = TRY(to_smallest_temporal_unit(global_object, *round_to, { "year"sv, "month"sv, "week"sv, "day"sv }, {}));
+
+    // 7. If smallestUnit is undefined, throw a RangeError exception.
     if (!smallest_unit_value.has_value())
         return vm.throw_completion<RangeError>(global_object, ErrorType::OptionIsNotValidValue, vm.names.undefined.as_string(), "smallestUnit");
 
     // NOTE: At this point smallest_unit_value can only be a string
     auto& smallest_unit = *smallest_unit_value;
 
-    // 7. Let roundingMode be ? ToTemporalRoundingMode(options, "halfExpand").
-    auto rounding_mode = TRY(to_temporal_rounding_mode(global_object, *options, "halfExpand"));
+    // 8. Let roundingMode be ? ToTemporalRoundingMode(roundTo, "halfExpand").
+    auto rounding_mode = TRY(to_temporal_rounding_mode(global_object, *round_to, "halfExpand"));
 
     double maximum;
 
-    // 8. If smallestUnit is "hour", then
+    // 9. If smallestUnit is "hour", then
     if (smallest_unit == "hour"sv) {
         // a. Let maximum be 24.
         maximum = 24;
     }
-    // 9. Else if smallestUnit is "minute" or "second", then
+    // 10. Else if smallestUnit is "minute" or "second", then
     else if (smallest_unit == "minute"sv || smallest_unit == "second"sv) {
         // a. Let maximum be 60.
         maximum = 60;
     }
-    // 10. Else,
+    // 11. Else,
     else {
         // a. Let maximum be 1000.
         maximum = 1000;
     }
 
-    // 11. Let roundingIncrement be ? ToTemporalRoundingIncrement(options, maximum, false).
-    auto rounding_increment = TRY(to_temporal_rounding_increment(global_object, *options, maximum, false));
+    // 12. Let roundingIncrement be ? ToTemporalRoundingIncrement(roundTo, maximum, false).
+    auto rounding_increment = TRY(to_temporal_rounding_increment(global_object, *round_to, maximum, false));
 
-    // 12. Let result be ! RoundTime(temporalTime.[[ISOHour]], temporalTime.[[ISOMinute]], temporalTime.[[ISOSecond]], temporalTime.[[ISOMillisecond]], temporalTime.[[ISOMicrosecond]], temporalTime.[[ISONanosecond]], roundingIncrement, smallestUnit, roundingMode).
+    // 13. Let result be ! RoundTime(temporalTime.[[ISOHour]], temporalTime.[[ISOMinute]], temporalTime.[[ISOSecond]], temporalTime.[[ISOMillisecond]], temporalTime.[[ISOMicrosecond]], temporalTime.[[ISONanosecond]], roundingIncrement, smallestUnit, roundingMode).
     auto result = round_time(temporal_time->iso_hour(), temporal_time->iso_minute(), temporal_time->iso_second(), temporal_time->iso_millisecond(), temporal_time->iso_microsecond(), temporal_time->iso_nanosecond(), rounding_increment, smallest_unit, rounding_mode);
 
-    // 13. Return ? CreateTemporalTime(result.[[Hour]], result.[[Minute]], result.[[Second]], result.[[Millisecond]], result.[[Microsecond]], result.[[Nanosecond]]).
+    // 14. Return ? CreateTemporalTime(result.[[Hour]], result.[[Minute]], result.[[Second]], result.[[Millisecond]], result.[[Microsecond]], result.[[Nanosecond]]).
     return TRY(create_temporal_time(global_object, result.hour, result.minute, result.second, result.millisecond, result.microsecond, result.nanosecond));
 }
 

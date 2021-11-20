@@ -56,8 +56,7 @@ void TLSv12::write_packet(ByteBuffer& packet)
     if (m_context.tls_buffer.size() + packet.size() > 16 * KiB)
         schedule_or_perform_flush(true);
 
-    auto ok = m_context.tls_buffer.try_append(packet.data(), packet.size());
-    if (!ok) {
+    if (m_context.tls_buffer.try_append(packet.data(), packet.size()).is_error()) {
         // Toooooo bad, drop the record on the ground.
         return;
     }
@@ -274,7 +273,7 @@ void TLSv12::ensure_hmac(size_t digest_size, bool local)
         m_hmac_remote = move(hmac);
 }
 
-ByteBuffer TLSv12::hmac_message(const ReadonlyBytes& buf, const Optional<ReadonlyBytes> buf2, size_t mac_length, bool local)
+ByteBuffer TLSv12::hmac_message(ReadonlyBytes buf, const Optional<ReadonlyBytes> buf2, size_t mac_length, bool local)
 {
     u64 sequence_number = AK::convert_between_host_and_network_endian(local ? m_context.local_sequence_number : m_context.remote_sequence_number);
     ensure_hmac(mac_length, local);
@@ -498,7 +497,7 @@ ssize_t TLSv12::handle_message(ReadonlyBytes buffer)
         } else {
             dbgln_if(TLS_DEBUG, "application data message of size {}", plain.size());
 
-            if (!m_context.application_buffer.try_append(plain.data(), plain.size())) {
+            if (m_context.application_buffer.try_append(plain.data(), plain.size()).is_error()) {
                 payload_res = (i8)Error::DecryptionFailed;
                 auto packet = build_alert(true, (u8)AlertDescription::DecryptionFailed);
                 write_packet(packet);

@@ -27,12 +27,15 @@ private:
 
     virtual void pledge_domains(Vector<String> const&) override;
     virtual void monitor_domain(String const&) override;
+    virtual Messages::ConfigServer::ListConfigGroupsResponse list_config_groups([[maybe_unused]] String const& domain) override;
+    virtual Messages::ConfigServer::ListConfigKeysResponse list_config_keys([[maybe_unused]] String const& domain, [[maybe_unused]] String const& group) override;
     virtual Messages::ConfigServer::ReadStringValueResponse read_string_value([[maybe_unused]] String const& domain, [[maybe_unused]] String const& group, [[maybe_unused]] String const& key) override;
     virtual Messages::ConfigServer::ReadI32ValueResponse read_i32_value([[maybe_unused]] String const& domain, [[maybe_unused]] String const& group, [[maybe_unused]] String const& key) override;
     virtual Messages::ConfigServer::ReadBoolValueResponse read_bool_value([[maybe_unused]] String const& domain, [[maybe_unused]] String const& group, [[maybe_unused]] String const& key) override;
     virtual void write_string_value([[maybe_unused]] String const& domain, [[maybe_unused]] String const& group, [[maybe_unused]] String const& key, [[maybe_unused]] String const& value) override;
     virtual void write_i32_value([[maybe_unused]] String const& domain, [[maybe_unused]] String const& group, [[maybe_unused]] String const& key, [[maybe_unused]] i32 value) override;
     virtual void write_bool_value([[maybe_unused]] String const& domain, [[maybe_unused]] String const& group, [[maybe_unused]] String const& key, [[maybe_unused]] bool value) override;
+    virtual void remove_key([[maybe_unused]] String const& domain, [[maybe_unused]] String const& group, [[maybe_unused]] String const& key) override;
 
     bool validate_access(String const& domain, String const& group, String const& key);
     void sync_dirty_domains_to_disk();

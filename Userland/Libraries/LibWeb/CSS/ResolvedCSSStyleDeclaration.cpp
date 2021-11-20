@@ -374,21 +374,6 @@ static CSS::ValueID to_css_value_id(CSS::Overflow value)
     VERIFY_NOT_REACHED();
 }
 
-static CSS::ValueID to_css_value_id(CSS::Repeat value)
-{
-    switch (value) {
-    case Repeat::NoRepeat:
-        return CSS::ValueID::NoRepeat;
-    case Repeat::Repeat:
-        return CSS::ValueID::Repeat;
-    case Repeat::Round:
-        return CSS::ValueID::Round;
-    case Repeat::Space:
-        return CSS::ValueID::Space;
-    }
-    VERIFY_NOT_REACHED();
-}
-
 static CSS::ValueID to_css_value_id(CSS::ListStyleType value)
 {
     switch (value) {
@@ -660,22 +645,25 @@ RefPtr<StyleValue> ResolvedCSSStyleDeclaration::style_value_for_property(Layout:
         return ColorStyleValue::create(layout_node.computed_values().color());
     case PropertyID::BackgroundColor:
         return ColorStyleValue::create(layout_node.computed_values().background_color());
-    case CSS::PropertyID::BackgroundRepeatX:
-        return IdentifierStyleValue::create(to_css_value_id(layout_node.computed_values().background_repeat_x()));
-    case CSS::PropertyID::BackgroundRepeatY:
-        return IdentifierStyleValue::create(to_css_value_id(layout_node.computed_values().background_repeat_y()));
-    case CSS::PropertyID::BackgroundRepeat: {
-        auto maybe_background_repeat_x = property(CSS::PropertyID::BackgroundRepeatX);
-        auto maybe_background_repeat_y = property(CSS::PropertyID::BackgroundRepeatY);
-        return BackgroundRepeatStyleValue::create(value_or_default(maybe_background_repeat_x, IdentifierStyleValue::create(CSS::ValueID::RepeatX)), value_or_default(maybe_background_repeat_y, IdentifierStyleValue::create(CSS::ValueID::RepeatY)));
-    }
     case CSS::PropertyID::Background: {
         auto maybe_background_color = property(CSS::PropertyID::BackgroundColor);
         auto maybe_background_image = property(CSS::PropertyID::BackgroundImage);
-        auto maybe_background_repeat_x = property(CSS::PropertyID::BackgroundRepeatX);
-        auto maybe_background_repeat_y = property(CSS::PropertyID::BackgroundRepeatY);
+        auto maybe_background_position = property(CSS::PropertyID::BackgroundPosition);
+        auto maybe_background_size = property(CSS::PropertyID::BackgroundSize);
+        auto maybe_background_repeat = property(CSS::PropertyID::BackgroundRepeat);
+        auto maybe_background_attachment = property(CSS::PropertyID::BackgroundAttachment);
+        auto maybe_background_origin = property(CSS::PropertyID::BackgroundOrigin);
+        auto maybe_background_clip = property(CSS::PropertyID::BackgroundClip);
 
-        return BackgroundStyleValue::create(value_or_default(maybe_background_color, InitialStyleValue::the()), value_or_default(maybe_background_image, IdentifierStyleValue::create(CSS::ValueID::None)), value_or_default(maybe_background_repeat_x, IdentifierStyleValue::create(CSS::ValueID::RepeatX)), value_or_default(maybe_background_repeat_y, IdentifierStyleValue::create(CSS::ValueID::RepeatX)));
+        return BackgroundStyleValue::create(
+            value_or_default(maybe_background_color, InitialStyleValue::the()),
+            value_or_default(maybe_background_image, IdentifierStyleValue::create(CSS::ValueID::None)),
+            value_or_default(maybe_background_position, PositionStyleValue::create(PositionEdge::Left, Length::make_px(0), PositionEdge::Top, Length::make_px(0))),
+            value_or_default(maybe_background_size, IdentifierStyleValue::create(CSS::ValueID::Auto)),
+            value_or_default(maybe_background_repeat, BackgroundRepeatStyleValue::create(CSS::Repeat::Repeat, CSS::Repeat::Repeat)),
+            value_or_default(maybe_background_attachment, IdentifierStyleValue::create(CSS::ValueID::Scroll)),
+            value_or_default(maybe_background_origin, IdentifierStyleValue::create(CSS::ValueID::PaddingBox)),
+            value_or_default(maybe_background_clip, IdentifierStyleValue::create(CSS::ValueID::BorderBox)));
     }
     case CSS::PropertyID::ListStyleType:
         return IdentifierStyleValue::create(to_css_value_id(layout_node.computed_values().list_style_type()));

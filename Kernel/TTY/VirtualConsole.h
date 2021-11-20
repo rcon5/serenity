@@ -91,13 +91,13 @@ private:
     virtual void on_key_pressed(KeyEvent) override;
 
     // ^TTY
-    virtual KResultOr<size_t> on_tty_write(const UserOrKernelBuffer&, size_t) override;
+    virtual ErrorOr<size_t> on_tty_write(const UserOrKernelBuffer&, size_t) override;
     virtual KString const& tty_name() const override { return *m_tty_name; }
     virtual void echo(u8) override;
 
     // ^TerminalClient
     virtual void beep() override;
-    virtual void set_window_title(const StringView&) override;
+    virtual void set_window_title(StringView) override;
     virtual void set_window_progress(int, int) override;
     virtual void terminal_did_resize(u16 columns, u16 rows) override;
     virtual void terminal_history_changed(int) override;
@@ -123,7 +123,7 @@ private:
 
     void clear();
 
-    void inject_string(const StringView&);
+    void inject_string(StringView);
 
     Cell& cell_at(size_t column, size_t row);
 

@@ -23,18 +23,18 @@ static NonnullRefPtr<T> make_object(Args... args) requires(IsBaseOf<Object, T>)
     return adopt_ref(*new T(forward<Args>(args)...));
 }
 
-Vector<Command> Parser::parse_graphics_commands(ReadonlyBytes const& bytes)
+Vector<Command> Parser::parse_graphics_commands(ReadonlyBytes bytes)
 {
     auto parser = adopt_ref(*new Parser(bytes));
     return parser->parse_graphics_commands();
 }
 
-Parser::Parser(Badge<Document>, ReadonlyBytes const& bytes)
+Parser::Parser(Badge<Document>, ReadonlyBytes bytes)
     : m_reader(bytes)
 {
 }
 
-Parser::Parser(ReadonlyBytes const& bytes)
+Parser::Parser(ReadonlyBytes bytes)
     : m_reader(bytes)
 {
 }
@@ -273,8 +273,8 @@ bool Parser::initialize_hint_tables()
         if (!buffer_result.has_value())
             return false;
         possible_merged_stream_buffer = buffer_result.release_value();
-        auto ok = possible_merged_stream_buffer.try_append(primary_hint_stream->bytes());
-        ok = ok && possible_merged_stream_buffer.try_append(overflow_hint_stream->bytes());
+        auto ok = !possible_merged_stream_buffer.try_append(primary_hint_stream->bytes()).is_error();
+        ok = ok && !possible_merged_stream_buffer.try_append(overflow_hint_stream->bytes()).is_error();
         if (!ok)
             return false;
         hint_stream_bytes = possible_merged_stream_buffer.bytes();
@@ -408,7 +408,7 @@ RefPtr<DictObject> Parser::parse_file_trailer()
     return dict;
 }
 
-Optional<Parser::PageOffsetHintTable> Parser::parse_page_offset_hint_table(ReadonlyBytes const& hint_stream_bytes)
+Optional<Parser::PageOffsetHintTable> Parser::parse_page_offset_hint_table(ReadonlyBytes hint_stream_bytes)
 {
     if (hint_stream_bytes.size() < sizeof(PageOffsetHintTable))
         return {};
@@ -456,7 +456,7 @@ Optional<Parser::PageOffsetHintTable> Parser::parse_page_offset_hint_table(Reado
     return hint_table;
 }
 
-Optional<Vector<Parser::PageOffsetHintTableEntry>> Parser::parse_all_page_offset_hint_table_entries(PageOffsetHintTable const& hint_table, ReadonlyBytes const& hint_stream_bytes)
+Optional<Vector<Parser::PageOffsetHintTableEntry>> Parser::parse_all_page_offset_hint_table_entries(PageOffsetHintTable const& hint_table, ReadonlyBytes hint_stream_bytes)
 {
     InputMemoryStream input_stream(hint_stream_bytes);
     input_stream.seek(sizeof(PageOffsetHintTable));
@@ -1144,11 +1144,13 @@ bool Parser::matches_regular_character() const
 
 bool Parser::consume_eol()
 {
+    if (m_reader.done()) {
+        return false;
+    }
     if (m_reader.matches("\r\n")) {
         consume(2);
         return true;
     }
-
     auto consumed = consume();
     return consumed == 0xd || consumed == 0xa;
 }
@@ -1185,7 +1187,7 @@ namespace AK {
 
 template<>
 struct Formatter<PDF::Parser::LinearizationDictionary> : Formatter<StringView> {
-    void format(FormatBuilder& format_builder, PDF::Parser::LinearizationDictionary const& dict)
+    ErrorOr<void> format(FormatBuilder& format_builder, PDF::Parser::LinearizationDictionary const& dict)
     {
         StringBuilder builder;
         builder.append("{\n");
@@ -1200,13 +1202,13 @@ struct Formatter<PDF::Parser::LinearizationDictionary> : Formatter<StringView> {
         builder.appendff("  offset_of_main_xref_table={}\n", dict.offset_of_main_xref_table);
         builder.appendff("  first_page={}\n", dict.first_page);
         builder.append('}');
-        Formatter<StringView>::format(format_builder, builder.to_string());
+        return Formatter<StringView>::format(format_builder, builder.to_string());
     }
 };
 
 template<>
 struct Formatter<PDF::Parser::PageOffsetHintTable> : Formatter<StringView> {
-    void format(FormatBuilder& format_builder, PDF::Parser::PageOffsetHintTable const& table)
+    ErrorOr<void> format(FormatBuilder& format_builder, PDF::Parser::PageOffsetHintTable const& table)
     {
         StringBuilder builder;
         builder.append("{\n");
@@ -1224,13 +1226,13 @@ struct Formatter<PDF::Parser::PageOffsetHintTable> : Formatter<StringView> {
         builder.appendff("  bits_required_for_fraction_numerator={}\n", table.bits_required_for_fraction_numerator);
         builder.appendff("  shared_object_reference_fraction_denominator={}\n", table.shared_object_reference_fraction_denominator);
         builder.append('}');
-        Formatter<StringView>::format(format_builder, builder.to_string());
+        return Formatter<StringView>::format(format_builder, builder.to_string());
     }
 };
 
 template<>
 struct Formatter<PDF::Parser::PageOffsetHintTableEntry> : Formatter<StringView> {
-    void format(FormatBuilder& format_builder, PDF::Parser::PageOffsetHintTableEntry const& entry)
+    ErrorOr<void> format(FormatBuilder& format_builder, PDF::Parser::PageOffsetHintTableEntry const& entry)
     {
         StringBuilder builder;
         builder.append("{\n");
@@ -1248,7 +1250,7 @@ struct Formatter<PDF::Parser::PageOffsetHintTableEntry> : Formatter<StringView> 
         builder.appendff("  page_content_stream_offset_number={}\n", entry.page_content_stream_offset_number);
         builder.appendff("  page_content_stream_length_number={}\n", entry.page_content_stream_length_number);
         builder.append('}');
-        Formatter<StringView>::format(format_builder, builder.to_string());
+        return Formatter<StringView>::format(format_builder, builder.to_string());
     }
 };
 

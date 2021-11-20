@@ -19,34 +19,28 @@ static constexpr Array bitmask_last_byte = { 0x00, 0x1, 0x3, 0x7, 0xF, 0x1F, 0x3
 
 class BitmapView {
 public:
+    BitmapView() = default;
+
     BitmapView(u8* data, size_t size)
         : m_data(data)
         , m_size(size)
     {
     }
 
-    size_t size() const { return m_size; }
-    size_t size_in_bytes() const { return ceil_div(m_size, static_cast<size_t>(8)); }
-    bool get(size_t index) const
+    [[nodiscard]] size_t size() const { return m_size; }
+    [[nodiscard]] size_t size_in_bytes() const { return ceil_div(m_size, static_cast<size_t>(8)); }
+    [[nodiscard]] bool get(size_t index) const
     {
         VERIFY(index < m_size);
         return 0 != (m_data[index / 8] & (1u << (index % 8)));
     }
-    void set(size_t index, bool value) const
-    {
-        VERIFY(index < m_size);
-        if (value)
-            m_data[index / 8] |= static_cast<u8>((1u << (index % 8)));
-        else
-            m_data[index / 8] &= static_cast<u8>(~(1u << (index % 8)));
-    }
 
-    size_t count_slow(bool value) const
+    [[nodiscard]] size_t count_slow(bool value) const
     {
         return count_in_range(0, m_size, value);
     }
 
-    size_t count_in_range(size_t start, size_t len, bool value) const
+    [[nodiscard]] size_t count_in_range(size_t start, size_t len, bool value) const
     {
         VERIFY(start < m_size);
         VERIFY(start + len <= m_size);
@@ -92,9 +86,9 @@ public:
         return count;
     }
 
-    bool is_null() const { return !m_data; }
+    [[nodiscard]] bool is_null() const { return m_data == nullptr; }
 
-    const u8* data() const { return m_data; }
+    [[nodiscard]] const u8* data() const { return m_data; }
 
     template<bool VALUE>
     Optional<size_t> find_one_anywhere(size_t hint = 0) const
@@ -285,7 +279,7 @@ public:
             size_t trailing_bits = size() % 32;
             for (size_t i = 0; i < trailing_bits; ++i) {
                 if (!get(first_trailing_bit + i)) {
-                    if (!free_chunks)
+                    if (free_chunks == 0)
                         *start_of_free_chunks = first_trailing_bit + i;
                     if (++free_chunks >= min_length)
                         return min(free_chunks, max_length);
@@ -319,7 +313,7 @@ public:
         }
 
         found_range_size = max_region_size;
-        if (max_region_size) {
+        if (max_region_size != 0) {
             return max_region_start;
         }
         return {};
@@ -366,7 +360,7 @@ public:
 
     static constexpr size_t max_size = 0xffffffff;
 
-private:
+protected:
     u8* m_data { nullptr };
     size_t m_size { 0 };
 };

@@ -31,7 +31,7 @@ Track::~Track()
 
 void Track::fill_sample(Sample& sample)
 {
-    Audio::Frame new_sample;
+    Audio::Sample new_sample;
 
     for (size_t note = 0; note < note_count; ++note) {
         if (!m_roll_iterators[note].is_end()) {
@@ -72,7 +72,7 @@ void Track::fill_sample(Sample& sample)
             VERIFY_NOT_REACHED();
         }
 
-        Audio::Frame note_sample;
+        Audio::Sample note_sample;
         switch (m_wave) {
         case Wave::Sine:
             note_sample = sine(note);
@@ -123,7 +123,7 @@ void Track::reset()
         m_roll_iterators[note] = m_roll_notes[note].begin();
 }
 
-String Track::set_recorded_sample(const StringView& path)
+String Track::set_recorded_sample(StringView path)
 {
     NonnullRefPtr<Audio::Loader> loader = Audio::Loader::create(path);
     if (loader->has_error())
@@ -161,43 +161,43 @@ String Track::set_recorded_sample(const StringView& path)
 
 // All of the information for these waves is on Wikipedia.
 
-Audio::Frame Track::sine(size_t note)
+Audio::Sample Track::sine(size_t note)
 {
     double pos = note_frequencies[note] / sample_rate;
     double sin_step = pos * 2 * M_PI;
     double w = sin(m_pos[note]);
     m_pos[note] += sin_step;
-    return w;
+    return Audio::Sample { w };
 }
 
-Audio::Frame Track::saw(size_t note)
+Audio::Sample Track::saw(size_t note)
 {
     double saw_step = note_frequencies[note] / sample_rate;
     double t = m_pos[note];
     double w = (0.5 - (t - floor(t))) * 2;
     m_pos[note] += saw_step;
-    return w;
+    return Audio::Sample { w };
 }
 
-Audio::Frame Track::square(size_t note)
+Audio::Sample Track::square(size_t note)
 {
     double pos = note_frequencies[note] / sample_rate;
     double square_step = pos * 2 * M_PI;
     double w = AK::sin(m_pos[note]) >= 0 ? 1 : -1;
     m_pos[note] += square_step;
-    return w;
+    return Audio::Sample { w };
 }
 
-Audio::Frame Track::triangle(size_t note)
+Audio::Sample Track::triangle(size_t note)
 {
     double triangle_step = note_frequencies[note] / sample_rate;
     double t = m_pos[note];
     double w = AK::fabs(AK::fmod((4 * t) + 1, 4.) - 2) - 1.;
     m_pos[note] += triangle_step;
-    return w;
+    return Audio::Sample { w };
 }
 
-Audio::Frame Track::noise(size_t note)
+Audio::Sample Track::noise(size_t note)
 {
     double step = note_frequencies[note] / sample_rate;
     // m_pos keeps track of the time since the last random sample
@@ -207,14 +207,14 @@ Audio::Frame Track::noise(size_t note)
         m_last_w[note] = (random_percentage * 2) - 1;
         m_pos[note] = 0;
     }
-    return m_last_w[note];
+    return Audio::Sample { m_last_w[note] };
 }
 
-Audio::Frame Track::recorded_sample(size_t note)
+Audio::Sample Track::recorded_sample(size_t note)
 {
     int t = m_pos[note];
     if (t >= static_cast<int>(m_recorded_sample.size()))
-        return 0;
+        return {};
     double w_left = m_recorded_sample[t].left;
     double w_right = m_recorded_sample[t].right;
     if (t + 1 < static_cast<int>(m_recorded_sample.size())) {

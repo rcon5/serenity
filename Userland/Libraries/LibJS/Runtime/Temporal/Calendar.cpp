@@ -137,8 +137,9 @@ ThrowCompletionOr<Object*> calendar_merge_fields(GlobalObject& global_object, Ob
 }
 
 // 12.1.7 CalendarDateAdd ( calendar, date, duration, options [ , dateAdd ] ), https://tc39.es/proposal-temporal/#sec-temporal-calendardateadd
-ThrowCompletionOr<PlainDate*> calendar_date_add(GlobalObject& global_object, Object& calendar, PlainDate& date, Duration& duration, Object* options, FunctionObject* date_add)
+ThrowCompletionOr<PlainDate*> calendar_date_add(GlobalObject& global_object, Object& calendar, Value date, Duration& duration, Object* options, FunctionObject* date_add)
 {
+    // NOTE: `date` is a `Value` because we sometimes need to pass a PlainDate, sometimes a PlainDateTime, and sometimes undefined.
     auto& vm = global_object.vm();
 
     // 1. Assert: Type(calendar) is Object.
@@ -148,7 +149,7 @@ ThrowCompletionOr<PlainDate*> calendar_date_add(GlobalObject& global_object, Obj
         date_add = TRY(Value(&calendar).get_method(global_object, vm.names.dateAdd));
 
     // 3. Let addedDate be ? Call(dateAdd, calendar, « date, duration, options »).
-    auto added_date = TRY(call(global_object, date_add ?: js_undefined(), &calendar, &date, &duration, options ?: js_undefined()));
+    auto added_date = TRY(call(global_object, date_add ?: js_undefined(), &calendar, date, &duration, options ?: js_undefined()));
 
     // 4. Perform ? RequireInternalSlot(addedDate, [[InitializedTemporalDate]]).
     auto* added_date_object = TRY(added_date.to_object(global_object));
@@ -160,7 +161,7 @@ ThrowCompletionOr<PlainDate*> calendar_date_add(GlobalObject& global_object, Obj
 }
 
 // 12.1.8 CalendarDateUntil ( calendar, one, two, options [ , dateUntil ] ), https://tc39.es/proposal-temporal/#sec-temporal-calendardateuntil
-ThrowCompletionOr<Duration*> calendar_date_until(GlobalObject& global_object, Object& calendar, PlainDate& one, PlainDate& two, Object& options, FunctionObject* date_until)
+ThrowCompletionOr<Duration*> calendar_date_until(GlobalObject& global_object, Object& calendar, Value one, Value two, Object& options, FunctionObject* date_until)
 {
     auto& vm = global_object.vm();
 
@@ -171,7 +172,7 @@ ThrowCompletionOr<Duration*> calendar_date_until(GlobalObject& global_object, Ob
         date_until = TRY(Value(&calendar).get_method(global_object, vm.names.dateUntil));
 
     // 3. Let duration be ? Call(dateUntil, calendar, « one, two, options »).
-    auto duration = TRY(call(global_object, date_until ?: js_undefined(), &calendar, &one, &two, &options));
+    auto duration = TRY(call(global_object, date_until ?: js_undefined(), &calendar, one, two, &options));
 
     // 4. Perform ? RequireInternalSlot(duration, [[InitializedTemporalDuration]]).
     auto* duration_object = TRY(duration.to_object(global_object));
@@ -664,10 +665,10 @@ u8 to_iso_day_of_week(i32 year, u8 month, u8 day)
     auto normalized_year = year - (month < 3 ? 1 : 0);
     auto century = normalized_year / 100;
     auto truncated_year = normalized_year - (century * 100);
-    auto result = (day + static_cast<u8>((2.6 * normalized_month) - 0.2) - (2 * century) + truncated_year + (truncated_year / 4) + (century / 4)) % 7;
-    if (result <= 0) // Mathematical modulo
-        result += 7;
-    return result;
+    auto day_of_week = modulo(day + static_cast<u8>((2.6 * normalized_month) - 0.2) - (2 * century) + truncated_year + (truncated_year / 4) + (century / 4), 7);
+
+    // https://cs.uwaterloo.ca/~alopez-o/math-faq/node73.html computes day_of_week as 0 = Sunday, ..., 6 = Saturday, but for ToISODayOfWeek Monday is 1 and Sunday is 7.
+    return day_of_week == 0 ? 7 : day_of_week;
 }
 
 // 12.1.34 ToISODayOfYear ( year, month, day ), https://tc39.es/proposal-temporal/#sec-temporal-toisodayofyear
@@ -699,8 +700,12 @@ u8 to_iso_week_of_year(i32 year, u8 month, u8 day)
     auto week = (day_of_year - day_of_week + 10) / 7;
 
     if (week < 1) {
+        // NOTE: The resulting week is actually part of the previous year. If that year ends with a
+        // Thursday (i.e. the first day of the given year is a Friday, or day 5), or the previous
+        // year is a leap year and ends with a Friday (i.e. the first day of the given year is a
+        // Saturday, or day 6), it has 53 weeks, and 52 weeks otherwise.
         auto day_of_jump = to_iso_day_of_week(year, 1, 1);
-        if (day_of_jump == 5 || (is_iso_leap_year(year) && day_of_jump == 6))
+        if (day_of_jump == 5 || (is_iso_leap_year(year - 1) && day_of_jump == 6))
             return 53;
         else
             return 52;

@@ -19,7 +19,7 @@
 #include <signal.h>
 #include <unistd.h>
 
-void AK::Formatter<Shell::AST::Command>::format(FormatBuilder& builder, const Shell::AST::Command& value)
+ErrorOr<void> AK::Formatter<Shell::AST::Command>::format(FormatBuilder& builder, Shell::AST::Command const& value)
 {
     if (m_sign_mode != FormatBuilder::SignMode::Default)
         VERIFY_NOT_REACHED();
@@ -35,46 +35,46 @@ void AK::Formatter<Shell::AST::Command>::format(FormatBuilder& builder, const Sh
         VERIFY_NOT_REACHED();
 
     if (value.argv.is_empty()) {
-        builder.put_literal("(ShellInternal)");
+        TRY(builder.put_literal("(ShellInternal)"));
     } else {
         bool first = true;
         for (auto& arg : value.argv) {
             if (!first)
-                builder.put_literal(" ");
+                TRY(builder.put_literal(" "));
             first = false;
-            builder.put_literal(arg);
+            TRY(builder.put_literal(arg));
         }
     }
 
     for (auto& redir : value.redirections) {
-        builder.put_padding(' ', 1);
+        TRY(builder.put_padding(' ', 1));
         if (redir.is_path_redirection()) {
             auto path_redir = (const Shell::AST::PathRedirection*)&redir;
-            builder.put_i64(path_redir->fd);
+            TRY(builder.put_i64(path_redir->fd));
             switch (path_redir->direction) {
             case Shell::AST::PathRedirection::Read:
-                builder.put_literal("<");
+                TRY(builder.put_literal("<"));
                 break;
             case Shell::AST::PathRedirection::Write:
-                builder.put_literal(">");
+                TRY(builder.put_literal(">"));
                 break;
             case Shell::AST::PathRedirection::WriteAppend:
-                builder.put_literal(">>");
+                TRY(builder.put_literal(">>"));
                 break;
             case Shell::AST::PathRedirection::ReadWrite:
-                builder.put_literal("<>");
+                TRY(builder.put_literal("<>"));
                 break;
             }
-            builder.put_literal(path_redir->path);
+            TRY(builder.put_literal(path_redir->path));
         } else if (redir.is_fd_redirection()) {
             auto* fdredir = (const Shell::AST::FdRedirection*)&redir;
-            builder.put_i64(fdredir->new_fd);
-            builder.put_literal(">");
-            builder.put_i64(fdredir->old_fd);
+            TRY(builder.put_i64(fdredir->new_fd));
+            TRY(builder.put_literal(">"));
+            TRY(builder.put_i64(fdredir->old_fd));
         } else if (redir.is_close_redirection()) {
             auto close_redir = (const Shell::AST::CloseRedirection*)&redir;
-            builder.put_i64(close_redir->fd);
-            builder.put_literal(">&-");
+            TRY(builder.put_i64(close_redir->fd));
+            TRY(builder.put_literal(">&-"));
         } else {
             VERIFY_NOT_REACHED();
         }
@@ -84,23 +84,24 @@ void AK::Formatter<Shell::AST::Command>::format(FormatBuilder& builder, const Sh
         for (auto& command : value.next_chain) {
             switch (command.action) {
             case Shell::AST::NodeWithAction::And:
-                builder.put_literal(" && ");
+                TRY(builder.put_literal(" && "));
                 break;
             case Shell::AST::NodeWithAction::Or:
-                builder.put_literal(" || ");
+                TRY(builder.put_literal(" || "));
                 break;
             case Shell::AST::NodeWithAction::Sequence:
-                builder.put_literal("; ");
+                TRY(builder.put_literal("; "));
                 break;
             }
 
-            builder.put_literal("(");
-            builder.put_literal(command.node->class_name());
-            builder.put_literal("...)");
+            TRY(builder.put_literal("("));
+            TRY(builder.put_literal(command.node->class_name()));
+            TRY(builder.put_literal("...)"));
         }
     }
     if (!value.should_wait)
-        builder.put_literal("&");
+        TRY(builder.put_literal("&"));
+    return {};
 }
 
 namespace Shell::AST {
@@ -3583,24 +3584,24 @@ Vector<String> TildeValue::resolve_as_list(RefPtr<Shell> shell)
     return { resolve_slices(shell, shell->expand_tilde(builder.to_string()), m_slices) };
 }
 
-Result<NonnullRefPtr<Rewiring>, String> CloseRedirection::apply() const
+ErrorOr<NonnullRefPtr<Rewiring>> CloseRedirection::apply() const
 {
-    return adopt_ref(*new Rewiring(fd, fd, Rewiring::Close::ImmediatelyCloseNew));
+    return adopt_nonnull_ref_or_enomem(new (nothrow) Rewiring(fd, fd, Rewiring::Close::ImmediatelyCloseNew));
 }
 
 CloseRedirection::~CloseRedirection()
 {
 }
 
-Result<NonnullRefPtr<Rewiring>, String> PathRedirection::apply() const
+ErrorOr<NonnullRefPtr<Rewiring>> PathRedirection::apply() const
 {
-    auto check_fd_and_return = [my_fd = this->fd](int fd, const String& path) -> Result<NonnullRefPtr<Rewiring>, String> {
+    auto check_fd_and_return = [my_fd = this->fd](int fd, String const& path) -> ErrorOr<NonnullRefPtr<Rewiring>> {
         if (fd < 0) {
-            String error = strerror(errno);
+            auto error = Error::from_errno(errno);
             dbgln("open() failed for '{}' with {}", path, error);
             return error;
         }
-        return adopt_ref(*new Rewiring(fd, my_fd, Rewiring::Close::Old));
+        return adopt_nonnull_ref_or_enomem(new (nothrow) Rewiring(fd, my_fd, Rewiring::Close::Old));
     };
     switch (direction) {
     case AST::PathRedirection::WriteAppend:

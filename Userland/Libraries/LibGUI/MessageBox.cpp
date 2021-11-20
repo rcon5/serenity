@@ -13,7 +13,7 @@
 
 namespace GUI {
 
-int MessageBox::show(Window* parent_window, const StringView& text, const StringView& title, Type type, InputType input_type)
+int MessageBox::show(Window* parent_window, StringView text, StringView title, Type type, InputType input_type)
 {
     auto box = MessageBox::construct(parent_window, text, title, type, input_type);
     if (parent_window)
@@ -21,12 +21,12 @@ int MessageBox::show(Window* parent_window, const StringView& text, const String
     return box->exec();
 }
 
-int MessageBox::show_error(Window* parent_window, const StringView& text)
+int MessageBox::show_error(Window* parent_window, StringView text)
 {
     return show(parent_window, text, "Error", GUI::MessageBox::Type::Error, GUI::MessageBox::InputType::OK);
 }
 
-MessageBox::MessageBox(Window* parent_window, const StringView& text, const StringView& title, Type type, InputType input_type)
+MessageBox::MessageBox(Window* parent_window, StringView text, StringView title, Type type, InputType input_type)
     : Dialog(parent_window)
     , m_text(text)
     , m_type(type)
@@ -44,13 +44,13 @@ RefPtr<Gfx::Bitmap> MessageBox::icon() const
 {
     switch (m_type) {
     case Type::Information:
-        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-information.png");
+        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-information.png").release_value_but_fixme_should_propagate_errors();
     case Type::Warning:
-        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-warning.png");
+        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-warning.png").release_value_but_fixme_should_propagate_errors();
     case Type::Error:
-        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-error.png");
+        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-error.png").release_value_but_fixme_should_propagate_errors();
     case Type::Question:
-        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-question.png");
+        return Gfx::Bitmap::try_load_from_file("/res/icons/32x32/msgbox-question.png").release_value_but_fixme_should_propagate_errors();
     default:
         return nullptr;
     }

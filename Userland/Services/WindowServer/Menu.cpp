@@ -24,7 +24,7 @@
 
 namespace WindowServer {
 
-u32 find_ampersand_shortcut_character(const StringView& string)
+u32 find_ampersand_shortcut_character(StringView string)
 {
     Utf8View utf8_view { string };
     for (auto it = utf8_view.begin(); it != utf8_view.end(); ++it) {
@@ -638,7 +638,6 @@ void Menu::do_popup(const Gfx::IntPoint& position, bool make_input, bool as_subm
     }
 
     window.move_to(adjusted_pos);
-    set_visible(true);
     MenuManager::the().open_menu(*this, make_input);
     WindowManager::the().did_popup_a_menu({});
 }

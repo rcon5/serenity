@@ -20,6 +20,8 @@
 #include <LibJS/Runtime/ArrayConstructor.h>
 #include <LibJS/Runtime/ArrayIteratorPrototype.h>
 #include <LibJS/Runtime/ArrayPrototype.h>
+#include <LibJS/Runtime/AsyncFunctionConstructor.h>
+#include <LibJS/Runtime/AsyncFunctionPrototype.h>
 #include <LibJS/Runtime/AtomicsObject.h>
 #include <LibJS/Runtime/BigIntConstructor.h>
 #include <LibJS/Runtime/BigIntPrototype.h>
@@ -273,7 +275,6 @@ void GlobalObject::initialize_global_object()
 
     m_array_prototype_values_function = &m_array_prototype->get_without_side_effects(vm.names.values).as_function();
     m_eval_function = &get_without_side_effects(vm.names.eval).as_function();
-    m_temporal_time_zone_prototype_get_offset_nanoseconds_for_function = &m_temporal_time_zone_prototype->get_without_side_effects(vm.names.getOffsetNanosecondsFor).as_function();
 }
 
 GlobalObject::~GlobalObject()
@@ -291,7 +292,6 @@ void GlobalObject::visit_edges(Visitor& visitor)
     visitor.visit(m_generator_object_prototype);
     visitor.visit(m_array_prototype_values_function);
     visitor.visit(m_eval_function);
-    visitor.visit(m_temporal_time_zone_prototype_get_offset_nanoseconds_for_function);
     visitor.visit(m_throw_type_error_function);
 
 #define __JS_ENUMERATE(ClassName, snake_name, PrototypeName, ConstructorName, ArrayType) \

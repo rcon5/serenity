@@ -4,16 +4,11 @@
  * SPDX-License-Identifier: BSD-2-Clause
  */
 
-#include <AK/Bitmap.h>
-#include <AK/ByteBuffer.h>
 #include <AK/Debug.h>
 #include <AK/HashMap.h>
-#include <AK/LexicalPath.h>
 #include <AK/Math.h>
 #include <AK/MemoryStream.h>
-#include <AK/String.h>
 #include <AK/Vector.h>
-#include <LibGfx/Bitmap.h>
 #include <LibGfx/JPGLoader.h>
 
 #define JPG_INVALID 0X0000
@@ -1063,8 +1058,11 @@ static void ycbcr_to_rgb(const JPGLoadingContext& context, Vector<Macroblock>& m
 
 static bool compose_bitmap(JPGLoadingContext& context, const Vector<Macroblock>& macroblocks)
 {
-    context.bitmap = Bitmap::try_create(BitmapFormat::BGRx8888, { context.frame.width, context.frame.height });
-    if (!context.bitmap)
+    auto bitmap_or_error = Bitmap::try_create(BitmapFormat::BGRx8888, { context.frame.width, context.frame.height });
+    if (bitmap_or_error.is_error())
+        return false;
+    context.bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
+    if (bitmap_or_error.is_error())
         return false;
 
     for (u32 y = context.frame.height - 1; y < context.frame.height; y--) {
@@ -1220,34 +1218,6 @@ static bool decode_jpg(JPGLoadingContext& context)
     return true;
 }
 
-static RefPtr<Gfx::Bitmap> load_jpg_impl(const u8* data, size_t data_size)
-{
-    JPGLoadingContext context;
-    context.data = data;
-    context.data_size = data_size;
-
-    if (!decode_jpg(context))
-        return nullptr;
-
-    return context.bitmap;
-}
-
-RefPtr<Gfx::Bitmap> load_jpg(String const& path)
-{
-    auto file_or_error = MappedFile::map(path);
-    if (file_or_error.is_error())
-        return nullptr;
-    return load_jpg_from_memory((u8 const*)file_or_error.value()->data(), file_or_error.value()->size(), path);
-}
-
-RefPtr<Gfx::Bitmap> load_jpg_from_memory(u8 const* data, size_t length, String const& mmap_name)
-{
-    auto bitmap = load_jpg_impl(data, length);
-    if (bitmap)
-        bitmap->set_mmap_name(String::formatted("Gfx::Bitmap [{}] - Decoded jpg: {}", bitmap->size(), mmap_name));
-    return bitmap;
-}
-
 JPGImageDecoderPlugin::JPGImageDecoderPlugin(const u8* data, size_t size)
 {
     m_context = make<JPGLoadingContext>();
@@ -1268,21 +1238,6 @@ IntSize JPGImageDecoderPlugin::size()
         return { m_context->frame.width, m_context->frame.height };
 
     return {};
-}
-
-RefPtr<Gfx::Bitmap> JPGImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == JPGLoadingContext::State::Error)
-        return nullptr;
-    if (m_context->state < JPGLoadingContext::State::BitmapDecoded) {
-        if (!decode_jpg(*m_context)) {
-            m_context->state = JPGLoadingContext::State::Error;
-            return nullptr;
-        }
-        m_context->state = JPGLoadingContext::State::BitmapDecoded;
-    }
-
-    return m_context->bitmap;
 }
 
 void JPGImageDecoderPlugin::set_volatile()
@@ -1325,7 +1280,19 @@ ImageFrameDescriptor JPGImageDecoderPlugin::frame(size_t i)
 {
     if (i > 0)
         return {};
-    return { bitmap(), 0 };
+
+    if (m_context->state == JPGLoadingContext::State::Error)
+        return {};
+
+    if (m_context->state < JPGLoadingContext::State::BitmapDecoded) {
+        if (!decode_jpg(*m_context)) {
+            m_context->state = JPGLoadingContext::State::Error;
+            return {};
+        }
+        m_context->state = JPGLoadingContext::State::BitmapDecoded;
+    }
+
+    return { m_context->bitmap, 0 };
 }
 
 }

@@ -83,7 +83,7 @@ Optional<Symbol> symbolicate(String const& path, FlatPtr address, IncludeSourceP
     if (!s_cache.contains(full_path)) {
         auto mapped_file = MappedFile::map(full_path);
         if (mapped_file.is_error()) {
-            dbgln("Failed to map {}: {}", full_path, mapped_file.error().string());
+            dbgln("Failed to map {}: {}", full_path, mapped_file.error());
             s_cache.set(full_path, {});
             return {};
         }
@@ -158,7 +158,7 @@ Vector<Symbol> symbolicate_thread(pid_t pid, pid_t tid, IncludeSourcePosition in
         }
 
         auto json = JsonValue::from_string(file_or_error.value()->read_all());
-        if (!json.has_value() || !json.value().is_array()) {
+        if (json.is_error() || !json.value().is_array()) {
             warnln("Invalid contents in {}", stack_path);
             return {};
         }
@@ -178,7 +178,7 @@ Vector<Symbol> symbolicate_thread(pid_t pid, pid_t tid, IncludeSourcePosition in
         }
 
         auto json = JsonValue::from_string(file_or_error.value()->read_all());
-        if (!json.has_value() || !json.value().is_array()) {
+        if (json.is_error() || !json.value().is_array()) {
             warnln("Invalid contents in {}", vm_path);
             return {};
         }

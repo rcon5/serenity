@@ -9,13 +9,13 @@
 #include <LibGfx/Painter.h>
 #include <LibWeb/DOM/Document.h>
 #include <LibWeb/Dump.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <LibWeb/HTML/HTMLHtmlElement.h>
 #include <LibWeb/Layout/BlockContainer.h>
 #include <LibWeb/Layout/FormattingContext.h>
 #include <LibWeb/Layout/InitialContainingBlock.h>
 #include <LibWeb/Layout/Node.h>
 #include <LibWeb/Layout/TextNode.h>
-#include <LibWeb/Page/BrowsingContext.h>
 #include <typeinfo>
 
 namespace Web::Layout {
@@ -91,13 +91,13 @@ HitTestResult Node::hit_test(const Gfx::IntPoint& position, HitTestType type) co
     return result;
 }
 
-const BrowsingContext& Node::browsing_context() const
+HTML::BrowsingContext const& Node::browsing_context() const
 {
     VERIFY(document().browsing_context());
     return *document().browsing_context();
 }
 
-BrowsingContext& Node::browsing_context()
+HTML::BrowsingContext& Node::browsing_context()
 {
     VERIFY(document().browsing_context());
     return *document().browsing_context();
@@ -215,11 +215,127 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& specified_style)
             m_font_size = default_font_size;
     }
 
-    auto bgimage = specified_style.property(CSS::PropertyID::BackgroundImage);
-    if (bgimage.has_value() && bgimage.value()->is_image()) {
-        m_background_image = bgimage.value()->as_image();
-        m_background_image->load_bitmap(document());
+    {
+        auto attachments = specified_style.property(CSS::PropertyID::BackgroundAttachment);
+        auto clips = specified_style.property(CSS::PropertyID::BackgroundClip);
+        auto images = specified_style.property(CSS::PropertyID::BackgroundImage);
+        auto origins = specified_style.property(CSS::PropertyID::BackgroundOrigin);
+        auto positions = specified_style.property(CSS::PropertyID::BackgroundPosition);
+        auto repeats = specified_style.property(CSS::PropertyID::BackgroundRepeat);
+        auto sizes = specified_style.property(CSS::PropertyID::BackgroundSize);
+
+        auto count_layers = [](auto maybe_style_value) -> size_t {
+            if (maybe_style_value.has_value() && maybe_style_value.value()->is_value_list())
+                return maybe_style_value.value()->as_value_list().size();
+            else
+                return 1;
+        };
+
+        auto value_for_layer = [](auto maybe_style_value, size_t layer_index) -> RefPtr<CSS::StyleValue> {
+            if (!maybe_style_value.has_value())
+                return nullptr;
+            auto& style_value = maybe_style_value.value();
+            if (style_value->is_value_list())
+                return style_value->as_value_list().value_at(layer_index, true);
+            return style_value;
+        };
+
+        size_t layer_count = 1;
+        layer_count = max(layer_count, count_layers(attachments));
+        layer_count = max(layer_count, count_layers(clips));
+        layer_count = max(layer_count, count_layers(images));
+        layer_count = max(layer_count, count_layers(origins));
+        layer_count = max(layer_count, count_layers(positions));
+        layer_count = max(layer_count, count_layers(repeats));
+        layer_count = max(layer_count, count_layers(sizes));
+
+        Vector<CSS::BackgroundLayerData> layers;
+        layers.ensure_capacity(layer_count);
+
+        for (size_t layer_index = 0; layer_index < layer_count; layer_index++) {
+            CSS::BackgroundLayerData layer;
+
+            if (auto image_value = value_for_layer(images, layer_index); image_value && image_value->is_image()) {
+                layer.image = image_value->as_image();
+                layer.image->load_bitmap(document());
+            }
+
+            if (auto attachment_value = value_for_layer(attachments, layer_index); attachment_value && attachment_value->has_identifier()) {
+                switch (attachment_value->to_identifier()) {
+                case CSS::ValueID::Fixed:
+                    layer.attachment = CSS::BackgroundAttachment::Fixed;
+                    break;
+                case CSS::ValueID::Local:
+                    layer.attachment = CSS::BackgroundAttachment::Local;
+                    break;
+                case CSS::ValueID::Scroll:
+                    layer.attachment = CSS::BackgroundAttachment::Scroll;
+                    break;
+                default:
+                    break;
+                }
+            }
+
+            auto as_box = [](auto value_id) {
+                switch (value_id) {
+                case CSS::ValueID::BorderBox:
+                    return CSS::BackgroundBox::BorderBox;
+                case CSS::ValueID::ContentBox:
+                    return CSS::BackgroundBox::ContentBox;
+                case CSS::ValueID::PaddingBox:
+                    return CSS::BackgroundBox::PaddingBox;
+                default:
+                    VERIFY_NOT_REACHED();
+                }
+            };
+
+            if (auto origin_value = value_for_layer(origins, layer_index); origin_value && origin_value->has_identifier()) {
+                layer.origin = as_box(origin_value->to_identifier());
+            }
+
+            if (auto clip_value = value_for_layer(clips, layer_index); clip_value && clip_value->has_identifier()) {
+                layer.clip = as_box(clip_value->to_identifier());
+            }
+
+            if (auto position_value = value_for_layer(positions, layer_index); position_value && position_value->is_position()) {
+                auto& position = position_value->as_position();
+                layer.position_edge_x = position.edge_x();
+                layer.position_edge_y = position.edge_y();
+                layer.position_offset_x = position.offset_x();
+                layer.position_offset_y = position.offset_y();
+            }
+
+            if (auto size_value = value_for_layer(sizes, layer_index); size_value) {
+                if (size_value->is_background_size()) {
+                    auto& size = size_value->as_background_size();
+                    layer.size_type = CSS::BackgroundSize::LengthPercentage;
+                    layer.size_x = size.size_x();
+                    layer.size_y = size.size_y();
+                } else if (size_value->has_identifier()) {
+                    switch (size_value->to_identifier()) {
+                    case CSS::ValueID::Contain:
+                        layer.size_type = CSS::BackgroundSize::Contain;
+                        break;
+                    case CSS::ValueID::Cover:
+                        layer.size_type = CSS::BackgroundSize::Cover;
+                        break;
+                    default:
+                        break;
+                    }
+                }
+            }
+
+            if (auto repeat_value = value_for_layer(repeats, layer_index); repeat_value && repeat_value->is_background_repeat()) {
+                layer.repeat_x = repeat_value->as_background_repeat().repeat_x();
+                layer.repeat_y = repeat_value->as_background_repeat().repeat_y();
+            }
+
+            layers.append(move(layer));
+        }
+
+        computed_values.set_background_layers(move(layers));
     }
+    computed_values.set_background_color(specified_style.color_or_fallback(CSS::PropertyID::BackgroundColor, *this, CSS::InitialValues::background_color()));
 
     computed_values.set_box_sizing(specified_style.box_sizing());
 
@@ -239,14 +355,6 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& specified_style)
     auto border_top_right_radius = specified_style.property(CSS::PropertyID::BorderTopRightRadius);
     if (border_top_right_radius.has_value())
         computed_values.set_border_top_right_radius(border_top_right_radius.value()->to_length());
-
-    auto background_repeat_x = specified_style.background_repeat_x();
-    if (background_repeat_x.has_value())
-        computed_values.set_background_repeat_x(background_repeat_x.value());
-
-    auto background_repeat_y = specified_style.background_repeat_y();
-    if (background_repeat_y.has_value())
-        computed_values.set_background_repeat_y(background_repeat_y.value());
 
     computed_values.set_display(specified_style.display());
 
@@ -327,7 +435,6 @@ void NodeWithStyle::apply_style(const CSS::StyleProperties& specified_style)
     }
 
     computed_values.set_color(specified_style.color_or_fallback(CSS::PropertyID::Color, *this, CSS::InitialValues::color()));
-    computed_values.set_background_color(specified_style.color_or_fallback(CSS::PropertyID::BackgroundColor, *this, CSS::InitialValues::background_color()));
 
     computed_values.set_z_index(specified_style.z_index());
     computed_values.set_opacity(specified_style.opacity());
@@ -434,7 +541,6 @@ NonnullRefPtr<NodeWithStyle> NodeWithStyle::create_anonymous_wrapper() const
     wrapper->m_font = m_font;
     wrapper->m_font_size = m_font_size;
     wrapper->m_line_height = m_line_height;
-    wrapper->m_background_image = m_background_image;
     return wrapper;
 }
 

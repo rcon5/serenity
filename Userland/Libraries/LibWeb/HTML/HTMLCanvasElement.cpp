@@ -37,6 +37,16 @@ unsigned HTMLCanvasElement::height() const
     return attribute(HTML::AttributeNames::height).to_uint().value_or(150);
 }
 
+void HTMLCanvasElement::set_width(unsigned value)
+{
+    set_attribute(HTML::AttributeNames::width, String::number(value));
+}
+
+void HTMLCanvasElement::set_height(unsigned value)
+{
+    set_attribute(HTML::AttributeNames::height, String::number(value));
+}
+
 RefPtr<Layout::Node> HTMLCanvasElement::create_layout_node()
 {
     auto style = document().style_computer().compute_style(*this);
@@ -80,8 +90,12 @@ bool HTMLCanvasElement::create_bitmap()
         m_bitmap = nullptr;
         return false;
     }
-    if (!m_bitmap || m_bitmap->size() != size)
-        m_bitmap = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRA8888, size);
+    if (!m_bitmap || m_bitmap->size() != size) {
+        auto bitmap_or_error = Gfx::Bitmap::try_create(Gfx::BitmapFormat::BGRA8888, size);
+        if (bitmap_or_error.is_error())
+            return false;
+        m_bitmap = bitmap_or_error.release_value_but_fixme_should_propagate_errors();
+    }
     return m_bitmap;
 }
 

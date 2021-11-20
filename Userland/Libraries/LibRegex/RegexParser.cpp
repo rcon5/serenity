@@ -516,6 +516,20 @@ bool PosixBasicParser::parse_one_char_or_collation_element(ByteCode& bytecode, s
         return true;
     }
 
+    // Dollars are special if at the end of a pattern.
+    if (match(TokenType::Dollar)) {
+        consume();
+
+        // If we are at the end of a pattern, emit an end check instruction.
+        if (match(TokenType::Eof)) {
+            bytecode.empend((ByteCodeValueType)OpCodeId::CheckEnd);
+            return true;
+        }
+
+        // We are not at the end of the string, so we should roll back and continue as normal.
+        back(2);
+    }
+
     // None of these are special in BRE.
     if (match(TokenType::Char) || match(TokenType::Questionmark) || match(TokenType::RightParen) || match(TokenType::HyphenMinus)
         || match(TokenType::Circumflex) || match(TokenType::RightCurly) || match(TokenType::Comma) || match(TokenType::Colon)
@@ -1139,7 +1153,7 @@ StringView ECMA262Parser::read_digits_as_string(ReadDigitsInitialZeroState initi
     size_t offset = 0;
     auto start_token = m_parser_state.current_token;
     while (match(TokenType::Char)) {
-        auto& c = m_parser_state.current_token.value();
+        auto const c = m_parser_state.current_token.value();
 
         if (max_count > 0 && count >= max_count)
             break;

@@ -21,7 +21,7 @@ constexpr auto round_up_to_power_of_two(T value, U power_of_two) requires(IsInte
 //
 // clang-format off
 #ifndef AK_DONT_REPLACE_STD
-namespace std {
+namespace std { // NOLINT(cert-dcl58-cpp) Names in std to aid tools
 
 // NOTE: These are in the "std" namespace since some compilers and static analyzers rely on it.
 
@@ -141,19 +141,20 @@ constexpr bool is_constant_evaluated()
     constexpr type abs(type num)                    \
     {                                               \
         if (is_constant_evaluated())                \
-            return num < zero ? -num : num;         \
-        else                                        \
-            return __builtin_##intrinsic(num);      \
+            return num < (zero) ? -num : num;       \
+        return __builtin_##intrinsic(num);          \
     }
 
 __DEFINE_GENERIC_ABS(int, 0, abs);
-__DEFINE_GENERIC_ABS(long, 0l, labs);
-__DEFINE_GENERIC_ABS(long long, 0ll, llabs);
+__DEFINE_GENERIC_ABS(long, 0L, labs);
+__DEFINE_GENERIC_ABS(long long, 0LL, llabs);
 #ifndef KERNEL
-__DEFINE_GENERIC_ABS(float, 0.0f, fabsf);
+__DEFINE_GENERIC_ABS(float, 0.0F, fabsf);
 __DEFINE_GENERIC_ABS(double, 0.0, fabs);
-__DEFINE_GENERIC_ABS(long double, 0.0l, fabsl);
+__DEFINE_GENERIC_ABS(long double, 0.0L, fabsl);
 #endif
+
+#undef __DEFINE_GENERIC_ABS
 
 }
 

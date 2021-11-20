@@ -120,19 +120,17 @@ public:
     String title() const;
     void set_title(const String&);
 
-    void attach_to_browsing_context(Badge<BrowsingContext>, BrowsingContext&);
-    void detach_from_browsing_context(Badge<BrowsingContext>, BrowsingContext&);
+    void attach_to_browsing_context(Badge<HTML::BrowsingContext>, HTML::BrowsingContext&);
+    void detach_from_browsing_context(Badge<HTML::BrowsingContext>, HTML::BrowsingContext&);
 
-    BrowsingContext* browsing_context() { return m_browsing_context.ptr(); }
-    const BrowsingContext* browsing_context() const { return m_browsing_context.ptr(); }
+    HTML::BrowsingContext* browsing_context() { return m_browsing_context.ptr(); }
+    HTML::BrowsingContext const* browsing_context() const { return m_browsing_context.ptr(); }
 
     Page* page();
     const Page* page() const;
 
     Color background_color(const Gfx::Palette&) const;
-    RefPtr<Gfx::Bitmap> background_image() const;
-    CSS::Repeat background_repeat_x() const;
-    CSS::Repeat background_repeat_y() const;
+    Vector<CSS::BackgroundLayerData> const* background_layers() const;
 
     Color link_color() const;
     void set_link_color(Color);
@@ -177,7 +175,7 @@ public:
     JS::Realm& realm();
     JS::Interpreter& interpreter();
 
-    JS::Value run_javascript(const StringView& source, const StringView& filename = "(unknown)");
+    JS::Value run_javascript(StringView source, StringView filename = "(unknown)");
 
     NonnullRefPtr<Element> create_element(const String& tag_name);
     NonnullRefPtr<Element> create_element_ns(const String& namespace_, const String& qualifed_name);
@@ -341,7 +339,7 @@ private:
     RefPtr<CSS::StyleSheetList> m_style_sheets;
     RefPtr<Node> m_hovered_node;
     RefPtr<Node> m_inspected_node;
-    WeakPtr<BrowsingContext> m_browsing_context;
+    WeakPtr<HTML::BrowsingContext> m_browsing_context;
     AK::URL m_url;
 
     RefPtr<Window> m_window;

@@ -29,7 +29,6 @@
 #include <Kernel/PerformanceEventBuffer.h>
 #include <Kernel/PerformanceManager.h>
 #include <Kernel/Process.h>
-#include <Kernel/ProcessExposed.h>
 #include <Kernel/Sections.h>
 #include <Kernel/StdLib.h>
 #include <Kernel/TTY/TTY.h>
@@ -103,7 +102,7 @@ void Process::kill_threads_except_self()
     if (thread_count() <= 1)
         return;
 
-    auto current_thread = Thread::current();
+    auto* current_thread = Thread::current();
     for_each_thread([&](Thread& thread) {
         if (&thread == current_thread)
             return;
@@ -140,23 +139,20 @@ void Process::register_new(Process& process)
     });
 }
 
-KResultOr<NonnullRefPtr<Process>> Process::try_create_user_process(RefPtr<Thread>& first_thread, StringView path, UserID uid, GroupID gid, NonnullOwnPtrVector<KString> arguments, NonnullOwnPtrVector<KString> environment, TTY* tty)
+ErrorOr<NonnullRefPtr<Process>> Process::try_create_user_process(RefPtr<Thread>& first_thread, StringView path, UserID uid, GroupID gid, NonnullOwnPtrVector<KString> arguments, NonnullOwnPtrVector<KString> environment, TTY* tty)
 {
     auto parts = path.split_view('/');
     if (arguments.is_empty()) {
         auto last_part = TRY(KString::try_create(parts.last()));
-        if (!arguments.try_append(move(last_part)))
-            return ENOMEM;
+        TRY(arguments.try_append(move(last_part)));
     }
 
     auto path_string = TRY(KString::try_create(path));
     auto name = TRY(KString::try_create(parts.last()));
     auto process = TRY(Process::try_create(first_thread, move(name), uid, gid, ProcessID(0), false, VirtualFileSystem::the().root_custody(), nullptr, tty));
 
-    if (!process->m_fds.try_resize(process->m_fds.max_open())) {
-        first_thread = nullptr;
-        return ENOMEM;
-    }
+    TRY(process->m_fds.try_resize(Process::OpenFileDescriptions::max_open()));
+
     auto& device_to_use_as_tty = tty ? (CharacterDevice&)*tty : DeviceManagement::the().null_device();
     auto description = TRY(device_to_use_as_tty.open(O_RDWR));
     auto setup_description = [&process, &description](int fd) {
@@ -168,9 +164,9 @@ KResultOr<NonnullRefPtr<Process>> Process::try_create_user_process(RefPtr<Thread
     setup_description(2);
 
     if (auto result = process->exec(move(path_string), move(arguments), move(environment)); result.is_error()) {
-        dbgln("Failed to exec {}: {}", path, result);
+        dbgln("Failed to exec {}: {}", path, result.error());
         first_thread = nullptr;
-        return result;
+        return result.release_error();
     }
 
     register_new(*process);
@@ -218,7 +214,7 @@ void Process::unprotect_data()
     });
 }
 
-KResultOr<NonnullRefPtr<Process>> Process::try_create(RefPtr<Thread>& first_thread, NonnullOwnPtr<KString> name, UserID uid, GroupID gid, ProcessID ppid, bool is_kernel_process, RefPtr<Custody> cwd, RefPtr<Custody> executable, TTY* tty, Process* fork_parent)
+ErrorOr<NonnullRefPtr<Process>> Process::try_create(RefPtr<Thread>& first_thread, NonnullOwnPtr<KString> name, UserID uid, GroupID gid, ProcessID ppid, bool is_kernel_process, RefPtr<Custody> cwd, RefPtr<Custody> executable, TTY* tty, Process* fork_parent)
 {
     auto space = TRY(Memory::AddressSpace::try_create(fork_parent ? &fork_parent->address_space() : nullptr));
     auto process = TRY(adopt_nonnull_ref_or_enomem(new (nothrow) Process(move(name), uid, gid, ppid, is_kernel_process, move(cwd), move(executable), tty)));
@@ -249,7 +245,7 @@ Process::Process(NonnullOwnPtr<KString> name, UserID uid, GroupID gid, ProcessID
     dbgln_if(PROCESS_DEBUG, "Created new process {}({})", m_name, this->pid().value());
 }
 
-KResult Process::attach_resources(NonnullOwnPtr<Memory::AddressSpace>&& preallocated_space, RefPtr<Thread>& first_thread, Process* fork_parent)
+ErrorOr<void> Process::attach_resources(NonnullOwnPtr<Memory::AddressSpace>&& preallocated_space, RefPtr<Thread>& first_thread, Process* fork_parent)
 {
     m_space = move(preallocated_space);
 
@@ -270,7 +266,7 @@ KResult Process::attach_resources(NonnullOwnPtr<Memory::AddressSpace>&& prealloc
     }
 
     m_procfs_traits = TRY(ProcessProcFSTraits::try_create({}, *this));
-    return KSuccess;
+    return {};
 }
 
 Process::~Process()
@@ -382,7 +378,7 @@ void Process::crash(int signal, FlatPtr ip, bool out_of_memory)
         dbgln("\033[31;1mOut of memory\033[m, killing: {}", *this);
     } else {
         if (ip >= kernel_load_base && g_kernel_symbols_available) {
-            auto* symbol = symbolicate_kernel_address(ip);
+            auto const* symbol = symbolicate_kernel_address(ip);
             dbgln("\033[31;1m{:p}  {} +{}\033[0m\n", ip, (symbol ? symbol->name : "(k?)"), (symbol ? ip - symbol->address : 0));
         } else {
             dbgln("\033[31;1m{:p}  (?)\033[0m\n", ip);
@@ -406,7 +402,7 @@ void Process::crash(int signal, FlatPtr ip, bool out_of_memory)
 RefPtr<Process> Process::from_pid(ProcessID pid)
 {
     return processes().with([&](const auto& list) -> RefPtr<Process> {
-        for (auto& process : list) {
+        for (auto const& process : list) {
             if (process.pid() == pid)
                 return &process;
         }
@@ -420,7 +416,7 @@ const Process::OpenFileDescriptionAndFlags* Process::OpenFileDescriptions::get_i
     if (m_fds_metadatas.size() <= i)
         return nullptr;
 
-    if (auto& metadata = m_fds_metadatas[i]; metadata.is_valid())
+    if (auto const& metadata = m_fds_metadatas[i]; metadata.is_valid())
         return &metadata;
 
     return nullptr;
@@ -450,7 +446,7 @@ Process::OpenFileDescriptionAndFlags& Process::OpenFileDescriptions::at(size_t i
     return m_fds_metadatas[i];
 }
 
-KResultOr<NonnullRefPtr<OpenFileDescription>> Process::OpenFileDescriptions::open_file_description(int fd) const
+ErrorOr<NonnullRefPtr<OpenFileDescription>> Process::OpenFileDescriptions::open_file_description(int fd) const
 {
     SpinlockLocker lock(m_fds_lock);
     if (fd < 0)
@@ -466,7 +462,7 @@ KResultOr<NonnullRefPtr<OpenFileDescription>> Process::OpenFileDescriptions::ope
 void Process::OpenFileDescriptions::enumerate(Function<void(const OpenFileDescriptionAndFlags&)> callback) const
 {
     SpinlockLocker lock(m_fds_lock);
-    for (auto& file_description_metadata : m_fds_metadatas) {
+    for (auto const& file_description_metadata : m_fds_metadatas) {
         callback(file_description_metadata);
     }
 }
@@ -489,7 +485,7 @@ size_t Process::OpenFileDescriptions::open_count() const
     return count;
 }
 
-KResultOr<Process::ScopedDescriptionAllocation> Process::OpenFileDescriptions::allocate(int first_candidate_fd)
+ErrorOr<Process::ScopedDescriptionAllocation> Process::OpenFileDescriptions::allocate(int first_candidate_fd)
 {
     SpinlockLocker lock(m_fds_lock);
     for (size_t i = first_candidate_fd; i < max_open(); ++i) {
@@ -506,14 +502,14 @@ Time kgettimeofday()
     return TimeManagement::now();
 }
 
-siginfo_t Process::wait_info()
+siginfo_t Process::wait_info() const
 {
     siginfo_t siginfo {};
     siginfo.si_signo = SIGCHLD;
     siginfo.si_pid = pid().value();
     siginfo.si_uid = uid().value();
 
-    if (m_protected_values.termination_signal) {
+    if (m_protected_values.termination_signal != 0) {
         siginfo.si_status = m_protected_values.termination_signal;
         siginfo.si_code = CLD_KILLED;
     } else {
@@ -530,7 +526,7 @@ Custody& Process::current_directory()
     return *m_cwd;
 }
 
-KResultOr<NonnullOwnPtr<KString>> Process::get_syscall_path_argument(Userspace<char const*> user_path, size_t path_length) const
+ErrorOr<NonnullOwnPtr<KString>> Process::get_syscall_path_argument(Userspace<char const*> user_path, size_t path_length)
 {
     if (path_length == 0)
         return EINVAL;
@@ -539,7 +535,7 @@ KResultOr<NonnullOwnPtr<KString>> Process::get_syscall_path_argument(Userspace<c
     return try_copy_kstring_from_user(user_path, path_length);
 }
 
-KResultOr<NonnullOwnPtr<KString>> Process::get_syscall_path_argument(Syscall::StringArgument const& path) const
+ErrorOr<NonnullOwnPtr<KString>> Process::get_syscall_path_argument(Syscall::StringArgument const& path)
 {
     Userspace<char const*> path_characters((FlatPtr)path.characters);
     return get_syscall_path_argument(path_characters, path.length);
@@ -637,7 +633,7 @@ void Process::finalize()
     {
         // FIXME: PID/TID BUG
         if (auto parent_thread = Thread::from_tid(ppid().value())) {
-            if (!(parent_thread->m_signal_action_data[SIGCHLD].flags & SA_NOCLDWAIT))
+            if ((parent_thread->m_signal_action_data[SIGCHLD].flags & SA_NOCLDWAIT) != SA_NOCLDWAIT)
                 parent_thread->send_signal(SIGCHLD, this);
         }
     }
@@ -734,7 +730,7 @@ void Process::terminate_due_to_signal(u8 signal)
     die();
 }
 
-KResult Process::send_signal(u8 signal, Process* sender)
+ErrorOr<void> Process::send_signal(u8 signal, Process* sender)
 {
     // Try to send it to the "obvious" main thread:
     auto receiver_thread = Thread::from_tid(pid().value());
@@ -749,7 +745,7 @@ KResult Process::send_signal(u8 signal, Process* sender)
     }
     if (receiver_thread) {
         receiver_thread->send_signal(signal, sender);
-        return KSuccess;
+        return {};
     }
     return ESRCH;
 }
@@ -799,10 +795,10 @@ void Process::set_tty(TTY* tty)
     m_tty = tty;
 }
 
-KResult Process::start_tracing_from(ProcessID tracer)
+ErrorOr<void> Process::start_tracing_from(ProcessID tracer)
 {
     m_tracer = TRY(ThreadTracer::try_create(tracer));
-    return KSuccess;
+    return {};
 }
 
 void Process::stop_tracing()
@@ -861,7 +857,7 @@ void Process::set_dumpable(bool dumpable)
     m_protected_values.dumpable = dumpable;
 }
 
-KResult Process::set_coredump_property(NonnullOwnPtr<KString> key, NonnullOwnPtr<KString> value)
+ErrorOr<void> Process::set_coredump_property(NonnullOwnPtr<KString> key, NonnullOwnPtr<KString> value)
 {
     // Write it into the first available property slot.
     for (auto& slot : m_coredump_properties) {
@@ -869,12 +865,12 @@ KResult Process::set_coredump_property(NonnullOwnPtr<KString> key, NonnullOwnPtr
             continue;
         slot.key = move(key);
         slot.value = move(value);
-        return KSuccess;
+        return {};
     }
     return ENOBUFS;
 }
 
-KResult Process::try_set_coredump_property(StringView key, StringView value)
+ErrorOr<void> Process::try_set_coredump_property(StringView key, StringView value)
 {
     auto key_kstring = TRY(KString::try_create(key));
     auto value_kstring = TRY(KString::try_create(value));
@@ -893,7 +889,7 @@ static constexpr StringView to_string(Pledge promise)
     VERIFY_NOT_REACHED();
 }
 
-void Process::require_no_promises()
+void Process::require_no_promises() const
 {
     if (!has_promises())
         return;

@@ -27,14 +27,14 @@ public:
     static bool is_initialized();
     bool initialize();
 
-    static KResultOr<NonnullOwnPtr<KString>> generate_interface_name_from_pci_address(PCI::DeviceIdentifier const&);
+    static ErrorOr<NonnullOwnPtr<KString>> generate_interface_name_from_pci_address(PCI::DeviceIdentifier const&);
 
     NetworkingManagement();
 
     void for_each(Function<void(NetworkAdapter&)>);
 
     RefPtr<NetworkAdapter> from_ipv4_address(const IPv4Address&) const;
-    RefPtr<NetworkAdapter> lookup_by_name(const StringView&) const;
+    RefPtr<NetworkAdapter> lookup_by_name(StringView) const;
 
     NonnullRefPtr<NetworkAdapter> loopback_adapter() const;
 

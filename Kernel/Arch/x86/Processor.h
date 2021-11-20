@@ -120,12 +120,12 @@ public:
     void detect_hypervisor();
     void detect_hypervisor_hyperv(CPUID const& hypervisor_leaf_range);
 
-    void idle_begin()
+    void idle_begin() const
     {
         s_idle_cpu_mask.fetch_or(1u << m_cpu, AK::MemoryOrder::memory_order_relaxed);
     }
 
-    void idle_end()
+    void idle_end() const
     {
         s_idle_cpu_mask.fetch_and(~(1u << m_cpu), AK::MemoryOrder::memory_order_relaxed);
     }
@@ -304,12 +304,12 @@ private:
     {
         VERIFY(m_in_critical > 0);
         if (m_in_critical == 1) {
-            if (!m_in_irq) {
+            if (m_in_irq == 0) {
                 deferred_call_execute_pending();
                 VERIFY(m_in_critical == 1);
             }
             m_in_critical = 0;
-            if (!m_in_irq)
+            if (m_in_irq == 0)
                 check_invoke_scheduler();
         } else {
             m_in_critical = m_in_critical - 1;
@@ -327,7 +327,7 @@ public:
         auto prev_critical = in_critical();
         write_gs_ptr(__builtin_offsetof(Processor, m_in_critical), 0);
         auto& proc = current();
-        if (!proc.m_in_irq)
+        if (proc.m_in_irq == 0)
             proc.check_invoke_scheduler();
         return prev_critical;
     }

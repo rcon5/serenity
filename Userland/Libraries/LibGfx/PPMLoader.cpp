@@ -101,16 +101,6 @@ static bool read_image_data(PPMLoadingContext& context, Streamer& streamer)
     return true;
 }
 
-RefPtr<Gfx::Bitmap> load_ppm(const StringView& path)
-{
-    return load<PPMLoadingContext>(path);
-}
-
-RefPtr<Gfx::Bitmap> load_ppm_from_memory(u8 const* data, size_t length, String const& mmap_name)
-{
-    return load_from_memory<PPMLoadingContext>(data, length, mmap_name);
-}
-
 PPMImageDecoderPlugin::PPMImageDecoderPlugin(const u8* data, size_t size)
 {
     m_context = make<PPMLoadingContext>();
@@ -134,21 +124,6 @@ IntSize PPMImageDecoderPlugin::size()
     }
 
     return { m_context->width, m_context->height };
-}
-
-RefPtr<Gfx::Bitmap> PPMImageDecoderPlugin::bitmap()
-{
-    if (m_context->state == PPMLoadingContext::State::Error)
-        return nullptr;
-
-    if (m_context->state < PPMLoadingContext::State::Decoded) {
-        bool success = decode(*m_context);
-        if (!success)
-            return nullptr;
-    }
-
-    VERIFY(m_context->bitmap);
-    return m_context->bitmap;
 }
 
 void PPMImageDecoderPlugin::set_volatile()
@@ -198,7 +173,18 @@ ImageFrameDescriptor PPMImageDecoderPlugin::frame(size_t i)
 {
     if (i > 0)
         return {};
-    return { bitmap(), 0 };
+
+    if (m_context->state == PPMLoadingContext::State::Error)
+        return {};
+
+    if (m_context->state < PPMLoadingContext::State::Decoded) {
+        bool success = decode(*m_context);
+        if (!success)
+            return {};
+    }
+
+    VERIFY(m_context->bitmap);
+    return { m_context->bitmap, 0 };
 }
 
 }

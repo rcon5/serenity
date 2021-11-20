@@ -6,10 +6,10 @@
 
 #pragma once
 
+#include <AK/Error.h>
 #include <AK/RefCounted.h>
 #include <AK/RefPtr.h>
 #include <AK/StringView.h>
-#include <Kernel/API/KResult.h>
 #include <Kernel/FileSystem/InodeIdentifier.h>
 #include <Kernel/Forward.h>
 #include <Kernel/Locking/Mutex.h>
@@ -26,12 +26,12 @@ class FileSystem : public RefCounted<FileSystem> {
 public:
     virtual ~FileSystem();
 
-    unsigned fsid() const { return m_fsid; }
-    static FileSystem* from_fsid(u32);
+    FileSystemID fsid() const { return m_fsid; }
+    static FileSystem* from_fsid(FileSystemID);
     static void sync();
     static void lock_all();
 
-    virtual KResult initialize() = 0;
+    virtual ErrorOr<void> initialize() = 0;
     virtual StringView class_name() const = 0;
     virtual Inode& root_inode() = 0;
     virtual bool supports_watchers() const { return false; }
@@ -43,10 +43,10 @@ public:
     virtual unsigned total_inode_count() const { return 0; }
     virtual unsigned free_inode_count() const { return 0; }
 
-    virtual KResult prepare_to_unmount() { return KSuccess; }
+    virtual ErrorOr<void> prepare_to_unmount() { return {}; }
 
     struct DirectoryEntryView {
-        DirectoryEntryView(const StringView& name, InodeIdentifier, u8 file_type);
+        DirectoryEntryView(StringView name, InodeIdentifier, u8 file_type);
 
         StringView name;
         InodeIdentifier inode;
@@ -72,13 +72,13 @@ protected:
     mutable Mutex m_lock { "FS" };
 
 private:
-    unsigned m_fsid { 0 };
+    FileSystemID m_fsid;
     u64 m_block_size { 0 };
     size_t m_fragment_size { 0 };
     bool m_readonly { false };
 };
 
-inline FileSystem* InodeIdentifier::fs()
+inline FileSystem* InodeIdentifier::fs() // NOLINT(readability-make-member-function-const) const InodeIdentifiers should not be able to modify the FileSystem
 {
     return FileSystem::from_fsid(m_fsid);
 }
@@ -94,7 +94,7 @@ namespace AK {
 
 template<>
 struct Traits<Kernel::InodeIdentifier> : public GenericTraits<Kernel::InodeIdentifier> {
-    static unsigned hash(const Kernel::InodeIdentifier& inode) { return pair_int_hash(inode.fsid(), inode.index().value()); }
+    static unsigned hash(const Kernel::InodeIdentifier& inode) { return pair_int_hash(inode.fsid().value(), inode.index().value()); }
 };
 
 }

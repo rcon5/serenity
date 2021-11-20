@@ -16,7 +16,7 @@
 
 namespace AK {
 
-Vector<u16, 1> utf8_to_utf16(StringView const&);
+Vector<u16, 1> utf8_to_utf16(StringView);
 Vector<u16, 1> utf8_to_utf16(Utf8View const&);
 Vector<u16, 1> utf32_to_utf16(Utf32View const&);
 void code_point_to_utf16(Vector<u16, 1>&, u32);
@@ -123,9 +123,9 @@ private:
 
 template<>
 struct AK::Formatter<AK::Utf16View> : Formatter<FormatString> {
-    void format(FormatBuilder& builder, AK::Utf16View const& value)
+    ErrorOr<void> format(FormatBuilder& builder, AK::Utf16View const& value)
     {
-        return builder.builder().append(value);
+        return builder.builder().try_append(value);
     }
 };
 

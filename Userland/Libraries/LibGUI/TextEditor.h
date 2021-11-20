@@ -57,7 +57,7 @@ public:
     virtual void set_document(TextDocument&);
 
     String const& placeholder() const { return m_placeholder; }
-    void set_placeholder(StringView const& placeholder) { m_placeholder = placeholder; }
+    void set_placeholder(StringView placeholder) { m_placeholder = placeholder; }
 
     TextDocumentLine& current_line() { return line(m_cursor.line()); }
     TextDocumentLine const& current_line() const { return line(m_cursor.line()); }
@@ -108,7 +108,7 @@ public:
     Function<void()> on_focusin;
     Function<void()> on_focusout;
 
-    void set_text(StringView const&, AllowCallback = AllowCallback::Yes);
+    void set_text(StringView, AllowCallback = AllowCallback::Yes);
     void scroll_cursor_into_view();
     void scroll_position_into_view(TextPosition const&);
     size_t line_count() const { return document().line_count(); }
@@ -121,7 +121,7 @@ public:
     TextPosition cursor() const { return m_cursor; }
     TextRange normalized_selection() const { return m_selection.normalized(); }
 
-    void insert_at_cursor_or_replace_selection(StringView const&);
+    void insert_at_cursor_or_replace_selection(StringView);
     bool write_to_file(String const& path);
     bool write_to_file_and_close(int fd);
     bool has_selection() const { return m_selection.is_valid(); }
@@ -166,7 +166,6 @@ public:
     Action& cut_action() { return *m_cut_action; }
     Action& copy_action() { return *m_copy_action; }
     Action& paste_action() { return *m_paste_action; }
-    Action& delete_action() { return *m_delete_action; }
     Action& go_to_line_action() { return *m_go_to_line_action; }
     Action& select_all_action() { return *m_select_all_action; }
 
@@ -365,7 +364,6 @@ private:
     RefPtr<Action> m_cut_action;
     RefPtr<Action> m_copy_action;
     RefPtr<Action> m_paste_action;
-    RefPtr<Action> m_delete_action;
     RefPtr<Action> m_go_to_line_action;
     RefPtr<Action> m_select_all_action;
     Core::ElapsedTimer m_triple_click_timer;

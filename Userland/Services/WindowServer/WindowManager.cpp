@@ -63,13 +63,13 @@ void WindowManager::reload_config()
 {
     m_config = Core::ConfigFile::open("/etc/WindowServer.ini", Core::ConfigFile::AllowWriting::Yes);
 
-    unsigned virtual_desktop_rows = (unsigned)m_config->read_num_entry("VirtualDesktop", "Rows", default_window_stack_rows);
-    unsigned virtual_desktop_columns = (unsigned)m_config->read_num_entry("VirtualDesktop", "Columns", default_window_stack_columns);
-    if (virtual_desktop_rows == 0 || virtual_desktop_columns == 0 || virtual_desktop_rows > max_window_stack_rows || virtual_desktop_columns > max_window_stack_columns) {
-        virtual_desktop_rows = default_window_stack_rows;
-        virtual_desktop_columns = default_window_stack_columns;
+    unsigned workspace_rows = (unsigned)m_config->read_num_entry("Workspace", "Rows", default_window_stack_rows);
+    unsigned workspace_columns = (unsigned)m_config->read_num_entry("Workspace", "Columns", default_window_stack_columns);
+    if (workspace_rows == 0 || workspace_columns == 0 || workspace_rows > max_window_stack_rows || workspace_columns > max_window_stack_columns) {
+        workspace_rows = default_window_stack_rows;
+        workspace_columns = default_window_stack_columns;
     }
-    apply_virtual_desktop_settings(virtual_desktop_rows, virtual_desktop_columns, false);
+    apply_workspace_settings(workspace_rows, workspace_columns, false);
 
     m_double_click_speed = m_config->read_num_entry("Input", "DoubleClickSpeed", 250);
     m_buttons_switched = m_config->read_bool_entry("Mouse", "ButtonsSwitched", false);
@@ -139,7 +139,7 @@ bool WindowManager::save_screen_layout(String& error_msg)
     return true;
 }
 
-bool WindowManager::apply_virtual_desktop_settings(unsigned rows, unsigned columns, bool save)
+bool WindowManager::apply_workspace_settings(unsigned rows, unsigned columns, bool save)
 {
     VERIFY(rows != 0);
     VERIFY(rows <= max_window_stack_rows);
@@ -230,7 +230,7 @@ bool WindowManager::apply_virtual_desktop_settings(unsigned rows, unsigned colum
         for (auto* window_moved : windows_moved)
             WindowManager::the().tell_wms_window_state_changed(*window_moved);
 
-        tell_wms_screen_rects_changed(); // updates the available virtual desktops
+        tell_wms_screen_rects_changed(); // updates the available workspaces
         if (current_stack_row != new_current_row || current_stack_column != new_current_column)
             tell_wms_current_window_stack_changed();
 
@@ -239,8 +239,8 @@ bool WindowManager::apply_virtual_desktop_settings(unsigned rows, unsigned colum
     }
 
     if (save) {
-        m_config->write_num_entry("VirtualDesktop", "Rows", window_stack_rows());
-        m_config->write_num_entry("VirtualDesktop", "Columns", window_stack_columns());
+        m_config->write_num_entry("Workspace", "Rows", window_stack_rows());
+        m_config->write_num_entry("Workspace", "Columns", window_stack_columns());
         return m_config->sync();
     }
     return true;
@@ -459,10 +459,10 @@ void WindowManager::tell_wm_about_current_window_stack(WMClientConnection& conn)
 {
     if (conn.window_id() < 0)
         return;
-    if (!(conn.event_mask() & WMEventMask::VirtualDesktopChanges))
+    if (!(conn.event_mask() & WMEventMask::WorkspaceChanges))
         return;
     auto& window_stack = current_window_stack();
-    conn.async_virtual_desktop_changed(conn.window_id(), window_stack.row(), window_stack.column());
+    conn.async_workspace_changed(conn.window_id(), window_stack.row(), window_stack.column());
 }
 
 void WindowManager::tell_wms_window_state_changed(Window& window)
@@ -588,7 +588,7 @@ void WindowManager::notify_rect_changed(Window& window, Gfx::IntRect const& old_
     if (window.type() == WindowType::Applet)
         AppletManager::the().relayout();
 
-    reevaluate_hovered_window(&window);
+    reevaluate_hover_state_for_window(&window);
 }
 
 void WindowManager::notify_opacity_changed(Window&)
@@ -1284,7 +1284,7 @@ void WindowManager::process_mouse_event(MouseEvent& event)
     process_mouse_event_for_window(result.value(), event);
 }
 
-void WindowManager::reevaluate_hovered_window(Window* updated_window)
+void WindowManager::reevaluate_hover_state_for_window(Window* updated_window)
 {
     if (m_dnd_client || m_resize_window || m_move_window || m_cursor_tracking_button || MenuManager::the().has_open_menu())
         return;
@@ -1492,7 +1492,7 @@ void WindowManager::did_switch_window_stack(Badge<Compositor>, WindowStack& prev
     if (!new_stack_active_input_window)
         pick_new_active_window(nullptr);
 
-    reevaluate_hovered_window();
+    reevaluate_hover_state_for_window();
 
     tell_wms_current_window_stack_changed();
 }
@@ -1662,10 +1662,12 @@ void WindowManager::set_highlight_window(Window* new_highlight_window)
         m_highlight_window = new_highlight_window->make_weak_ptr<Window>();
 
     if (previous_highlight_window) {
+        reevaluate_hover_state_for_window(previous_highlight_window);
         previous_highlight_window->invalidate(true, true);
         Compositor::the().invalidate_screen(previous_highlight_window->frame().render_rect());
     }
     if (new_highlight_window) {
+        reevaluate_hover_state_for_window(new_highlight_window);
         new_highlight_window->invalidate(true, true);
         Compositor::the().invalidate_screen(new_highlight_window->frame().render_rect());
     }
@@ -1766,7 +1768,7 @@ void WindowManager::set_active_window(Window* new_active_window, bool make_input
     if (new_active_window) {
         window_stack.set_active_window(new_active_window);
         notify_new_active_window(*new_active_window);
-        reevaluate_hovered_window(new_active_window);
+        reevaluate_hover_state_for_window(new_active_window);
     }
 
     // Window shapes may have changed (e.g. shadows for inactive/active windows)
@@ -1958,7 +1960,7 @@ void WindowManager::did_popup_a_menu(Badge<Menu>)
     if (!active_input_tracking_window)
         return;
     active_input_tracking_window->set_automatic_cursor_tracking_enabled(false);
-    active_input_tracking_window = nullptr;
+    current_window_stack().set_active_input_tracking_window(nullptr);
 }
 
 void WindowManager::minimize_windows(Window& window, bool minimized)
@@ -1992,10 +1994,10 @@ void WindowManager::maximize_windows(Window& window, bool maximized)
     });
 }
 
-void WindowManager::set_pinned(Window& window, bool pinned)
+void WindowManager::set_always_on_top(Window& window, bool always_on_top)
 {
     for_each_window_in_modal_stack(window, [&](auto& w, bool) {
-        w.set_pinned(pinned);
+        w.set_always_on_top(always_on_top);
         return IterationDecision::Continue;
     });
 }

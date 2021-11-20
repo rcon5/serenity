@@ -524,7 +524,7 @@ void VM::run_queued_promise_jobs()
     dbgln_if(PROMISE_DEBUG, "Running queued promise jobs");
     // Temporarily get rid of the exception, if any - job functions must be called
     // either way, and that can't happen if we already have an exception stored.
-    TemporaryClearException clear_exception(*this);
+    TemporaryClearException temporary_clear_exception(*this);
     while (!m_promise_jobs.is_empty()) {
         auto* job = m_promise_jobs.take_first();
         dbgln_if(PROMISE_DEBUG, "Calling promise job function @ {}", job);
@@ -535,16 +535,25 @@ void VM::run_queued_promise_jobs()
         if (m_execution_context_stack.is_empty()) {
             static FlyString promise_execution_context_name = "(promise execution context)";
             execution_context.function_name = promise_execution_context_name;
-            push_execution_context(execution_context, job->global_object());
+            // FIXME: Propagate potential failure
+            MUST(push_execution_context(execution_context, job->global_object()));
             pushed_execution_context = true;
         }
 
         [[maybe_unused]] auto result = call(*job, js_undefined());
 
+        // This doesn't match the spec, it actually defines that Job Abstract Closures must return
+        // a normal completion. In reality that's not the case however, and all major engines clear
+        // exceptions when running Promise jobs. See the commit where these two lines were initially
+        // added for a much more detailed explanation.
+        clear_exception();
+        stop_unwind();
+
         if (pushed_execution_context)
             pop_execution_context();
     }
     // Ensure no job has created a new exception, they must clean up after themselves.
+    // If they don't, we help a little (see above) so that this assumption remains valid.
     VERIFY(!m_exception);
 }
 

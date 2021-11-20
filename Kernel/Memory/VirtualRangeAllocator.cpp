@@ -17,20 +17,22 @@ VirtualRangeAllocator::VirtualRangeAllocator()
 {
 }
 
-void VirtualRangeAllocator::initialize_with_range(VirtualAddress base, size_t size)
+ErrorOr<void> VirtualRangeAllocator::initialize_with_range(VirtualAddress base, size_t size)
 {
     m_total_range = { base, size };
-    m_available_ranges.insert(base.get(), VirtualRange { base, size });
+    TRY(m_available_ranges.try_insert(base.get(), VirtualRange { base, size }));
+    return {};
 }
 
-void VirtualRangeAllocator::initialize_from_parent(VirtualRangeAllocator const& parent_allocator)
+ErrorOr<void> VirtualRangeAllocator::initialize_from_parent(VirtualRangeAllocator const& parent_allocator)
 {
     SpinlockLocker lock(parent_allocator.m_lock);
     m_total_range = parent_allocator.m_total_range;
     m_available_ranges.clear();
     for (auto it = parent_allocator.m_available_ranges.begin(); !it.is_end(); ++it) {
-        m_available_ranges.insert(it.key(), *it);
+        TRY(m_available_ranges.try_insert(it.key(), VirtualRange(*it)));
     }
+    return {};
 }
 
 void VirtualRangeAllocator::dump() const
@@ -56,7 +58,7 @@ void VirtualRangeAllocator::carve_from_region(VirtualRange const& from, VirtualR
     }
 }
 
-KResultOr<VirtualRange> VirtualRangeAllocator::try_allocate_randomized(size_t size, size_t alignment)
+ErrorOr<VirtualRange> VirtualRangeAllocator::try_allocate_randomized(size_t size, size_t alignment)
 {
     if (!size)
         return EINVAL;
@@ -80,7 +82,7 @@ KResultOr<VirtualRange> VirtualRangeAllocator::try_allocate_randomized(size_t si
     return try_allocate_anywhere(size, alignment);
 }
 
-KResultOr<VirtualRange> VirtualRangeAllocator::try_allocate_anywhere(size_t size, size_t alignment)
+ErrorOr<VirtualRange> VirtualRangeAllocator::try_allocate_anywhere(size_t size, size_t alignment)
 {
     if (!size)
         return EINVAL;
@@ -129,7 +131,7 @@ KResultOr<VirtualRange> VirtualRangeAllocator::try_allocate_anywhere(size_t size
     return ENOMEM;
 }
 
-KResultOr<VirtualRange> VirtualRangeAllocator::try_allocate_specific(VirtualAddress base, size_t size)
+ErrorOr<VirtualRange> VirtualRangeAllocator::try_allocate_specific(VirtualAddress base, size_t size)
 {
     if (!size)
         return EINVAL;

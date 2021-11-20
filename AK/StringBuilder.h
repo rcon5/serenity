@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -21,7 +21,20 @@ public:
     explicit StringBuilder(size_t initial_capacity = inline_capacity);
     ~StringBuilder() = default;
 
-    void append(StringView const&);
+    ErrorOr<void> try_append(StringView);
+    ErrorOr<void> try_append(Utf16View const&);
+    ErrorOr<void> try_append(Utf32View const&);
+    ErrorOr<void> try_append_code_point(u32);
+    ErrorOr<void> try_append(char);
+    template<typename... Parameters>
+    ErrorOr<void> try_appendff(CheckedFormatString<Parameters...>&& fmtstr, Parameters const&... parameters)
+    {
+        VariadicFormatParams variadic_format_params { parameters... };
+        return vformat(*this, fmtstr.view(), variadic_format_params);
+    }
+    ErrorOr<void> try_append(char const*, size_t);
+
+    void append(StringView);
     void append(Utf16View const&);
     void append(Utf32View const&);
     void append(char);
@@ -30,13 +43,13 @@ public:
     void appendvf(char const*, va_list);
 
     void append_as_lowercase(char);
-    void append_escaped_for_json(StringView const&);
+    void append_escaped_for_json(StringView);
 
     template<typename... Parameters>
     void appendff(CheckedFormatString<Parameters...>&& fmtstr, Parameters const&... parameters)
     {
         VariadicFormatParams variadic_format_params { parameters... };
-        vformat(*this, fmtstr.view(), variadic_format_params);
+        MUST(vformat(*this, fmtstr.view(), variadic_format_params));
     }
 
     [[nodiscard]] String build() const;
@@ -64,7 +77,7 @@ public:
     }
 
 private:
-    bool will_append(size_t);
+    ErrorOr<void> will_append(size_t);
     u8* data() { return m_buffer.data(); }
     u8 const* data() const { return m_buffer.data(); }
 

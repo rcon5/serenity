@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2021, Idan Horowitz <idan.horowitz@serenityos.org>
  * Copyright (c) 2021, Linus Groh <linusg@serenityos.org>
+ * Copyright (c) 2021, Luke Wilde <lukew@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
  */
@@ -224,6 +225,33 @@ ThrowCompletionOr<String> to_temporal_rounding_mode(GlobalObject& global_object,
     return option.as_string().string();
 }
 
+// 13.9 NegateTemporalRoundingMode ( roundingMode ), https://tc39.es/proposal-temporal/#sec-temporal-negatetemporalroundingmode
+StringView negate_temporal_rounding_mode(String const& rounding_mode)
+{
+    // 1. If roundingMode is "ceil", return "floor".
+    if (rounding_mode == "ceil"sv)
+        return "floor"sv;
+
+    // 2. If roundingMode is "floor", return "ceil".
+    if (rounding_mode == "floor"sv)
+        return "ceil"sv;
+
+    // 3. Return roundingMode.
+    return rounding_mode;
+}
+
+// 13.10 ToTemporalOffset ( normalizedOptions, fallback ), https://tc39.es/proposal-temporal/#sec-temporal-totemporaloffset
+ThrowCompletionOr<String> to_temporal_offset(GlobalObject& global_object, Object const& normalized_options, String const& fallback)
+{
+    auto& vm = global_object.vm();
+
+    // 1. Return ? GetOption(normalizedOptions, "offset", « String », « "prefer", "use", "ignore", "reject" », fallback).
+    auto option = TRY(get_option(global_object, normalized_options, vm.names.offset, { OptionType::String }, { "prefer"sv, "use"sv, "ignore"sv, "reject"sv }, js_string(vm, fallback)));
+
+    VERIFY(option.is_string());
+    return option.as_string().string();
+}
+
 // 13.11 ToShowCalendarOption ( normalizedOptions ), https://tc39.es/proposal-temporal/#sec-temporal-toshowcalendaroption
 ThrowCompletionOr<String> to_show_calendar_option(GlobalObject& global_object, Object const& normalized_options)
 {
@@ -231,6 +259,30 @@ ThrowCompletionOr<String> to_show_calendar_option(GlobalObject& global_object, O
 
     // 1. Return ? GetOption(normalizedOptions, "calendarName", « String », « "auto", "always", "never" », "auto").
     auto option = TRY(get_option(global_object, normalized_options, vm.names.calendarName, { OptionType::String }, { "auto"sv, "always"sv, "never"sv }, js_string(vm, "auto"sv)));
+
+    VERIFY(option.is_string());
+    return option.as_string().string();
+}
+
+// 13.12 ToShowTimeZoneNameOption ( normalizedOptions ), https://tc39.es/proposal-temporal/#sec-temporal-toshowtimezonenameoption
+ThrowCompletionOr<String> to_show_time_zone_name_option(GlobalObject& global_object, Object const& normalized_options)
+{
+    auto& vm = global_object.vm();
+
+    // 1. Return ? GetOption(normalizedOptions, "timeZoneName", « String », « "auto", "never" », "auto").
+    auto option = TRY(get_option(global_object, normalized_options, vm.names.timeZoneName, { OptionType::String }, { "auto"sv, "never"sv }, js_string(vm, "auto"sv)));
+
+    VERIFY(option.is_string());
+    return option.as_string().string();
+}
+
+// 13.13 ToShowOffsetOption ( normalizedOptions ), https://tc39.es/proposal-temporal/#sec-temporal-toshowoffsetoption
+ThrowCompletionOr<String> to_show_offset_option(GlobalObject& global_object, Object const& normalized_options)
+{
+    auto& vm = global_object.vm();
+
+    // 1. Return ? GetOption(normalizedOptions, "offset", « String », « "auto", "never" », "auto").
+    auto option = TRY(get_option(global_object, normalized_options, vm.names.offset, { OptionType::String }, { "auto"sv, "never"sv }, js_string(vm, "auto"sv)));
 
     VERIFY(option.is_string());
     return option.as_string().string();
@@ -478,6 +530,178 @@ ThrowCompletionOr<Optional<String>> to_smallest_temporal_unit(GlobalObject& glob
     return smallest_unit;
 }
 
+// 13.19 ToTemporalDurationTotalUnit ( normalizedOptions ), https://tc39.es/proposal-temporal/#sec-temporal-totemporaldurationtotalunit
+ThrowCompletionOr<String> to_temporal_duration_total_unit(GlobalObject& global_object, Object const& normalized_options)
+{
+    auto& vm = global_object.vm();
+
+    // 1. Let unit be ? GetOption(normalizedOptions, "unit", « String », « "year", "years", "month", "months", "week", "weeks", "day", "days", "hour", "hours", "minute", "minutes", "second", "seconds", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds" », undefined).
+    auto unit_value = TRY(get_option(global_object, normalized_options, vm.names.unit, { OptionType::String }, { "year"sv, "years"sv, "month"sv, "months"sv, "week"sv, "weeks"sv, "day"sv, "days"sv, "hour"sv, "hours"sv, "minute"sv, "minutes"sv, "second"sv, "seconds"sv, "millisecond"sv, "milliseconds"sv, "microsecond"sv, "microseconds"sv, "nanosecond"sv, "nanoseconds"sv }, js_undefined()));
+
+    // 2. If unit is undefined, then
+    if (unit_value.is_undefined()) {
+        // a. Throw a RangeError exception.
+        return vm.throw_completion<RangeError>(global_object, ErrorType::IsUndefined, "unit option value"sv);
+    }
+
+    auto unit = unit_value.as_string().string();
+
+    // 3. If unit is in the Plural column of Table 12, then
+    if (auto singular_unit = plural_to_singular_units.get(unit); singular_unit.has_value()) {
+        // a. Set unit to the corresponding Singular value of the same row.
+        unit = *singular_unit;
+    }
+
+    // 4. Return unit.
+    return unit;
+}
+
+// 13.21 ToRelativeTemporalObject ( options ), https://tc39.es/proposal-temporal/#sec-temporal-torelativetemporalobject
+ThrowCompletionOr<Value> to_relative_temporal_object(GlobalObject& global_object, Object const& options)
+{
+    auto& vm = global_object.vm();
+
+    // 1. Assert: Type(options) is Object.
+
+    // 2. Let value be ? Get(options, "relativeTo").
+    auto value = TRY(options.get(vm.names.relativeTo));
+
+    // 3. If value is undefined, then
+    if (value.is_undefined()) {
+        // a. Return value.
+        return value;
+    }
+
+    // 4. Let offsetBehaviour be option.
+    auto offset_behavior = OffsetBehavior::Option;
+
+    // 5. Let matchBehaviour be match exactly.
+    auto match_behavior = MatchBehavior::MatchExactly;
+
+    ISODateTime result;
+    Value offset_string;
+    Value time_zone;
+    Object* calendar = nullptr;
+
+    // 6. If Type(value) is Object, then
+    if (value.is_object()) {
+        auto& value_object = value.as_object();
+
+        // a. If value has either an [[InitializedTemporalDate]] or [[InitializedTemporalZonedDateTime]] internal slot, then
+        if (is<PlainDate>(value_object) || is<ZonedDateTime>(value_object)) {
+            // i. Return value.
+            return value;
+        }
+
+        // b. If value has an [[InitializedTemporalDateTime]] internal slot, then
+        if (is<PlainDateTime>(value_object)) {
+            auto& plain_date_time = static_cast<PlainDateTime&>(value_object);
+
+            // i. Return ? CreateTemporalDate(value.[[ISOYear]], value.[[ISOMonth]], value.[[ISODay]], 0, 0, 0, 0, 0, 0, value.[[Calendar]]).
+            return TRY(create_temporal_date(global_object, plain_date_time.iso_year(), plain_date_time.iso_month(), plain_date_time.iso_day(), plain_date_time.calendar()));
+        }
+
+        // c. Let calendar be ? GetTemporalCalendarWithISODefault(value).
+        calendar = TRY(get_temporal_calendar_with_iso_default(global_object, value_object));
+
+        // d. Let fieldNames be ? CalendarFields(calendar, « "day", "hour", "microsecond", "millisecond", "minute", "month", "monthCode", "nanosecond", "second", "year" »).
+        auto field_names = TRY(calendar_fields(global_object, *calendar, { "day"sv, "hour"sv, "microsecond"sv, "millisecond"sv, "minute"sv, "month"sv, "monthCode"sv, "nanosecond"sv, "second"sv, "year"sv }));
+
+        // e. Let fields be ? PrepareTemporalFields(value, fieldNames, «»).
+        auto* fields = TRY(prepare_temporal_fields(global_object, value_object, field_names, {}));
+
+        // f. Let dateOptions be ! OrdinaryObjectCreate(null).
+        auto* date_options = Object::create(global_object, nullptr);
+
+        // g. Perform ! CreateDataPropertyOrThrow(dateOptions, "overflow", "constrain").
+        MUST(date_options->create_data_property_or_throw(vm.names.overflow, js_string(vm, "constrain"sv)));
+
+        // h. Let result be ? InterpretTemporalDateTimeFields(calendar, fields, dateOptions).
+        result = TRY(interpret_temporal_date_time_fields(global_object, *calendar, *fields, *date_options));
+
+        // i. Let offsetString be ? Get(value, "offset").
+        offset_string = TRY(value_object.get(vm.names.offset));
+
+        // j. Let timeZone be ? Get(value, "timeZone").
+        time_zone = TRY(value_object.get(vm.names.timeZone));
+
+        // k. If offsetString is undefined, then
+        if (offset_string.is_undefined()) {
+            // i. Set offsetBehaviour to wall.
+            offset_behavior = OffsetBehavior::Wall;
+        }
+    }
+    // 7. Else,
+    else {
+        // a. Let string be ? ToString(value).
+        auto string = TRY(value.to_string(global_object));
+
+        // b. Let result be ? ParseTemporalRelativeToString(string).
+        auto parsed_result = TRY(parse_temporal_relative_to_string(global_object, string));
+
+        // NOTE: The ISODateTime struct inside `parsed_result` will be moved into `result` at the end of this path to avoid mismatching names.
+        //       Thus, all remaining references to `result` in this path actually refer to `parsed_result`.
+
+        // c. Let calendar be ? ToTemporalCalendarWithISODefault(result.[[Calendar]]).
+        calendar = TRY(to_temporal_calendar_with_iso_default(global_object, parsed_result.date_time.calendar.has_value() ? js_string(vm, *parsed_result.date_time.calendar) : js_undefined()));
+
+        // d. Let offsetString be result.[[TimeZoneOffset]].
+        offset_string = parsed_result.time_zone.offset.has_value() ? js_string(vm, *parsed_result.time_zone.offset) : js_undefined();
+
+        // e. Let timeZone be result.[[TimeZoneIANAName]].
+        time_zone = parsed_result.time_zone.name.has_value() ? js_string(vm, *parsed_result.time_zone.name) : js_undefined();
+
+        // f. If result.[[TimeZoneZ]] is true, then
+        if (parsed_result.time_zone.z) {
+            // i. Set offsetBehaviour to exact.
+            offset_behavior = OffsetBehavior::Exact;
+        }
+        // g. Else if offsetString is undefined, then
+        else if (offset_string.is_undefined()) {
+            // i. Set offsetBehaviour to wall.
+            offset_behavior = OffsetBehavior::Wall;
+        }
+
+        // h. Set matchBehaviour to match minutes.
+        match_behavior = MatchBehavior::MatchMinutes;
+
+        // See NOTE above about why this is done.
+        result = move(parsed_result.date_time);
+    }
+
+    // 8. If timeZone is not undefined, then
+    if (!time_zone.is_undefined()) {
+        // a. Set timeZone to ? ToTemporalTimeZone(timeZone).
+        time_zone = TRY(to_temporal_time_zone(global_object, time_zone));
+
+        double offset_ns;
+
+        // b. If offsetBehaviour is option, then
+        if (offset_behavior == OffsetBehavior::Option) {
+            // i. Set offsetString to ? ToString(offsetString).
+            // NOTE: offsetString is not used after this path, so we don't need to put this into the original offset_string which is of type JS::Value.
+            auto actual_offset_string = TRY(offset_string.to_string(global_object));
+
+            // ii. Let offsetNs be ? ParseTimeZoneOffsetString(offsetString).
+            offset_ns = TRY(parse_time_zone_offset_string(global_object, actual_offset_string));
+        }
+        // c. Else,
+        else {
+            // i. Let offsetNs be 0.
+            offset_ns = 0;
+        }
+
+        // d. Let epochNanoseconds be ? InterpretISODateTimeOffset(result.[[Year]], result.[[Month]], result.[[Day]], result.[[Hour]], result.[[Minute]], result.[[Second]], result.[[Millisecond]], result.[[Microsecond]], result.[[Nanosecond]], offsetBehaviour, offsetNs, timeZone, "compatible", "reject", matchBehaviour).
+        auto* epoch_nanoseconds = TRY(interpret_iso_date_time_offset(global_object, result.year, result.month, result.day, result.hour, result.minute, result.second, result.millisecond, result.microsecond, result.nanosecond, offset_behavior, offset_ns, time_zone, "compatible"sv, "reject"sv, match_behavior));
+
+        // e. Return ! CreateTemporalZonedDateTime(epochNanoseconds, timeZone, calendar).
+        return MUST(create_temporal_zoned_date_time(global_object, *epoch_nanoseconds, time_zone.as_object(), *calendar));
+    }
+
+    // 9. Return ! CreateTemporalDate(result.[[Year]], result.[[Month]], result.[[Day]], calendar).
+    return TRY(create_temporal_date(global_object, result.year, result.month, result.day, *calendar));
+}
+
 // 13.22 ValidateTemporalUnitRange ( largestUnit, smallestUnit ), https://tc39.es/proposal-temporal/#sec-temporal-validatetemporalunitrange
 ThrowCompletionOr<void> validate_temporal_unit_range(GlobalObject& global_object, StringView largest_unit, StringView smallest_unit)
 {
@@ -623,8 +847,8 @@ Optional<u16> maximum_temporal_duration_rounding_increment(StringView unit)
     return 1000;
 }
 
-// 13.26 RejectTemporalCalendarType ( object ), https://tc39.es/proposal-temporal/#sec-temporal-rejecttemporalcalendartype
-ThrowCompletionOr<void> reject_temporal_calendar_type(GlobalObject& global_object, Object& object)
+// 13.26 RejectObjectWithCalendarOrTimeZone ( object ), https://tc39.es/proposal-temporal/#sec-temporal-rejectobjectwithcalendarortimezone
+ThrowCompletionOr<void> reject_object_with_calendar_or_time_zone(GlobalObject& global_object, Object& object)
 {
     auto& vm = global_object.vm();
 
@@ -633,7 +857,25 @@ ThrowCompletionOr<void> reject_temporal_calendar_type(GlobalObject& global_objec
     // 2. If object has an [[InitializedTemporalDate]], [[InitializedTemporalDateTime]], [[InitializedTemporalMonthDay]], [[InitializedTemporalTime]], [[InitializedTemporalYearMonth]], or [[InitializedTemporalZonedDateTime]] internal slot, then
     if (is<PlainDate>(object) || is<PlainDateTime>(object) || is<PlainMonthDay>(object) || is<PlainTime>(object) || is<PlainYearMonth>(object) || is<ZonedDateTime>(object)) {
         // a. Throw a TypeError exception.
-        return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalPlainTimeWithArgumentMustNotHave, "calendar or timeZone");
+        return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalObjectMustNotHave, "calendar or timeZone");
+    }
+
+    // 3. Let calendarProperty be ? Get(object, "calendar").
+    auto calendar_property = TRY(object.get(vm.names.calendar));
+
+    // 4. If calendarProperty is not undefined, then
+    if (!calendar_property.is_undefined()) {
+        // a. Throw a TypeError exception.
+        return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalObjectMustNotHave, "calendar");
+    }
+
+    // 5. Let timeZoneProperty be ? Get(object, "timeZone").
+    auto time_zone_property = TRY(object.get(vm.names.timeZone));
+
+    // 6. If timeZoneProperty is not undefined, then
+    if (!time_zone_property.is_undefined()) {
+        // a. Throw a TypeError exception.
+        return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalObjectMustNotHave, "timeZone");
     }
 
     return {};
@@ -687,6 +929,21 @@ String format_seconds_string_part(u8 second, u16 millisecond, u16 microsecond, u
 
     // 7. Return the string-concatenation of secondsString, the code unit 0x002E (FULL STOP), and fraction.
     return String::formatted("{}.{}", seconds_string, fraction_string);
+}
+
+// 13.28 Sign ( n ), https://tc39.es/proposal-temporal/#sec-temporal-sign
+double sign(double n)
+{
+    // 1. If n is NaN, n is +0𝔽, or n is −0𝔽, return n.
+    if (isnan(n) || n == 0)
+        return n;
+
+    // 2. If n < +0𝔽, return −1𝔽.
+    if (n < 0)
+        return -1;
+
+    // 3. Return 1𝔽.
+    return 1;
 }
 
 // 13.29 ConstrainToRange ( x, minimum, maximum ), https://tc39.es/proposal-temporal/#sec-temporal-constraintorange
@@ -810,7 +1067,7 @@ ThrowCompletionOr<ISODateTime> parse_iso_date_time(GlobalObject& global_object, 
     Optional<StringView> second_part;
     Optional<StringView> fraction_part;
     Optional<StringView> calendar_part;
-    TODO();
+    return vm.throw_completion<InternalError>(global_object, ErrorType::NotImplemented, "ParseISODateTime");
 
     // 3. Let year be the part of isoString produced by the DateYear production.
     // 4. If the first code unit of year is 0x2212 (MINUS SIGN), replace it with the code unit 0x002D (HYPHEN-MINUS).
@@ -932,6 +1189,27 @@ ThrowCompletionOr<TemporalInstant> parse_temporal_instant_string(GlobalObject& g
     return TemporalInstant { .year = result.year, .month = result.month, .day = result.day, .hour = result.hour, .minute = result.minute, .second = result.second, .millisecond = result.millisecond, .microsecond = result.microsecond, .nanosecond = result.nanosecond, .time_zone_offset = move(offset_string) };
 }
 
+// 13.36 ParseTemporalZonedDateTimeString ( isoString ), https://tc39.es/proposal-temporal/#sec-temporal-parsetemporalzoneddatetimestring
+ThrowCompletionOr<TemporalZonedDateTime> parse_temporal_zoned_date_time_string(GlobalObject& global_object, String const& iso_string)
+{
+    // 1. Assert: Type(isoString) is String.
+
+    // 2. If isoString does not satisfy the syntax of a TemporalZonedDateTimeString (see 13.33), then
+    // a. Throw a RangeError exception.
+    // TODO
+
+    // 3. Let result be ! ParseISODateTime(isoString).
+    auto result = MUST(parse_iso_date_time(global_object, iso_string));
+
+    // 4. Let timeZoneResult be ? ParseTemporalTimeZoneString(isoString).
+    auto time_zone_result = TRY(parse_temporal_time_zone_string(global_object, iso_string));
+
+    // 5. Return the Record { [[Year]]: result.[[Year]], [[Month]]: result.[[Month]], [[Day]]: result.[[Day]], [[Hour]]: result.[[Hour]], [[Minute]]: result.[[Minute]], [[Second]]: result.[[Second]], [[Millisecond]]: result.[[Millisecond]], [[Microsecond]]: result.[[Microsecond]], [[Nanosecond]]: result.[[Nanosecond]], [[Calendar]]: result.[[Calendar]], [[TimeZoneZ]]: timeZoneResult.[[Z]], [[TimeZoneOffsetString]]: timeZoneResult.[[OffsetString]], [[TimeZoneName]]: timeZoneResult.[[Name]] }.
+    // NOTE: This returns the two structs together instead of separated to avoid a copy in ToTemporalZonedDateTime, as the spec tries to put the result of InterpretTemporalDateTimeFields and ParseTemporalZonedDateTimeString into the same `result` variable.
+    // InterpretTemporalDateTimeFields returns an ISODateTime, so the moved in `result` here is subsequently moved into ParseTemporalZonedDateTimeString's `result` variable.
+    return TemporalZonedDateTime { .date_time = move(result), .time_zone = move(time_zone_result) };
+}
+
 // 13.37 ParseTemporalCalendarString ( isoString ), https://tc39.es/proposal-temporal/#sec-temporal-parsetemporalcalendarstring
 ThrowCompletionOr<String> parse_temporal_calendar_string(GlobalObject& global_object, [[maybe_unused]] String const& iso_string)
 {
@@ -943,7 +1221,7 @@ ThrowCompletionOr<String> parse_temporal_calendar_string(GlobalObject& global_ob
     // a. Throw a RangeError exception.
     // 3. Let id be the part of isoString produced by the CalendarName production, or undefined if not present.
     Optional<StringView> id_part;
-    TODO();
+    return vm.throw_completion<InternalError>(global_object, ErrorType::NotImplemented, "ParseTemporalCalendarString");
 
     // 4. If id is undefined, then
     if (!id_part.has_value()) {
@@ -996,9 +1274,65 @@ ThrowCompletionOr<ISODateTime> parse_temporal_date_time_string(GlobalObject& glo
 // 13.40 ParseTemporalDurationString ( isoString ), https://tc39.es/proposal-temporal/#sec-temporal-parsetemporaldurationstring
 ThrowCompletionOr<TemporalDuration> parse_temporal_duration_string(GlobalObject& global_object, String const& iso_string)
 {
-    (void)global_object;
     (void)iso_string;
-    TODO();
+    auto& vm = global_object.vm();
+    return vm.throw_completion<InternalError>(global_object, ErrorType::NotImplemented, "ParseTemporalDurationString");
+}
+
+// 13.41 ParseTemporalMonthDayString ( isoString ), https://tc39.es/proposal-temporal/#sec-temporal-parsetemporalmonthdaystring
+ThrowCompletionOr<TemporalMonthDay> parse_temporal_month_day_string(GlobalObject& global_object, String const& iso_string)
+{
+    // 1. Assert: Type(isoString) is String.
+
+    // 2. If isoString does not satisfy the syntax of a TemporalMonthDayString (see 13.33), then
+    // a. Throw a RangeError exception.
+    // TODO
+
+    // 3. Let result be ? ParseISODateTime(isoString).
+    auto result = TRY(parse_iso_date_time(global_object, iso_string));
+
+    // 4. Let year be result.[[Year]].
+    Optional<i32> year = result.year;
+
+    // 5. If no part of isoString is produced by the DateYear production, then
+    // a. Set year to undefined.
+    // TODO (this is the case when TemporalMonthDayString is a DateSpecMonthDay)
+
+    // 6. Return the Record { [[Year]]: year, [[Month]]: result.[[Month]], [[Day]]: result.[[Day]], [[Calendar]]: result.[[Calendar]] }.
+    return TemporalMonthDay { .year = year, .month = result.month, .day = result.day, .calendar = move(result.calendar) };
+}
+
+// 13.42 ParseTemporalRelativeToString ( isoString ), https://tc39.es/proposal-temporal/#sec-temporal-parsetemporalrelativetostring
+ThrowCompletionOr<TemporalZonedDateTime> parse_temporal_relative_to_string(GlobalObject& global_object, String const& iso_string)
+{
+    // 1. Assert: Type(isoString) is String.
+
+    // 2. If isoString does not satisfy the syntax of a TemporalRelativeToString (see 13.33), then
+    // a. Throw a RangeError exception.
+    // TODO
+
+    // 3. Let result be ! ParseISODateTime(isoString).
+    auto result = MUST(parse_iso_date_time(global_object, iso_string));
+
+    bool z;
+    Optional<String> offset;
+    Optional<String> time_zone;
+
+    // TODO: 4. If isoString satisfies the syntax of a TemporalZonedDateTimeString (see 13.33), then
+    //          a. Let timeZoneResult be ! ParseTemporalTimeZoneString(isoString).
+    //          b. Let z be timeZoneResult.[[Z]].
+    //          c. Let offset be timeZoneResult.[[Offset]].
+    //          d. Let timeZone be timeZoneResult.[[Name]].
+
+    // TODO: 5. Else,
+    // a. Let z be false.
+    z = false;
+
+    // b. Let offset be undefined. (NOTE: It already is)
+    // c. Let timeZone be undefined. (NOTE: It already is)
+
+    // 6. Return the Record { [[Year]]: result.[[Year]], [[Month]]: result.[[Month]], [[Day]]: result.[[Day]], [[Hour]]: result.[[Hour]], [[Minute]]: result.[[Minute]], [[Second]]: result.[[Second]], [[Millisecond]]: result.[[Millisecond]], [[Microsecond]]: result.[[Microsecond]], [[Nanosecond]]: result.[[Nanosecond]], [[Calendar]]: result.[[Calendar]], [[TimeZoneZ]]: z, [[TimeZoneOffset]]: offset, [[TimeZoneIANAName]]: timeZone }.
+    return TemporalZonedDateTime { .date_time = move(result), .time_zone = { .z = z, .offset = move(offset), .name = move(time_zone) } };
 }
 
 // 13.43 ParseTemporalTimeString ( isoString ), https://tc39.es/proposal-temporal/#sec-temporal-parsetemporaltimestring
@@ -1034,7 +1368,7 @@ ThrowCompletionOr<TemporalTimeZone> parse_temporal_time_zone_string(GlobalObject
     Optional<StringView> seconds_part;
     Optional<StringView> fraction_part;
     Optional<StringView> name_part;
-    TODO();
+    return vm.throw_completion<InternalError>(global_object, ErrorType::NotImplemented, "ParseTemporalTimeZoneString");
 
     // 4. If z is not undefined, then
     if (z_part.has_value()) {
@@ -1143,7 +1477,7 @@ ThrowCompletionOr<double> to_positive_integer(GlobalObject& global_object, Value
     return integer;
 }
 
-// 13.48 PrepareTemporalFields ( fields, fieldNames, requiredFields ), https://tc39.es/proposal-temporal/#sec-temporal-preparetemporalfields
+// 13.49 PrepareTemporalFields ( fields, fieldNames, requiredFields ), https://tc39.es/proposal-temporal/#sec-temporal-preparetemporalfields
 ThrowCompletionOr<Object*> prepare_temporal_fields(GlobalObject& global_object, Object const& fields, Vector<String> const& field_names, Vector<StringView> const& required_fields)
 {
     auto& vm = global_object.vm();
@@ -1168,7 +1502,7 @@ ThrowCompletionOr<Object*> prepare_temporal_fields(GlobalObject& global_object, 
             }
             // ii. If property is in the Property column of Table 13, then
             // NOTE: The other properties in the table are automatically handled as their default value is undefined
-            if (property.is_one_of("hour", "minute", "second", "millisecond", "microsecond", "nanosecond")) {
+            if (property.is_one_of("hour"sv, "minute"sv, "second"sv, "millisecond"sv, "microsecond"sv, "nanosecond"sv)) {
                 // 1. Set value to the corresponding Default value of the same row.
                 value = Value(0);
             }
@@ -1178,13 +1512,12 @@ ThrowCompletionOr<Object*> prepare_temporal_fields(GlobalObject& global_object, 
             // i. If property is in the Property column of Table 13 and there is a Conversion value in the same row, then
             // 1. Let Conversion represent the abstract operation named by the Conversion value of the same row.
             // 2. Set value to ? Conversion(value).
-            if (property.is_one_of("year", "hour", "minute", "second", "millisecond", "microsecond", "nanosecond", "eraYear")) {
+            if (property.is_one_of("year"sv, "hour"sv, "minute"sv, "second"sv, "millisecond"sv, "microsecond"sv, "nanosecond"sv, "eraYear"sv))
                 value = Value(TRY(to_integer_throw_on_infinity(global_object, value, ErrorType::TemporalPropertyMustBeFinite)));
-            } else if (property.is_one_of("month", "day")) {
+            else if (property.is_one_of("month"sv, "day"sv))
                 value = Value(TRY(to_positive_integer(global_object, value)));
-            } else if (property.is_one_of("monthCode", "offset", "era")) {
+            else if (property.is_one_of("monthCode"sv, "offset"sv, "era"sv))
                 value = TRY(value.to_primitive_string(global_object));
-            }
         }
 
         // d. Perform ! CreateDataPropertyOrThrow(result, property, value).
@@ -1192,6 +1525,55 @@ ThrowCompletionOr<Object*> prepare_temporal_fields(GlobalObject& global_object, 
     }
 
     // 4. Return result.
+    return result;
+}
+
+// 13.50 PreparePartialTemporalFields ( fields, fieldNames ), https://tc39.es/proposal-temporal/#sec-temporal-preparepartialtemporalfields
+ThrowCompletionOr<Object*> prepare_partial_temporal_fields(GlobalObject& global_object, Object const& fields, Vector<String> const& field_names)
+{
+    auto& vm = global_object.vm();
+
+    // 1. Assert: Type(fields) is Object.
+
+    // 2. Let result be ! OrdinaryObjectCreate(%Object.prototype%).
+    auto* result = Object::create(global_object, global_object.object_prototype());
+
+    // 3. Let any be false.
+    auto any = false;
+
+    // 4. For each value property of fieldNames, do
+    for (auto& property : field_names) {
+        // a. Let value be ? Get(fields, property).
+        auto value = TRY(fields.get(property));
+
+        // b. If value is not undefined, then
+        if (!value.is_undefined()) {
+            // i. Set any to true.
+            any = true;
+
+            // ii. If property is in the Property column of Table 13, then
+            // 1. Let Conversion represent the abstract operation named by the Conversion value of the same row.
+            // 2. Set value to ? Conversion(value).
+            if (property.is_one_of("year"sv, "hour"sv, "minute"sv, "second"sv, "millisecond"sv, "microsecond"sv, "nanosecond"sv, "eraYear"sv))
+                value = Value(TRY(to_integer_throw_on_infinity(global_object, value, ErrorType::TemporalPropertyMustBeFinite)));
+            else if (property.is_one_of("month"sv, "day"sv))
+                value = Value(TRY(to_positive_integer(global_object, value)));
+            else if (property.is_one_of("monthCode"sv, "offset"sv, "era"sv))
+                value = TRY(value.to_primitive_string(global_object));
+
+            // NOTE: According to the spec this is step 4c, but I believe that's incorrect. See https://github.com/tc39/proposal-temporal/issues/1910.
+            // iii. Perform ! CreateDataPropertyOrThrow(result, property, value).
+            MUST(result->create_data_property_or_throw(property, value));
+        }
+    }
+
+    // 5. If any is false, then
+    if (!any) {
+        // a. Throw a TypeError exception.
+        return vm.throw_completion<TypeError>(global_object, ErrorType::TemporalObjectMustHaveOneOf, String::join(", "sv, field_names));
+    }
+
+    // 6. Return result.
     return result;
 }
 

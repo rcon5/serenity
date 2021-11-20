@@ -114,7 +114,7 @@ SpreadsheetWidget::SpreadsheetWidget(NonnullRefPtrVector<Sheet>&& sheets, bool s
 
     setup_tabs(m_workbook->sheets());
 
-    m_new_action = GUI::Action::create("Add New Sheet", Gfx::Bitmap::try_load_from_file("/res/icons/16x16/new-tab.png"), [&](auto&) {
+    m_new_action = GUI::Action::create("Add New Sheet", Gfx::Bitmap::try_load_from_file("/res/icons/16x16/new-tab.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
         add_sheet();
     });
 
@@ -369,14 +369,14 @@ void SpreadsheetWidget::try_generate_tip_for_input_expression(StringView source,
     }
 }
 
-void SpreadsheetWidget::save(const StringView& filename)
+void SpreadsheetWidget::save(StringView filename)
 {
     auto result = m_workbook->save(filename);
     if (result.is_error())
         GUI::MessageBox::show_error(window(), result.error());
 }
 
-void SpreadsheetWidget::load(const StringView& filename)
+void SpreadsheetWidget::load(StringView filename)
 {
     auto result = m_workbook->load(filename);
     if (result.is_error()) {

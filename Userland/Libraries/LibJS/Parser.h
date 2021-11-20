@@ -31,6 +31,7 @@ struct FunctionNodeParseOptions {
         IsSetterFunction = 1 << 4,
         IsArrowFunction = 1 << 5,
         IsGeneratorFunction = 1 << 6,
+        IsAsyncFunction = 1 << 7,
     };
 };
 
@@ -105,6 +106,7 @@ public:
     NonnullRefPtr<ClassDeclaration> parse_class_declaration();
     NonnullRefPtr<ClassExpression> parse_class_expression(bool expect_class_name);
     NonnullRefPtr<YieldExpression> parse_yield_expression();
+    NonnullRefPtr<AwaitExpression> parse_await_expression();
     NonnullRefPtr<Expression> parse_property_key();
     NonnullRefPtr<AssignmentExpression> parse_assignment_expression(AssignmentOp, NonnullRefPtr<Expression> lhs, int min_precedence, Associativity);
     NonnullRefPtr<Identifier> parse_identifier();
@@ -128,7 +130,7 @@ public:
             return String::formatted("{} (line: {}, column: {})", message, position.value().line, position.value().column);
         }
 
-        String source_location_hint(const StringView& source, const char spacer = ' ', const char indicator = '^') const
+        String source_location_hint(StringView source, const char spacer = ' ', const char indicator = '^') const
         {
             if (!position.has_value())
                 return {};
@@ -251,11 +253,13 @@ private:
         bool in_function_context { false };
         bool in_formal_parameter_context { false };
         bool in_generator_function_context { false };
+        bool in_async_function_context { false };
         bool in_arrow_function_context { false };
         bool in_break_context { false };
         bool in_continue_context { false };
         bool string_legacy_octal_escape_sequence_in_scope { false };
         bool in_class_field_initializer { false };
+        bool in_class_static_init_block { false };
         bool function_might_need_arguments_object { false };
 
         ParserState(Lexer, Program::Type);

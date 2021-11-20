@@ -39,6 +39,24 @@ enum class AlignItems {
     Stretch,
 };
 
+enum class BackgroundAttachment {
+    Fixed,
+    Local,
+    Scroll,
+};
+
+enum class BackgroundBox {
+    BorderBox,
+    ContentBox,
+    PaddingBox,
+};
+
+enum class BackgroundSize {
+    Contain,
+    Cover,
+    LengthPercentage,
+};
+
 enum class BoxSizing {
     BorderBox,
     ContentBox,
@@ -167,12 +185,35 @@ enum class Position {
     Sticky,
 };
 
+enum class PositionEdge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+};
+
 enum class Repeat : u8 {
     NoRepeat,
     Repeat,
     Round,
     Space,
 };
+
+constexpr StringView to_string(Repeat value)
+{
+    switch (value) {
+    case Repeat::NoRepeat:
+        return "no-repeat"sv;
+    case Repeat::Repeat:
+        return "repeat"sv;
+    case Repeat::Round:
+        return "round"sv;
+    case Repeat::Space:
+        return "space"sv;
+    default:
+        VERIFY_NOT_REACHED();
+    }
+}
 
 enum class TextAlign {
     Left,
@@ -223,6 +264,7 @@ public:
     enum class Type {
         Background,
         BackgroundRepeat,
+        BackgroundSize,
         Border,
         BorderRadius,
         BoxShadow,
@@ -242,6 +284,7 @@ public:
         ListStyle,
         Numeric,
         Overflow,
+        Position,
         String,
         TextDecoration,
         Transformation,
@@ -253,6 +296,7 @@ public:
 
     bool is_background() const { return type() == Type::Background; }
     bool is_background_repeat() const { return type() == Type::BackgroundRepeat; }
+    bool is_background_size() const { return type() == Type::BackgroundSize; }
     bool is_border() const { return type() == Type::Border; }
     bool is_border_radius() const { return type() == Type::BorderRadius; }
     bool is_box_shadow() const { return type() == Type::BoxShadow; }
@@ -270,6 +314,7 @@ public:
     bool is_list_style() const { return type() == Type::ListStyle; }
     bool is_numeric() const { return type() == Type::Numeric; }
     bool is_overflow() const { return type() == Type::Overflow; }
+    bool is_position() const { return type() == Type::Position; }
     bool is_string() const { return type() == Type::String; }
     bool is_text_decoration() const { return type() == Type::TextDecoration; }
     bool is_transformation() const { return type() == Type::Transformation; }
@@ -278,8 +323,9 @@ public:
 
     bool is_builtin() const { return is_inherit() || is_initial() || is_unset(); }
 
-    BackgroundRepeatStyleValue const& as_background_repeat() const;
     BackgroundStyleValue const& as_background() const;
+    BackgroundRepeatStyleValue const& as_background_repeat() const;
+    BackgroundSizeStyleValue const& as_background_size() const;
     BorderRadiusStyleValue const& as_border_radius() const;
     BorderStyleValue const& as_border() const;
     BoxShadowStyleValue const& as_box_shadow() const;
@@ -297,14 +343,16 @@ public:
     ListStyleStyleValue const& as_list_style() const;
     NumericStyleValue const& as_numeric() const;
     OverflowStyleValue const& as_overflow() const;
+    PositionStyleValue const& as_position() const;
     StringStyleValue const& as_string() const;
     TextDecorationStyleValue const& as_text_decoration() const;
     TransformationStyleValue const& as_transformation() const;
     UnsetStyleValue const& as_unset() const;
     StyleValueList const& as_value_list() const;
 
-    BackgroundRepeatStyleValue& as_background_repeat() { return const_cast<BackgroundRepeatStyleValue&>(const_cast<StyleValue const&>(*this).as_background_repeat()); }
     BackgroundStyleValue& as_background() { return const_cast<BackgroundStyleValue&>(const_cast<StyleValue const&>(*this).as_background()); }
+    BackgroundRepeatStyleValue& as_background_repeat() { return const_cast<BackgroundRepeatStyleValue&>(const_cast<StyleValue const&>(*this).as_background_repeat()); }
+    BackgroundSizeStyleValue& as_background_size() { return const_cast<BackgroundSizeStyleValue&>(const_cast<StyleValue const&>(*this).as_background_size()); }
     BorderRadiusStyleValue& as_border_radius() { return const_cast<BorderRadiusStyleValue&>(const_cast<StyleValue const&>(*this).as_border_radius()); }
     BorderStyleValue& as_border() { return const_cast<BorderStyleValue&>(const_cast<StyleValue const&>(*this).as_border()); }
     BoxShadowStyleValue& as_box_shadow() { return const_cast<BoxShadowStyleValue&>(const_cast<StyleValue const&>(*this).as_box_shadow()); }
@@ -322,6 +370,7 @@ public:
     ListStyleStyleValue& as_list_style() { return const_cast<ListStyleStyleValue&>(const_cast<StyleValue const&>(*this).as_list_style()); }
     NumericStyleValue& as_numeric() { return const_cast<NumericStyleValue&>(const_cast<StyleValue const&>(*this).as_numeric()); }
     OverflowStyleValue& as_overflow() { return const_cast<OverflowStyleValue&>(const_cast<StyleValue const&>(*this).as_overflow()); }
+    PositionStyleValue& as_position() { return const_cast<PositionStyleValue&>(const_cast<StyleValue const&>(*this).as_position()); }
     StringStyleValue& as_string() { return const_cast<StringStyleValue&>(const_cast<StyleValue const&>(*this).as_string()); }
     TextDecorationStyleValue& as_text_decoration() { return const_cast<TextDecorationStyleValue&>(const_cast<StyleValue const&>(*this).as_text_decoration()); }
     TransformationStyleValue& as_transformation() { return const_cast<TransformationStyleValue&>(const_cast<StyleValue const&>(*this).as_transformation()); }
@@ -366,73 +415,139 @@ public:
     static NonnullRefPtr<BackgroundStyleValue> create(
         NonnullRefPtr<StyleValue> color,
         NonnullRefPtr<StyleValue> image,
-        NonnullRefPtr<StyleValue> repeat_x,
-        NonnullRefPtr<StyleValue> repeat_y)
+        NonnullRefPtr<StyleValue> position,
+        NonnullRefPtr<StyleValue> size,
+        NonnullRefPtr<StyleValue> repeat,
+        NonnullRefPtr<StyleValue> attachment,
+        NonnullRefPtr<StyleValue> origin,
+        NonnullRefPtr<StyleValue> clip)
     {
-        return adopt_ref(*new BackgroundStyleValue(color, image, repeat_x, repeat_y));
+        return adopt_ref(*new BackgroundStyleValue(color, image, position, size, repeat, attachment, origin, clip));
     }
     virtual ~BackgroundStyleValue() override { }
 
+    size_t layer_count() const { return m_layer_count; }
+
+    NonnullRefPtr<StyleValue> attachment() const { return m_attachment; }
+    NonnullRefPtr<StyleValue> clip() const { return m_clip; }
     NonnullRefPtr<StyleValue> color() const { return m_color; }
     NonnullRefPtr<StyleValue> image() const { return m_image; }
-    NonnullRefPtr<StyleValue> repeat_x() const { return m_repeat_x; }
-    NonnullRefPtr<StyleValue> repeat_y() const { return m_repeat_y; }
+    NonnullRefPtr<StyleValue> origin() const { return m_origin; }
+    NonnullRefPtr<StyleValue> position() const { return m_position; }
+    NonnullRefPtr<StyleValue> repeat() const { return m_repeat; }
+    NonnullRefPtr<StyleValue> size() const { return m_size; }
 
-    virtual String to_string() const override
-    {
-        return String::formatted("{} {} {} {}", m_color->to_string(), m_image->to_string(), m_repeat_x->to_string(), m_repeat_y->to_string());
-    }
+    virtual String to_string() const override;
 
 private:
     BackgroundStyleValue(
         NonnullRefPtr<StyleValue> color,
         NonnullRefPtr<StyleValue> image,
-        NonnullRefPtr<StyleValue> repeat_x,
-        NonnullRefPtr<StyleValue> repeat_y)
-        : StyleValue(Type::Background)
-        , m_color(color)
-        , m_image(image)
-        , m_repeat_x(repeat_x)
-        , m_repeat_y(repeat_y)
-    {
-    }
+        NonnullRefPtr<StyleValue> position,
+        NonnullRefPtr<StyleValue> size,
+        NonnullRefPtr<StyleValue> repeat,
+        NonnullRefPtr<StyleValue> attachment,
+        NonnullRefPtr<StyleValue> origin,
+        NonnullRefPtr<StyleValue> clip);
+
     NonnullRefPtr<StyleValue> m_color;
     NonnullRefPtr<StyleValue> m_image;
-    // FIXME: background-position
-    // FIXME: background-size
-    NonnullRefPtr<StyleValue> m_repeat_x;
-    NonnullRefPtr<StyleValue> m_repeat_y;
-    // FIXME: background-attachment
-    // FIXME: background-clip
-    // FIXME: background-origin
+    NonnullRefPtr<StyleValue> m_position;
+    NonnullRefPtr<StyleValue> m_size;
+    NonnullRefPtr<StyleValue> m_repeat;
+    NonnullRefPtr<StyleValue> m_attachment;
+    NonnullRefPtr<StyleValue> m_origin;
+    NonnullRefPtr<StyleValue> m_clip;
+
+    size_t m_layer_count;
+};
+
+class PositionStyleValue final : public StyleValue {
+public:
+    static NonnullRefPtr<PositionStyleValue> create(PositionEdge edge_x, Length const& offset_x, PositionEdge edge_y, Length const& offset_y)
+    {
+        return adopt_ref(*new PositionStyleValue(edge_x, offset_x, edge_y, offset_y));
+    }
+    virtual ~PositionStyleValue() override { }
+
+    PositionEdge edge_x() const { return m_edge_x; }
+    Length const& offset_x() const { return m_offset_x; }
+    PositionEdge edge_y() const { return m_edge_y; }
+    Length const& offset_y() const { return m_offset_y; }
+
+    virtual String to_string() const override;
+
+private:
+    PositionStyleValue(PositionEdge edge_x, Length const& offset_x, PositionEdge edge_y, Length const& offset_y)
+        : StyleValue(Type::Position)
+        , m_edge_x(edge_x)
+        , m_offset_x(offset_x)
+        , m_edge_y(edge_y)
+        , m_offset_y(offset_y)
+    {
+    }
+
+    PositionEdge m_edge_x;
+    Length m_offset_x;
+    PositionEdge m_edge_y;
+    Length m_offset_y;
 };
 
 class BackgroundRepeatStyleValue final : public StyleValue {
 public:
-    static NonnullRefPtr<BackgroundRepeatStyleValue> create(NonnullRefPtr<StyleValue> repeat_x, NonnullRefPtr<StyleValue> repeat_y)
+    static NonnullRefPtr<BackgroundRepeatStyleValue> create(Repeat repeat_x, Repeat repeat_y)
     {
         return adopt_ref(*new BackgroundRepeatStyleValue(repeat_x, repeat_y));
     }
     virtual ~BackgroundRepeatStyleValue() override { }
 
-    NonnullRefPtr<StyleValue> repeat_x() const { return m_repeat_x; }
-    NonnullRefPtr<StyleValue> repeat_y() const { return m_repeat_y; }
+    Repeat repeat_x() const { return m_repeat_x; }
+    Repeat repeat_y() const { return m_repeat_y; }
 
     virtual String to_string() const override
     {
-        return String::formatted("{} {}", m_repeat_x->to_string(), m_repeat_y->to_string());
+        return String::formatted("{} {}", CSS::to_string(m_repeat_x), CSS::to_string(m_repeat_y));
     }
 
 private:
-    BackgroundRepeatStyleValue(NonnullRefPtr<StyleValue> repeat_x, NonnullRefPtr<StyleValue> repeat_y)
+    BackgroundRepeatStyleValue(Repeat repeat_x, Repeat repeat_y)
         : StyleValue(Type::BackgroundRepeat)
         , m_repeat_x(repeat_x)
         , m_repeat_y(repeat_y)
     {
     }
 
-    NonnullRefPtr<StyleValue> m_repeat_x;
-    NonnullRefPtr<StyleValue> m_repeat_y;
+    Repeat m_repeat_x;
+    Repeat m_repeat_y;
+};
+
+// NOTE: This is not used for identifier sizes, like `cover` and `contain`.
+class BackgroundSizeStyleValue final : public StyleValue {
+public:
+    static NonnullRefPtr<BackgroundSizeStyleValue> create(Length size_x, Length size_y)
+    {
+        return adopt_ref(*new BackgroundSizeStyleValue(size_x, size_y));
+    }
+    virtual ~BackgroundSizeStyleValue() override { }
+
+    Length size_x() const { return m_size_x; }
+    Length size_y() const { return m_size_y; }
+
+    virtual String to_string() const override
+    {
+        return String::formatted("{} {}", m_size_x.to_string(), m_size_y.to_string());
+    }
+
+private:
+    BackgroundSizeStyleValue(Length size_x, Length size_y)
+        : StyleValue(Type::BackgroundSize)
+        , m_size_x(size_x)
+        , m_size_y(size_y)
+    {
+    }
+
+    Length m_size_x;
+    Length m_size_y;
 };
 
 class BorderStyleValue final : public StyleValue {
@@ -1215,7 +1330,14 @@ class StyleValueList final : public StyleValue {
 public:
     static NonnullRefPtr<StyleValueList> create(NonnullRefPtrVector<StyleValue>&& values) { return adopt_ref(*new StyleValueList(move(values))); }
 
+    size_t size() const { return m_values.size(); }
     NonnullRefPtrVector<StyleValue> const& values() const { return m_values; }
+    NonnullRefPtr<StyleValue> value_at(size_t i, bool allow_loop) const
+    {
+        if (allow_loop)
+            return m_values[i % size()];
+        return m_values[i];
+    }
 
     virtual String to_string() const
     {

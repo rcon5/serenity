@@ -14,6 +14,7 @@
 
 #    include <AK/Assertions.h>
 #    include <AK/Atomic.h>
+#    include <AK/Error.h>
 #    include <AK/Format.h>
 #    include <AK/NonnullRefPtr.h>
 #    include <AK/StdLibExtras.h>
@@ -294,9 +295,9 @@ private:
 
 template<typename T>
 struct Formatter<RefPtr<T>> : Formatter<const T*> {
-    void format(FormatBuilder& builder, const RefPtr<T>& value)
+    ErrorOr<void> format(FormatBuilder& builder, RefPtr<T> const& value)
     {
-        Formatter<const T*>::format(builder, value.ptr());
+        return Formatter<const T*>::format(builder, value.ptr());
     }
 };
 
@@ -345,6 +346,15 @@ template<typename T, class... Args>
 inline RefPtr<T> try_make_ref_counted(Args&&... args)
 {
     return adopt_ref_if_nonnull(new (nothrow) T { forward<Args>(args)... });
+}
+
+template<typename T>
+inline ErrorOr<NonnullRefPtr<T>> adopt_nonnull_ref_or_enomem(T* object)
+{
+    auto result = adopt_ref_if_nonnull(object);
+    if (!result)
+        return Error::from_errno(ENOMEM);
+    return result.release_nonnull();
 }
 
 }

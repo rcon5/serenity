@@ -128,15 +128,16 @@ union Extractor {
 namespace AK {
 template<>
 struct Formatter<Extractor> : StandardFormatter {
-    void format(FormatBuilder& builder, const Extractor& value)
+    ErrorOr<void> format(FormatBuilder& builder, Extractor const& value)
     {
-        builder.put_literal("{");
-        builder.put_u64(value.sign);
-        builder.put_literal(", ");
-        builder.put_u64(value.exponent, 16, true);
-        builder.put_literal(", ");
-        builder.put_u64(value.mantissa, 16, true);
-        builder.put_literal("}");
+        TRY(builder.put_literal("{"));
+        TRY(builder.put_u64(value.sign));
+        TRY(builder.put_literal(", "));
+        TRY(builder.put_u64(value.exponent, 16, true));
+        TRY(builder.put_literal(", "));
+        TRY(builder.put_u64(value.mantissa, 16, true));
+        TRY(builder.put_literal("}"));
+        return {};
     }
 };
 }
@@ -257,4 +258,12 @@ TEST_CASE(fmax_and_fmin)
     EXPECT(fmin(NAN, 5) == 5);
     EXPECT(fmin(0, NAN) == 0);
     EXPECT(isnan(fmin(NAN, NAN)));
+}
+
+TEST_CASE(acos)
+{
+    EXPECT_APPROXIMATE(acos(-1), M_PI);
+    EXPECT_APPROXIMATE(acos(0), 0.5 * M_PI);
+    EXPECT_APPROXIMATE(acos(1), 0);
+    EXPECT(isnan(acos(1.1)));
 }

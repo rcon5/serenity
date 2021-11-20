@@ -225,7 +225,7 @@ public:
     void minimize_windows(Window&, bool);
     void hide_windows(Window&, bool);
     void maximize_windows(Window&, bool);
-    void set_pinned(Window&, bool);
+    void set_always_on_top(Window&, bool);
 
     template<typename Function>
     IterationDecision for_each_window_in_modal_stack(Window& window, Function f)
@@ -261,7 +261,7 @@ public:
 
     void reload_icon_bitmaps_after_scale_change();
 
-    void reevaluate_hovered_window(Window* = nullptr);
+    void reevaluate_hover_state_for_window(Window* = nullptr);
     Window* hovered_window() const { return m_hovered_window.ptr(); }
 
     void switch_to_window_stack(WindowStack&, Window* = nullptr, bool show_overlay = true);
@@ -274,7 +274,7 @@ public:
     size_t window_stack_rows() const { return m_window_stacks.size(); }
     size_t window_stack_columns() const { return m_window_stacks[0].size(); }
 
-    bool apply_virtual_desktop_settings(unsigned rows, unsigned columns, bool save);
+    bool apply_workspace_settings(unsigned rows, unsigned columns, bool save);
 
     WindowStack& current_window_stack()
     {

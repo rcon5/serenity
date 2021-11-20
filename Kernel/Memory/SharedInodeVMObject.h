@@ -6,7 +6,6 @@
 
 #pragma once
 
-#include <AK/Bitmap.h>
 #include <Kernel/Memory/InodeVMObject.h>
 #include <Kernel/UnixTypes.h>
 
@@ -16,8 +15,10 @@ class SharedInodeVMObject final : public InodeVMObject {
     AK_MAKE_NONMOVABLE(SharedInodeVMObject);
 
 public:
-    static KResultOr<NonnullRefPtr<SharedInodeVMObject>> try_create_with_inode(Inode&);
-    virtual KResultOr<NonnullRefPtr<VMObject>> try_clone() override;
+    static ErrorOr<NonnullRefPtr<SharedInodeVMObject>> try_create_with_inode(Inode&);
+    virtual ErrorOr<NonnullRefPtr<VMObject>> try_clone() override;
+
+    ErrorOr<void> sync();
 
 private:
     virtual bool is_shared_inode() const override { return true; }

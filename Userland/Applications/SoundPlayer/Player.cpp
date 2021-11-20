@@ -38,7 +38,7 @@ Player::Player(Audio::ClientConnection& audio_client_connection)
     };
 }
 
-void Player::play_file_path(StringView path)
+void Player::play_file_path(String const& path)
 {
     if (path.is_null())
         return;
@@ -87,7 +87,7 @@ void Player::set_loop_mode(LoopMode mode)
 
 void Player::set_volume(double volume)
 {
-    m_volume = clamp(volume, 0, 1.0);
+    m_volume = clamp(volume, 0, 1.5);
     m_audio_client_connection.set_self_volume(m_volume);
     volume_changed(m_volume);
 }

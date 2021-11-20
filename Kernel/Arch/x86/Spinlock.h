@@ -31,7 +31,6 @@ public:
         }
         track_lock_acquire(m_rank);
         return prev_flags;
-        return 0;
     }
 
     ALWAYS_INLINE void unlock(u32 prev_flags)
@@ -39,7 +38,7 @@ public:
         VERIFY(is_locked());
         track_lock_release(m_rank);
         m_lock.store(0, AK::memory_order_release);
-        if (prev_flags & 0x200)
+        if ((prev_flags & 0x200) != 0)
             sti();
         else
             cli();
@@ -90,7 +89,6 @@ public:
             track_lock_acquire(m_rank);
         m_recursions++;
         return prev_flags;
-        return 0;
     }
 
     ALWAYS_INLINE void unlock(u32 prev_flags)
@@ -101,7 +99,7 @@ public:
             track_lock_release(m_rank);
             m_lock.store(0, AK::memory_order_release);
         }
-        if (prev_flags & 0x200)
+        if ((prev_flags & 0x200) != 0)
             sti();
         else
             cli();

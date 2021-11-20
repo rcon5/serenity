@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <AK/HashMap.h>
 #include <AK/Types.h>
 #include <AK/Variant.h>
 #include <AK/Vector.h>
@@ -14,12 +15,12 @@
 namespace LibDSP {
 
 // FIXME: Audio::Frame is 64-bit float, which is quite large for long clips.
-using Sample = Audio::Frame;
+using Sample = Audio::Sample;
 
 Sample const SAMPLE_OFF = { 0.0, 0.0 };
 
 struct RollNote {
-    u32 length() const { return (off_sample - on_sample) + 1; }
+    constexpr u32 length() const { return (off_sample - on_sample) + 1; }
 
     u32 on_sample;
     u32 off_sample;
@@ -33,12 +34,17 @@ enum class SignalType : u8 {
     Note
 };
 
-struct Signal : public Variant<Sample, Vector<RollNote>> {
+using RollNotes = OrderedHashMap<u8, RollNote>;
+
+struct Signal : public Variant<Sample, RollNotes> {
     using Variant::Variant;
     ALWAYS_INLINE SignalType type() const
     {
-        return has<Sample>() ? SignalType::Sample : has<Vector<RollNote>>() ? SignalType::Note
-                                                                            : SignalType::Invalid;
+        if (has<Sample>())
+            return SignalType::Sample;
+        if (has<RollNotes>())
+            return SignalType::Note;
+        return SignalType::Invalid;
     }
 };
 

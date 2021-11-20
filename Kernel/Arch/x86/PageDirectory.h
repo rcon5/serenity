@@ -39,30 +39,31 @@ public:
         NoExecute = 0x8000000000000000ULL,
     };
 
-    bool is_present() const { return raw() & Present; }
+    bool is_present() const { return (raw() & Present) == Present; }
     void set_present(bool b) { set_bit(Present, b); }
 
-    bool is_user_allowed() const { return raw() & UserSupervisor; }
+    bool is_user_allowed() const { return (raw() & UserSupervisor) == UserSupervisor; }
     void set_user_allowed(bool b) { set_bit(UserSupervisor, b); }
 
-    bool is_huge() const { return raw() & Huge; }
+    bool is_huge() const { return (raw() & Huge) == Huge; }
     void set_huge(bool b) { set_bit(Huge, b); }
 
-    bool is_writable() const { return raw() & ReadWrite; }
+    bool is_writable() const { return (raw() & ReadWrite) == ReadWrite; }
     void set_writable(bool b) { set_bit(ReadWrite, b); }
 
-    bool is_write_through() const { return raw() & WriteThrough; }
+    bool is_write_through() const { return (raw() & WriteThrough) == WriteThrough; }
     void set_write_through(bool b) { set_bit(WriteThrough, b); }
 
-    bool is_cache_disabled() const { return raw() & CacheDisabled; }
+    bool is_cache_disabled() const { return (raw() & CacheDisabled) == CacheDisabled; }
     void set_cache_disabled(bool b) { set_bit(CacheDisabled, b); }
 
-    bool is_global() const { return raw() & Global; }
+    bool is_global() const { return (raw() & Global) == Global; }
     void set_global(bool b) { set_bit(Global, b); }
 
-    bool is_execute_disabled() const { return raw() & NoExecute; }
+    bool is_execute_disabled() const { return (raw() & NoExecute) == NoExecute; }
     void set_execute_disabled(bool b) { set_bit(NoExecute, b); }
 
+private:
     void set_bit(u64 bit, bool value)
     {
         if (value)
@@ -71,20 +72,19 @@ public:
             m_raw &= ~bit;
     }
 
-private:
     u64 m_raw;
 };
 
 class PageTableEntry {
 public:
-    PhysicalPtr physical_page_base() { return PhysicalAddress::physical_page_base(m_raw); }
+    PhysicalPtr physical_page_base() const { return PhysicalAddress::physical_page_base(m_raw); }
     void set_physical_page_base(PhysicalPtr value)
     {
         m_raw &= 0x8000000000000fffULL;
         m_raw |= PhysicalAddress::physical_page_base(value);
     }
 
-    u64 raw() const { return (u32)m_raw; }
+    u64 raw() const { return m_raw; }
 
     enum Flags {
         Present = 1 << 0,
@@ -96,30 +96,31 @@ public:
         NoExecute = 0x8000000000000000ULL,
     };
 
-    bool is_present() const { return raw() & Present; }
+    bool is_present() const { return (raw() & Present) == Present; }
     void set_present(bool b) { set_bit(Present, b); }
 
-    bool is_user_allowed() const { return raw() & UserSupervisor; }
+    bool is_user_allowed() const { return (raw() & UserSupervisor) == UserSupervisor; }
     void set_user_allowed(bool b) { set_bit(UserSupervisor, b); }
 
-    bool is_writable() const { return raw() & ReadWrite; }
+    bool is_writable() const { return (raw() & ReadWrite) == ReadWrite; }
     void set_writable(bool b) { set_bit(ReadWrite, b); }
 
-    bool is_write_through() const { return raw() & WriteThrough; }
+    bool is_write_through() const { return (raw() & WriteThrough) == WriteThrough; }
     void set_write_through(bool b) { set_bit(WriteThrough, b); }
 
-    bool is_cache_disabled() const { return raw() & CacheDisabled; }
+    bool is_cache_disabled() const { return (raw() & CacheDisabled) == CacheDisabled; }
     void set_cache_disabled(bool b) { set_bit(CacheDisabled, b); }
 
-    bool is_global() const { return raw() & Global; }
+    bool is_global() const { return (raw() & Global) == Global; }
     void set_global(bool b) { set_bit(Global, b); }
 
-    bool is_execute_disabled() const { return raw() & NoExecute; }
+    bool is_execute_disabled() const { return (raw() & NoExecute) == NoExecute; }
     void set_execute_disabled(bool b) { set_bit(NoExecute, b); }
 
     bool is_null() const { return m_raw == 0; }
     void clear() { m_raw = 0; }
 
+private:
     void set_bit(u64 bit, bool value)
     {
         if (value)
@@ -128,7 +129,6 @@ public:
             m_raw &= ~bit;
     }
 
-private:
     u64 m_raw;
 };
 

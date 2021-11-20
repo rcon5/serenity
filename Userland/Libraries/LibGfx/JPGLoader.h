@@ -6,17 +6,9 @@
 
 #pragma once
 
-#include <AK/MappedFile.h>
-#include <AK/String.h>
-#include <AK/Vector.h>
-#include <LibGfx/Bitmap.h>
 #include <LibGfx/ImageDecoder.h>
-#include <LibGfx/Size.h>
 
 namespace Gfx {
-
-RefPtr<Gfx::Bitmap> load_jpg(String const& path);
-RefPtr<Gfx::Bitmap> load_jpg_from_memory(u8 const* data, size_t length, String const& mmap_name = "<memory>");
 
 struct JPGLoadingContext;
 
@@ -25,7 +17,6 @@ public:
     virtual ~JPGImageDecoderPlugin() override;
     JPGImageDecoderPlugin(const u8*, size_t);
     virtual IntSize size() override;
-    virtual RefPtr<Gfx::Bitmap> bitmap() override;
     virtual void set_volatile() override;
     [[nodiscard]] virtual bool set_nonvolatile(bool& was_purged) override;
     virtual bool sniff() override;

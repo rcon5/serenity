@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2020, Andreas Kling <kling@serenityos.org>
+ * Copyright (c) 2018-2021, Andreas Kling <kling@serenityos.org>
  * Copyright (c) 2021, Gunnar Beutner <gbeutner@serenityos.org>
  *
  * SPDX-License-Identifier: BSD-2-Clause
@@ -8,6 +8,7 @@
 #pragma once
 
 #include <AK/Assertions.h>
+#include <AK/Error.h>
 #include <AK/Span.h>
 #include <AK/Types.h>
 #include <AK/kmalloc.h>
@@ -27,8 +28,7 @@ public:
 
     ByteBuffer(ByteBuffer const& other)
     {
-        auto ok = try_resize(other.size());
-        VERIFY(ok);
+        MUST(try_resize(other.size()));
         VERIFY(m_size == other.size());
         __builtin_memcpy(data(), other.data(), other.size());
     }
@@ -54,8 +54,7 @@ public:
             if (m_size > other.size()) {
                 trim(other.size(), true);
             } else {
-                auto ok = try_resize(other.size());
-                VERIFY(ok);
+                MUST(try_resize(other.size()));
             }
             __builtin_memcpy(data(), other.data(), other.size());
         }
@@ -65,7 +64,7 @@ public:
     [[nodiscard]] static Optional<ByteBuffer> create_uninitialized(size_t size)
     {
         auto buffer = ByteBuffer();
-        if (!buffer.try_resize(size))
+        if (buffer.try_resize(size).is_error())
             return {};
         return { move(buffer) };
     }
@@ -119,7 +118,7 @@ public:
         return data()[i];
     }
 
-    [[nodiscard]] bool is_empty() const { return !m_size; }
+    [[nodiscard]] bool is_empty() const { return m_size == 0; }
     [[nodiscard]] size_t size() const { return m_size; }
 
     [[nodiscard]] u8* data() { return m_inline ? m_inline_buffer : m_outline_buffer; }
@@ -157,64 +156,58 @@ public:
 
     ALWAYS_INLINE void resize(size_t new_size)
     {
-        auto ok = try_resize(new_size);
-        VERIFY(ok);
+        MUST(try_resize(new_size));
     }
 
     ALWAYS_INLINE void ensure_capacity(size_t new_capacity)
     {
-        auto ok = try_ensure_capacity(new_capacity);
-        VERIFY(ok);
+        MUST(try_ensure_capacity(new_capacity));
     }
 
-    [[nodiscard]] ALWAYS_INLINE bool try_resize(size_t new_size)
+    ErrorOr<void> try_resize(size_t new_size)
     {
         if (new_size <= m_size) {
             trim(new_size, false);
-            return true;
+            return {};
         }
-        if (!try_ensure_capacity(new_size))
-            return false;
+        TRY(try_ensure_capacity(new_size));
         m_size = new_size;
-        return true;
+        return {};
     }
 
-    [[nodiscard]] ALWAYS_INLINE bool try_ensure_capacity(size_t new_capacity)
+    ErrorOr<void> try_ensure_capacity(size_t new_capacity)
     {
         if (new_capacity <= capacity())
-            return true;
+            return {};
         return try_ensure_capacity_slowpath(new_capacity);
     }
 
-    void append(ReadonlyBytes const& bytes)
+    void append(ReadonlyBytes bytes)
     {
-        auto ok = try_append(bytes);
-        VERIFY(ok);
+        MUST(try_append(bytes));
     }
 
     void append(void const* data, size_t data_size) { append({ data, data_size }); }
 
-    [[nodiscard]] bool try_append(ReadonlyBytes const& bytes)
+    ErrorOr<void> try_append(ReadonlyBytes bytes)
     {
         return try_append(bytes.data(), bytes.size());
     }
 
-    [[nodiscard]] bool try_append(void const* data, size_t data_size)
+    ErrorOr<void> try_append(void const* data, size_t data_size)
     {
         if (data_size == 0)
-            return true;
+            return {};
         VERIFY(data != nullptr);
         int old_size = size();
-        if (!try_resize(size() + data_size))
-            return false;
+        TRY(try_resize(size() + data_size));
         __builtin_memcpy(this->data() + old_size, data, data_size);
-        return true;
+        return {};
     }
 
     void operator+=(ByteBuffer const& other)
     {
-        auto ok = try_append(other.data(), other.size());
-        VERIFY(ok);
+        MUST(try_append(other.data(), other.size()));
     }
 
     void overwrite(size_t offset, void const* data, size_t data_size)
@@ -261,7 +254,7 @@ private:
     NEVER_INLINE void shrink_into_inline_buffer(size_t size, bool may_discard_existing_data)
     {
         // m_inline_buffer and m_outline_buffer are part of a union, so save the pointer
-        auto outline_buffer = m_outline_buffer;
+        auto* outline_buffer = m_outline_buffer;
         auto outline_capacity = m_outline_capacity;
         if (!may_discard_existing_data)
             __builtin_memcpy(m_inline_buffer, outline_buffer, size);
@@ -269,12 +262,12 @@ private:
         m_inline = true;
     }
 
-    [[nodiscard]] NEVER_INLINE bool try_ensure_capacity_slowpath(size_t new_capacity)
+    NEVER_INLINE ErrorOr<void> try_ensure_capacity_slowpath(size_t new_capacity)
     {
         new_capacity = kmalloc_good_size(new_capacity);
-        auto new_buffer = (u8*)kmalloc(new_capacity);
+        auto* new_buffer = (u8*)kmalloc(new_capacity);
         if (!new_buffer)
-            return false;
+            return Error::from_errno(ENOMEM);
 
         if (m_inline) {
             __builtin_memcpy(new_buffer, data(), m_size);
@@ -286,7 +279,7 @@ private:
         m_outline_buffer = new_buffer;
         m_outline_capacity = new_capacity;
         m_inline = false;
-        return true;
+        return {};
     }
 
     union {

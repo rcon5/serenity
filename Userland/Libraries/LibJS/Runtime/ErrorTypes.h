@@ -196,6 +196,7 @@
     M(StringRawCannotConvert, "Cannot convert property 'raw' to object from {}")                                                        \
     M(StringRepeatCountMustBe, "repeat count must be a {} number")                                                                      \
     M(TemporalAmbiguousMonthOfPlainMonthDay, "Accessing month of PlainMonthDay is ambiguous, use monthCode instead")                    \
+    M(TemporalDifferentCalendars, "Cannot compare dates from two different calendars")                                                  \
     M(TemporalDisambiguatePossibleInstantsEarlierZero, "Cannot disambiguate zero possible instants with mode \"earlier\"")              \
     M(TemporalDisambiguatePossibleInstantsRejectMoreThanOne, "Cannot disambiguate two or more possible instants with mode \"reject\"")  \
     M(TemporalDisambiguatePossibleInstantsRejectZero, "Cannot disambiguate zero possible instants with mode \"reject\"")                \
@@ -223,10 +224,14 @@
     M(TemporalInvalidTime, "Invalid time")                                                                                              \
     M(TemporalInvalidTimeZoneName, "Invalid time zone name")                                                                            \
     M(TemporalInvalidUnitRange, "Invalid unit range, {} is larger than {}")                                                             \
+    M(TemporalInvalidZonedDateTimeOffset, "Invalid offset for the provided date and time in the current time zone")                     \
     M(TemporalMissingOptionsObject, "Required options object is missing or undefined")                                                  \
-    M(TemporalPlainTimeWithArgumentMustNotHave, "Argument must not have a defined {} property")                                         \
+    M(TemporalMissingStartingPoint, "A starting point is required for balancing {}")                                                    \
+    M(TemporalObjectMustHaveOneOf, "Object must have at least one of the following properties: {}")                                     \
+    M(TemporalObjectMustNotHave, "Object must not have a defined {} property")                                                          \
     M(TemporalPropertyMustBeFinite, "Property must not be Infinity")                                                                    \
     M(TemporalPropertyMustBePositiveInteger, "Property must be a positive integer")                                                     \
+    M(TemporalZonedDateTimeRoundZeroLengthDay, "Cannot round a ZonedDateTime in a calendar that has zero-length days")                  \
     M(ThisHasNotBeenInitialized, "|this| has not been initialized")                                                                     \
     M(ThisIsAlreadyInitialized, "|this| is already initialized")                                                                        \
     M(ToObjectNullOrUndefined, "ToObject on null or undefined")                                                                         \

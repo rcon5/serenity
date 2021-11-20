@@ -30,6 +30,7 @@
 #include <LibGUI/LazyWidget.h>
 #include <LibGUI/Menu.h>
 #include <LibGUI/Menubar.h>
+#include <LibGUI/MessageBox.h>
 #include <LibGUI/Painter.h>
 #include <LibGUI/SeparatorWidget.h>
 #include <LibGUI/SortingProxyModel.h>
@@ -254,24 +255,37 @@ int main(int argc, char** argv)
         return pid_index.data().to_i32();
     };
 
+    auto selected_name = [&](ProcessModel::Column column) -> String {
+        if (process_table_view.selection().is_empty())
+            return {};
+        auto pid_index = process_table_view.model()->index(process_table_view.selection().first().row(), column);
+        return pid_index.data().to_string();
+    };
+
     auto kill_action = GUI::Action::create(
-        "&Kill Process", { Mod_Ctrl, Key_K }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/kill.png"), [&](const GUI::Action&) {
+        "&Kill Process", { Mod_Ctrl, Key_K }, { Key_Delete }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/kill.png").release_value_but_fixme_should_propagate_errors(), [&](const GUI::Action&) {
             pid_t pid = selected_id(ProcessModel::Column::PID);
-            if (pid != -1)
+            if (pid == -1)
+                return;
+            auto rc = GUI::MessageBox::show(window, String::formatted("Do you really want to kill \"{}\" (PID {})?", selected_name(ProcessModel::Column::Name), pid), "System Monitor", GUI::MessageBox::Type::Question, GUI::MessageBox::InputType::YesNo);
+            if (rc == GUI::Dialog::ExecYes)
                 kill(pid, SIGKILL);
         },
         &process_table_view);
 
     auto stop_action = GUI::Action::create(
-        "&Stop Process", { Mod_Ctrl, Key_S }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/stop-hand.png"), [&](const GUI::Action&) {
+        "&Stop Process", { Mod_Ctrl, Key_S }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/stop-hand.png").release_value_but_fixme_should_propagate_errors(), [&](const GUI::Action&) {
             pid_t pid = selected_id(ProcessModel::Column::PID);
-            if (pid != -1)
+            if (pid == -1)
+                return;
+            auto rc = GUI::MessageBox::show(window, String::formatted("Do you really want to stop \"{}\" (PID {})?", selected_name(ProcessModel::Column::Name), pid), "System Monitor", GUI::MessageBox::Type::Question, GUI::MessageBox::InputType::YesNo);
+            if (rc == GUI::Dialog::ExecYes)
                 kill(pid, SIGSTOP);
         },
         &process_table_view);
 
     auto continue_action = GUI::Action::create(
-        "&Continue Process", { Mod_Ctrl, Key_C }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/continue.png"), [&](const GUI::Action&) {
+        "&Continue Process", { Mod_Ctrl, Key_C }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/continue.png").release_value_but_fixme_should_propagate_errors(), [&](const GUI::Action&) {
             pid_t pid = selected_id(ProcessModel::Column::PID);
             if (pid != -1)
                 kill(pid, SIGCONT);
@@ -280,7 +294,7 @@ int main(int argc, char** argv)
 
     auto profile_action = GUI::Action::create(
         "&Profile Process", { Mod_Ctrl, Key_P },
-        Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-profiler.png"), [&](auto&) {
+        Gfx::Bitmap::try_load_from_file("/res/icons/16x16/app-profiler.png").release_value_but_fixme_should_propagate_errors(), [&](auto&) {
             pid_t pid = selected_id(ProcessModel::Column::PID);
             if (pid != -1) {
                 auto pid_string = String::number(pid);
@@ -596,7 +610,7 @@ NonnullRefPtr<GUI::Widget> build_hardware_tab()
         {
             auto& cpu_group_box = self.add<GUI::GroupBox>("CPUs");
             cpu_group_box.set_layout<GUI::VerticalBoxLayout>();
-            cpu_group_box.layout()->set_margins({ 16, 6, 6 });
+            cpu_group_box.layout()->set_margins(6);
 
             Vector<GUI::JsonArrayModel::FieldSpec> processors_field;
             processors_field.empend("processor", "Processor", Gfx::TextAlignment::CenterRight);
@@ -627,7 +641,7 @@ NonnullRefPtr<GUI::Widget> build_hardware_tab()
         {
             auto& pci_group_box = self.add<GUI::GroupBox>("PCI devices");
             pci_group_box.set_layout<GUI::VerticalBoxLayout>();
-            pci_group_box.layout()->set_margins({ 16, 6, 6 });
+            pci_group_box.layout()->set_margins(6);
 
             auto& pci_table_view = pci_group_box.add<GUI::TableView>();
 
@@ -693,7 +707,7 @@ NonnullRefPtr<GUI::Widget> build_performance_tab()
 
     auto& cpu_graph_group_box = graphs_container->add<GUI::GroupBox>("CPU usage");
     cpu_graph_group_box.set_layout<GUI::HorizontalBoxLayout>();
-    cpu_graph_group_box.layout()->set_margins({ 16, 6, 6 });
+    cpu_graph_group_box.layout()->set_margins(6);
     cpu_graph_group_box.set_fixed_height(120);
     Vector<GraphWidget&> cpu_graphs;
     for (size_t i = 0; i < ProcessModel::the().cpus().size(); i++) {
@@ -725,7 +739,7 @@ NonnullRefPtr<GUI::Widget> build_performance_tab()
 
     auto& memory_graph_group_box = graphs_container->add<GUI::GroupBox>("Memory usage");
     memory_graph_group_box.set_layout<GUI::VerticalBoxLayout>();
-    memory_graph_group_box.layout()->set_margins({ 16, 6, 6 });
+    memory_graph_group_box.layout()->set_margins(6);
     memory_graph_group_box.set_fixed_height(120);
     auto& memory_graph = memory_graph_group_box.add<GraphWidget>();
     memory_graph.set_stack_values(true);

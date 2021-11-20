@@ -12,6 +12,7 @@
 #include <AK/RefPtr.h>
 #include <AK/String.h>
 #include <AK/Types.h>
+#include <AK/Vector.h>
 #include <LibGfx/Font.h>
 #include <LibGfx/Size.h>
 
@@ -73,7 +74,7 @@ public:
         update_x_height();
     }
 
-    int width(StringView const&) const override;
+    int width(StringView) const override;
     int width(Utf8View const&) const override;
     int width(Utf32View const&) const override;
 

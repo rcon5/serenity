@@ -43,11 +43,11 @@ SoundPlayerWidgetAdvancedView::SoundPlayerWidgetAdvancedView(GUI::Window& window
 
     m_player_view->set_layout<GUI::VerticalBoxLayout>();
 
-    m_play_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/play.png");
-    m_pause_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/pause.png");
-    m_stop_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/stop.png");
-    m_back_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-back.png");
-    m_next_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png");
+    m_play_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/play.png").release_value_but_fixme_should_propagate_errors();
+    m_pause_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/pause.png").release_value_but_fixme_should_propagate_errors();
+    m_stop_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/stop.png").release_value_but_fixme_should_propagate_errors();
+    m_back_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-back.png").release_value_but_fixme_should_propagate_errors();
+    m_next_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png").release_value_but_fixme_should_propagate_errors();
 
     m_visualization = m_player_view->add<BarsVisualizationWidget>();
 
@@ -102,13 +102,13 @@ SoundPlayerWidgetAdvancedView::SoundPlayerWidgetAdvancedView(GUI::Window& window
     m_volume_label = &menubar.add<GUI::Label>();
     m_volume_label->set_fixed_width(30);
 
-    auto& volume_slider = menubar.add<GUI::HorizontalSlider>();
-    volume_slider.set_fixed_width(95);
-    volume_slider.set_min(0);
-    volume_slider.set_max(150);
-    volume_slider.set_value(100);
+    m_volume_slider = &menubar.add<GUI::HorizontalSlider>();
+    m_volume_slider->set_fixed_width(95);
+    m_volume_slider->set_min(0);
+    m_volume_slider->set_max(150);
+    m_volume_slider->set_value(100);
 
-    volume_slider.on_change = [&](int value) {
+    m_volume_slider->on_change = [&](int value) {
         double volume = m_nonlinear_volume_slider ? (double)(value * value) / (100 * 100) : value / 100.;
         set_volume(volume);
     };
@@ -141,6 +141,15 @@ void SoundPlayerWidgetAdvancedView::keydown_event(GUI::KeyEvent& event)
 {
     if (event.key() == Key_Space)
         m_play_button->click();
+
+    if (event.key() == Key_S)
+        m_stop_button->click();
+
+    if (event.key() == Key_Up)
+        m_volume_slider->set_value(m_volume_slider->value() + m_volume_slider->page_step());
+
+    if (event.key() == Key_Down)
+        m_volume_slider->set_value(m_volume_slider->value() - m_volume_slider->page_step());
 
     GUI::Widget::keydown_event(event);
 }

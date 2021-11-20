@@ -28,7 +28,7 @@ String Color::to_string_without_alpha() const
     return String::formatted("#{:02x}{:02x}{:02x}", red(), green(), blue());
 }
 
-static Optional<Color> parse_rgb_color(StringView const& string)
+static Optional<Color> parse_rgb_color(StringView string)
 {
     VERIFY(string.starts_with("rgb(", CaseSensitivity::CaseInsensitive));
     VERIFY(string.ends_with(")"));
@@ -49,7 +49,7 @@ static Optional<Color> parse_rgb_color(StringView const& string)
     return Color(r, g, b);
 }
 
-static Optional<Color> parse_rgba_color(StringView const& string)
+static Optional<Color> parse_rgba_color(StringView string)
 {
     VERIFY(string.starts_with("rgba(", CaseSensitivity::CaseInsensitive));
     VERIFY(string.ends_with(")"));
@@ -73,7 +73,7 @@ static Optional<Color> parse_rgba_color(StringView const& string)
     return Color(r, g, b, a);
 }
 
-Optional<Color> Color::from_string(StringView const& string)
+Optional<Color> Color::from_string(StringView string)
 {
     if (string.is_empty())
         return {};
@@ -311,6 +311,30 @@ Optional<Color> Color::from_string(StringView const& string)
     return Color(r.value(), g.value(), b.value(), a.value());
 }
 
+Vector<Color> Color::shades(u32 steps, float max) const
+{
+    float shade = 1.f;
+    float step = max / steps;
+    Vector<Color> shades;
+    for (u32 i = 0; i < steps; i++) {
+        shade -= step;
+        shades.append(this->darkened(shade));
+    }
+    return shades;
+}
+
+Vector<Color> Color::tints(u32 steps, float max) const
+{
+    float shade = 1.f;
+    float step = max / steps;
+    Vector<Color> tints;
+    for (u32 i = 0; i < steps; i++) {
+        shade += step;
+        tints.append(this->lightened(shade));
+    }
+    return tints;
+}
+
 }
 
 bool IPC::encode(IPC::Encoder& encoder, Color const& color)
@@ -328,7 +352,7 @@ bool IPC::decode(IPC::Decoder& decoder, Color& color)
     return true;
 }
 
-void AK::Formatter<Gfx::Color>::format(FormatBuilder& builder, Gfx::Color const& value)
+ErrorOr<void> AK::Formatter<Gfx::Color>::format(FormatBuilder& builder, Gfx::Color const& value)
 {
-    Formatter<StringView>::format(builder, value.to_string());
+    return Formatter<StringView>::format(builder, value.to_string());
 }

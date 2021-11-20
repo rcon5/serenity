@@ -50,7 +50,7 @@ void MimeData::set_text(const String& text)
     set_data("text/plain", text.to_byte_buffer());
 }
 
-String guess_mime_type_based_on_filename(const StringView& path)
+String guess_mime_type_based_on_filename(StringView path)
 {
     if (path.ends_with(".pbm", CaseSensitivity::CaseInsensitive))
         return "image/x‑portable‑bitmap";
@@ -137,7 +137,7 @@ String guess_mime_type_based_on_filename(const StringView& path)
 ENUMERATE_HEADER_CONTENTS
 #undef __ENUMERATE_MIME_TYPE_HEADER
 
-Optional<String> guess_mime_type_based_on_sniffed_bytes(const ReadonlyBytes& bytes)
+Optional<String> guess_mime_type_based_on_sniffed_bytes(ReadonlyBytes bytes)
 {
 #define __ENUMERATE_MIME_TYPE_HEADER(var_name, mime_type, pattern_offset, pattern_size, ...)                       \
     if (static_cast<ssize_t>(bytes.size()) >= pattern_offset && bytes.slice(pattern_offset).starts_with(var_name)) \

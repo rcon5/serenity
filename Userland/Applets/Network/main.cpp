@@ -115,7 +115,7 @@ private:
         auto file_contents = file->read_all();
         auto json = JsonValue::from_string(file_contents);
 
-        if (!json.has_value())
+        if (json.is_error())
             return adapter_info.to_string();
 
         int connected_adapters = 0;
@@ -151,8 +151,8 @@ private:
     String m_adapter_info;
     bool m_connected = false;
     bool m_notifications = true;
-    RefPtr<Gfx::Bitmap> m_connected_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/network.png");
-    RefPtr<Gfx::Bitmap> m_disconnected_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/network-disconnected.png");
+    RefPtr<Gfx::Bitmap> m_connected_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/network.png").release_value_but_fixme_should_propagate_errors();
+    RefPtr<Gfx::Bitmap> m_disconnected_icon = Gfx::Bitmap::try_load_from_file("/res/icons/16x16/network-disconnected.png").release_value_but_fixme_should_propagate_errors();
 };
 
 int main(int argc, char* argv[])

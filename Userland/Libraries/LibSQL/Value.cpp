@@ -261,6 +261,8 @@ Value& Value::operator=(Value const& other)
     if (this != &other) {
         if (other.is_null()) {
             assign(null());
+        } else if (is_null()) {
+            assign(other);
         } else {
             VERIFY(can_cast(other));
             assign(other);
@@ -1014,7 +1016,7 @@ void TupleImpl::infer_descriptor()
 void TupleImpl::extend_descriptor(Value const& value)
 {
     VERIFY(m_descriptor_inferred);
-    m_descriptor->empend("", value.type(), Order::Ascending);
+    m_descriptor->empend("", "", "", value.type(), Order::Ascending);
 }
 
 bool TupleImpl::validate_before_assignment(Vector<Value> const& values)

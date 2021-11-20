@@ -118,11 +118,11 @@ ISODateTime get_iso_parts_from_epoch(BigInt const& epoch_nanoseconds)
 
     // 2. Let remainderNs be remainder(epochNanoseconds, 10^6).
     auto remainder_ns_bigint = epoch_nanoseconds.big_integer().divided_by(Crypto::UnsignedBigInteger { 1'000'000 }).remainder;
-    auto remainder_ns = remainder_ns_bigint.to_base(10).to_int<i64>().value();
+    auto remainder_ns = remainder_ns_bigint.to_double();
 
     // 3. Let epochMilliseconds be (epochNanoseconds − remainderNs) / 10^6.
     auto epoch_milliseconds_bigint = epoch_nanoseconds.big_integer().minus(remainder_ns_bigint).divided_by(Crypto::UnsignedBigInteger { 1'000'000 }).quotient;
-    auto epoch_milliseconds = (double)epoch_milliseconds_bigint.to_base(10).to_int<i64>().value();
+    auto epoch_milliseconds = epoch_milliseconds_bigint.to_double();
 
     // 4. Let year be ! YearFromTime(epochMilliseconds).
     auto year = year_from_time(epoch_milliseconds);
@@ -146,13 +146,13 @@ ISODateTime get_iso_parts_from_epoch(BigInt const& epoch_nanoseconds)
     auto millisecond = ms_from_time(epoch_milliseconds);
 
     // 11. Let microsecond be floor(remainderNs / 1000) modulo 1000.
-    auto microsecond = static_cast<u16>((remainder_ns / 1000) % 1000);
+    auto microsecond = modulo(floor(remainder_ns / 1000), 1000.0);
 
     // 12. Let nanosecond be remainderNs modulo 1000.
-    auto nanosecond = static_cast<u16>(remainder_ns % 1000);
+    auto nanosecond = modulo(remainder_ns, 1000.0);
 
     // 13. Return the Record { [[Year]]: year, [[Month]]: month, [[Day]]: day, [[Hour]]: hour, [[Minute]]: minute, [[Second]]: second, [[Millisecond]]: millisecond, [[Microsecond]]: microsecond, [[Nanosecond]]: nanosecond }.
-    return { .year = year, .month = month, .day = day, .hour = hour, .minute = minute, .second = second, .millisecond = millisecond, .microsecond = microsecond, .nanosecond = nanosecond };
+    return { .year = year, .month = month, .day = day, .hour = hour, .minute = minute, .second = second, .millisecond = millisecond, .microsecond = static_cast<u16>(microsecond), .nanosecond = static_cast<u16>(nanosecond) };
 }
 
 // 11.6.4 GetIANATimeZoneEpochValue ( timeZoneIdentifier, year, month, day, hour, minute, second, millisecond, microsecond, nanosecond ), https://tc39.es/proposal-temporal/#sec-temporal-getianatimezoneepochvalue
@@ -285,7 +285,7 @@ ThrowCompletionOr<double> parse_time_zone_offset_string(GlobalObject& global_obj
         auto fraction = String::formatted("{}000000000", *fraction_part);
         // b. Let nanoseconds be the String value equal to the substring of fraction consisting of the code units with indices 0 (inclusive) through 9 (exclusive).
         // c. Set nanoseconds to ! ToIntegerOrInfinity(nanoseconds).
-        nanoseconds = MUST(Value(js_string(vm, fraction_part->substring_view(0, 9))).to_integer_or_infinity(global_object));
+        nanoseconds = MUST(Value(js_string(vm, fraction.substring_view(0, 9))).to_integer_or_infinity(global_object));
     }
     // 11. Else,
     else {
@@ -336,19 +336,48 @@ String format_time_zone_offset_string(double offset_nanoseconds)
         // a. Let fraction be nanoseconds, formatted as a nine-digit decimal number, padded to the left with zeroes if necessary.
         // b. Set fraction to the longest possible substring of fraction starting at position 0 and not ending with the code unit 0x0030 (DIGIT ZERO).
         // c. Let post be the string-concatenation of the code unit 0x003A (COLON), s, the code unit 0x002E (FULL STOP), and fraction.
-        builder.appendff(":{:02}.{:9}", seconds, nanoseconds);
+        builder.appendff(":{:02}.{}", seconds, String::formatted("{:09}", nanoseconds).trim("0"sv, TrimMode::Right));
     }
     // 12. Else if seconds ≠ 0, then
     else if (seconds != 0) {
         // a. Let post be the string-concatenation of the code unit 0x003A (COLON) and s.
         builder.appendff(":{:02}", seconds);
     }
+    // 13. Else,
+    //    a. Let post be the empty String.
 
-    // 13. Return the string-concatenation of sign, h, the code unit 0x003A (COLON), m, and post.
+    // 14. Return the string-concatenation of sign, h, the code unit 0x003A (COLON), m, and post.
     return builder.to_string();
 }
 
-// 11.6.10 ToTemporalTimeZone ( temporalTimeZoneLike ), https://tc39.es/proposal-temporal/#sec-temporal-totemporaltimezone
+// 11.6.10 FormatISOTimeZoneOffsetString ( offsetNanoseconds ), https://tc39.es/proposal-temporal/#sec-temporal-formatisotimezoneoffsetstring
+String format_iso_time_zone_offset_string(double offset_nanoseconds)
+{
+    // 1. Assert: offsetNanoseconds is an integer.
+    VERIFY(trunc(offset_nanoseconds) == offset_nanoseconds);
+
+    // 2. Set offsetNanoseconds to ! RoundNumberToIncrement(offsetNanoseconds, 60 × 10^9, "halfExpand").
+    offset_nanoseconds = round_number_to_increment(offset_nanoseconds, 60000000000, "halfExpand"sv);
+
+    // 3. If offsetNanoseconds ≥ 0, let sign be "+"; otherwise, let sign be "-".
+    auto sign = offset_nanoseconds >= 0 ? "+"sv : "-"sv;
+
+    // 4. Set offsetNanoseconds to abs(offsetNanoseconds).
+    offset_nanoseconds = fabs(offset_nanoseconds);
+
+    // 5. Let minutes be offsetNanoseconds / (60 × 10^9) modulo 60.
+    auto minutes = fmod(offset_nanoseconds / 60000000000, 60);
+
+    // 6. Let hours be floor(offsetNanoseconds / (3600 × 10^9)).
+    auto hours = floor(offset_nanoseconds / 3600000000000);
+
+    // 7. Let h be hours, formatted as a two-digit decimal number, padded to the left with a zero if necessary.
+    // 8. Let m be minutes, formatted as a two-digit decimal number, padded to the left with a zero if necessary.
+    // 9. Return the string-concatenation of sign, h, the code unit 0x003A (COLON), and m.
+    return String::formatted("{}{:02}:{:02}", sign, (u32)hours, (u32)minutes);
+}
+
+// 11.6.11 ToTemporalTimeZone ( temporalTimeZoneLike ), https://tc39.es/proposal-temporal/#sec-temporal-totemporaltimezone
 ThrowCompletionOr<Object*> to_temporal_time_zone(GlobalObject& global_object, Value temporal_time_zone_like)
 {
     auto& vm = global_object.vm();
@@ -385,7 +414,7 @@ ThrowCompletionOr<Object*> to_temporal_time_zone(GlobalObject& global_object, Va
     return TRY(create_temporal_time_zone(global_object, result));
 }
 
-// 11.6.11 GetOffsetNanosecondsFor ( timeZone, instant ), https://tc39.es/proposal-temporal/#sec-temporal-getoffsetnanosecondsfor
+// 11.6.12 GetOffsetNanosecondsFor ( timeZone, instant ), https://tc39.es/proposal-temporal/#sec-temporal-getoffsetnanosecondsfor
 ThrowCompletionOr<double> get_offset_nanoseconds_for(GlobalObject& global_object, Value time_zone, Instant& instant)
 {
     auto& vm = global_object.vm();
@@ -393,33 +422,29 @@ ThrowCompletionOr<double> get_offset_nanoseconds_for(GlobalObject& global_object
     // 1. Let getOffsetNanosecondsFor be ? GetMethod(timeZone, "getOffsetNanosecondsFor").
     auto* get_offset_nanoseconds_for = TRY(time_zone.get_method(global_object, vm.names.getOffsetNanosecondsFor));
 
-    // 2. If getOffsetNanosecondsFor is undefined, set getOffsetNanosecondsFor to %Temporal.TimeZone.prototype.getOffsetNanosecondsFor%.
-    if (!get_offset_nanoseconds_for)
-        get_offset_nanoseconds_for = global_object.temporal_time_zone_prototype_get_offset_nanoseconds_for_function();
+    // 2. Let offsetNanoseconds be ? Call(getOffsetNanosecondsFor, timeZone, « instant »).
+    auto offset_nanoseconds_value = TRY(call(global_object, get_offset_nanoseconds_for, time_zone, &instant));
 
-    // 3. Let offsetNanoseconds be ? Call(getOffsetNanosecondsFor, timeZone, « instant »).
-    auto offset_nanoseconds_value = TRY(vm.call(*get_offset_nanoseconds_for, time_zone, &instant));
-
-    // 4. If Type(offsetNanoseconds) is not Number, throw a TypeError exception.
+    // 3. If Type(offsetNanoseconds) is not Number, throw a TypeError exception.
     if (!offset_nanoseconds_value.is_number())
         return vm.throw_completion<TypeError>(global_object, ErrorType::IsNotA, "Offset nanoseconds value", "number");
 
-    // 5. If ! IsIntegralNumber(offsetNanoseconds) is false, throw a RangeError exception.
+    // 4. If ! IsIntegralNumber(offsetNanoseconds) is false, throw a RangeError exception.
     if (!offset_nanoseconds_value.is_integral_number())
         return vm.throw_completion<RangeError>(global_object, ErrorType::IsNotAn, "Offset nanoseconds value", "integral number");
 
-    // 6. Set offsetNanoseconds to ℝ(offsetNanoseconds).
+    // 5. Set offsetNanoseconds to ℝ(offsetNanoseconds).
     auto offset_nanoseconds = offset_nanoseconds_value.as_double();
 
-    // 7. If abs(offsetNanoseconds) > 86400 × 10^9, throw a RangeError exception.
+    // 6. If abs(offsetNanoseconds) > 86400 × 10^9, throw a RangeError exception.
     if (fabs(offset_nanoseconds) > 86400000000000.0)
         return vm.throw_completion<RangeError>(global_object, ErrorType::TemporalInvalidOffsetNanosecondsValue);
 
-    // 8. Return offsetNanoseconds.
+    // 7. Return offsetNanoseconds.
     return offset_nanoseconds;
 }
 
-// 11.6.12 BuiltinTimeZoneGetOffsetStringFor ( timeZone, instant ), https://tc39.es/proposal-temporal/#sec-temporal-builtintimezonegetoffsetstringfor
+// 11.6.13 BuiltinTimeZoneGetOffsetStringFor ( timeZone, instant ), https://tc39.es/proposal-temporal/#sec-temporal-builtintimezonegetoffsetstringfor
 ThrowCompletionOr<String> builtin_time_zone_get_offset_string_for(GlobalObject& global_object, Value time_zone, Instant& instant)
 {
     // 1. Let offsetNanoseconds be ? GetOffsetNanosecondsFor(timeZone, instant).
@@ -429,7 +454,7 @@ ThrowCompletionOr<String> builtin_time_zone_get_offset_string_for(GlobalObject& 
     return format_time_zone_offset_string(offset_nanoseconds);
 }
 
-// 11.6.13 BuiltinTimeZoneGetPlainDateTimeFor ( timeZone, instant, calendar ), https://tc39.es/proposal-temporal/#sec-temporal-builtintimezonegetplaindatetimefor
+// 11.6.14 BuiltinTimeZoneGetPlainDateTimeFor ( timeZone, instant, calendar ), https://tc39.es/proposal-temporal/#sec-temporal-builtintimezonegetplaindatetimefor
 ThrowCompletionOr<PlainDateTime*> builtin_time_zone_get_plain_date_time_for(GlobalObject& global_object, Value time_zone, Instant& instant, Object& calendar)
 {
     // 1. Assert: instant has an [[InitializedTemporalInstant]] internal slot.
@@ -447,7 +472,7 @@ ThrowCompletionOr<PlainDateTime*> builtin_time_zone_get_plain_date_time_for(Glob
     return create_temporal_date_time(global_object, result.year, result.month, result.day, result.hour, result.minute, result.second, result.millisecond, result.microsecond, result.nanosecond, calendar);
 }
 
-// 11.6.14 BuiltinTimeZoneGetInstantFor ( timeZone, dateTime, disambiguation ), https://tc39.es/proposal-temporal/#sec-temporal-builtintimezonegetinstantfor
+// 11.6.15 BuiltinTimeZoneGetInstantFor ( timeZone, dateTime, disambiguation ), https://tc39.es/proposal-temporal/#sec-temporal-builtintimezonegetinstantfor
 ThrowCompletionOr<Instant*> builtin_time_zone_get_instant_for(GlobalObject& global_object, Value time_zone, PlainDateTime& date_time, StringView disambiguation)
 {
     // 1. Assert: dateTime has an [[InitializedTemporalDateTime]] internal slot.
@@ -459,7 +484,7 @@ ThrowCompletionOr<Instant*> builtin_time_zone_get_instant_for(GlobalObject& glob
     return disambiguate_possible_instants(global_object, possible_instants, time_zone, date_time, disambiguation);
 }
 
-// 11.6.15 DisambiguatePossibleInstants ( possibleInstants, timeZone, dateTime, disambiguation ), https://tc39.es/proposal-temporal/#sec-temporal-disambiguatepossibleinstants
+// 11.6.16 DisambiguatePossibleInstants ( possibleInstants, timeZone, dateTime, disambiguation ), https://tc39.es/proposal-temporal/#sec-temporal-disambiguatepossibleinstants
 ThrowCompletionOr<Instant*> disambiguate_possible_instants(GlobalObject& global_object, Vector<Value> const& possible_instants, Value time_zone, PlainDateTime& date_time, StringView disambiguation)
 {
     // TODO: MarkedValueList<T> would be nice, then we could pass a Vector<Instant*> here and wouldn't need the casts...
@@ -530,7 +555,6 @@ ThrowCompletionOr<Instant*> disambiguate_possible_instants(GlobalObject& global_
 
     // 13. If disambiguation is "earlier", then
     if (disambiguation == "earlier"sv) {
-        TODO();
         // a. Let earlier be ? AddDateTime(dateTime.[[ISOYear]], dateTime.[[ISOMonth]], dateTime.[[ISODay]], dateTime.[[ISOHour]], dateTime.[[ISOMinute]], dateTime.[[ISOSecond]], dateTime.[[ISOMillisecond]], dateTime.[[ISOMicrosecond]], dateTime.[[ISONanosecond]], dateTime.[[Calendar]], 0, 0, 0, 0, 0, 0, 0, 0, 0, −nanoseconds, undefined).
         auto earlier = TRY(add_date_time(global_object, date_time.iso_year(), date_time.iso_month(), date_time.iso_day(), date_time.iso_hour(), date_time.iso_minute(), date_time.iso_second(), date_time.iso_millisecond(), date_time.iso_microsecond(), date_time.iso_nanosecond(), date_time.calendar(), 0, 0, 0, 0, 0, 0, 0, 0, 0, -nanoseconds, nullptr));
 
@@ -573,7 +597,7 @@ ThrowCompletionOr<Instant*> disambiguate_possible_instants(GlobalObject& global_
     return &static_cast<Instant&>(const_cast<Object&>(instant.as_object()));
 }
 
-// 11.6.16 GetPossibleInstantsFor ( timeZone, dateTime ), https://tc39.es/proposal-temporal/#sec-temporal-getpossibleinstantsfor
+// 11.6.17 GetPossibleInstantsFor ( timeZone, dateTime ), https://tc39.es/proposal-temporal/#sec-temporal-getpossibleinstantsfor
 ThrowCompletionOr<MarkedValueList> get_possible_instants_for(GlobalObject& global_object, Value time_zone, PlainDateTime& date_time)
 {
     auto& vm = global_object.vm();
@@ -618,6 +642,27 @@ ThrowCompletionOr<MarkedValueList> get_possible_instants_for(GlobalObject& globa
 
     // 7. Return list.
     return { move(list) };
+}
+
+// 11.6.18 TimeZoneEquals ( one, two ), https://tc39.es/proposal-temporal/#sec-temporal-timezoneequals
+ThrowCompletionOr<bool> time_zone_equals(GlobalObject& global_object, Object& one, Object& two)
+{
+    // 1. If one and two are the same Object value, return true.
+    if (&one == &two)
+        return true;
+
+    // 2. Let timeZoneOne be ? ToString(one).
+    auto time_zone_one = TRY(Value(&one).to_string(global_object));
+
+    // 3. Let timeZoneTwo be ? ToString(two).
+    auto time_zone_two = TRY(Value(&two).to_string(global_object));
+
+    // 4. If timeZoneOne is timeZoneTwo, return true.
+    if (time_zone_one == time_zone_two)
+        return true;
+
+    // 5. Return false.
+    return false;
 }
 
 }

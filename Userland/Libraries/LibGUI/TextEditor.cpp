@@ -84,10 +84,9 @@ void TextEditor::create_actions()
     m_copy_action->set_enabled(false);
     m_paste_action = CommonActions::make_paste_action([&](auto&) { paste(); }, this);
     m_paste_action->set_enabled(is_editable() && Clipboard::the().mime_type().starts_with("text/") && !Clipboard::the().data().is_empty());
-    m_delete_action = CommonActions::make_delete_action([&](auto&) { do_delete(); }, this);
     if (is_multi_line()) {
         m_go_to_line_action = Action::create(
-            "Go to line...", { Mod_Ctrl, Key_L }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png"), [this](auto&) {
+            "Go to line...", { Mod_Ctrl, Key_L }, Gfx::Bitmap::try_load_from_file("/res/icons/16x16/go-forward.png").release_value_but_fixme_should_propagate_errors(), [this](auto&) {
                 String value;
                 if (InputBox::show(window(), value, "Line:", "Go to line") == InputBox::ExecOK) {
                     auto line_target = value.to_uint();
@@ -101,7 +100,7 @@ void TextEditor::create_actions()
     m_select_all_action = CommonActions::make_select_all_action([this](auto&) { select_all(); }, this);
 }
 
-void TextEditor::set_text(StringView const& text, AllowCallback allow_callback)
+void TextEditor::set_text(StringView text, AllowCallback allow_callback)
 {
     m_selection.clear();
 
@@ -834,8 +833,37 @@ void TextEditor::keydown_event(KeyEvent& event)
     }
 
     if (event.key() == KeyCode::Key_Delete) {
+        if (!is_editable())
+            return;
         if (m_autocomplete_box)
             hide_autocomplete();
+        if (has_selection()) {
+            delete_selection();
+            did_update_selection();
+            return;
+        }
+
+        if (m_cursor.column() < current_line().length()) {
+            // Delete within line
+            int erase_count = 1;
+            if (event.modifiers() == Mod_Ctrl) {
+                auto word_break_pos = document().first_word_break_after(m_cursor);
+                erase_count = word_break_pos.column() - m_cursor.column();
+            }
+            TextRange erased_range(m_cursor, { m_cursor.line(), m_cursor.column() + erase_count });
+            execute<RemoveTextCommand>(document().text_in_range(erased_range), erased_range);
+            return;
+        }
+        if (m_cursor.column() == current_line().length() && m_cursor.line() != line_count() - 1) {
+            // Delete at end of line; merge with next line
+            size_t erase_count = 0;
+            if (event.modifiers() == Mod_Ctrl) {
+                erase_count = document().first_word_break_after({ m_cursor.line() + 1, 0 }).column();
+            }
+            TextRange erased_range(m_cursor, { m_cursor.line() + 1, erase_count });
+            execute<RemoveTextCommand>(document().text_in_range(erased_range), erased_range);
+            return;
+        }
         return;
     }
 
@@ -1378,7 +1406,7 @@ void TextEditor::delete_text_range(TextRange range)
     update();
 }
 
-void TextEditor::insert_at_cursor_or_replace_selection(StringView const& text)
+void TextEditor::insert_at_cursor_or_replace_selection(StringView text)
 {
     ReflowDeferrer defer(*this);
     VERIFY(is_editable());
@@ -1531,14 +1559,12 @@ void TextEditor::set_mode(const Mode mode)
     switch (mode) {
     case Editable:
         m_cut_action->set_enabled(has_selection() && !text_is_secret());
-        m_delete_action->set_enabled(true);
         m_paste_action->set_enabled(true);
         set_accepts_emoji_input(true);
         break;
     case DisplayOnly:
     case ReadOnly:
         m_cut_action->set_enabled(false);
-        m_delete_action->set_enabled(false);
         m_paste_action->set_enabled(false);
         set_accepts_emoji_input(false);
         break;
@@ -1577,7 +1603,6 @@ void TextEditor::context_menu_event(ContextMenuEvent& event)
         m_context_menu->add_action(cut_action());
         m_context_menu->add_action(copy_action());
         m_context_menu->add_action(paste_action());
-        m_context_menu->add_action(delete_action());
         m_context_menu->add_separator();
         m_context_menu->add_action(select_all_action());
         if (is_multi_line()) {

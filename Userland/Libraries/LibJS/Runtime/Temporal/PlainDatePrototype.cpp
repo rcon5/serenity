@@ -58,7 +58,10 @@ void PlainDatePrototype::initialize(GlobalObject& global_object)
     define_native_function(vm.names.getISOFields, get_iso_fields, 0, attr);
     define_native_function(vm.names.add, add, 1, attr);
     define_native_function(vm.names.subtract, subtract, 1, attr);
+    define_native_function(vm.names.with, with, 1, attr);
     define_native_function(vm.names.withCalendar, with_calendar, 1, attr);
+    define_native_function(vm.names.until, until, 1, attr);
+    define_native_function(vm.names.since, since, 1, attr);
     define_native_function(vm.names.equals, equals, 1, attr);
     define_native_function(vm.names.toPlainDateTime, to_plain_date_time, 0, attr);
     define_native_function(vm.names.toZonedDateTime, to_zoned_date_time, 1, attr);
@@ -355,7 +358,7 @@ JS_DEFINE_NATIVE_FUNCTION(PlainDatePrototype::add)
     auto* options = TRY(get_options_object(global_object, vm.argument(1)));
 
     // 5. Return ? CalendarDateAdd(temporalDate.[[Calendar]], temporalDate, duration, options).
-    return TRY(calendar_date_add(global_object, temporal_date->calendar(), *temporal_date, *duration, options));
+    return TRY(calendar_date_add(global_object, temporal_date->calendar(), temporal_date, *duration, options));
 }
 
 // 3.3.20 Temporal.PlainDate.prototype.subtract ( temporalDurationLike [ , options ] ), https://tc39.es/proposal-temporal/#sec-temporal.plaindate.prototype.subtract
@@ -375,7 +378,50 @@ JS_DEFINE_NATIVE_FUNCTION(PlainDatePrototype::subtract)
     auto* negated_duration = create_negated_temporal_duration(global_object, *duration);
 
     // 6. Return ? CalendarDateAdd(temporalDate.[[Calendar]], temporalDate, negatedDuration, options).
-    return TRY(calendar_date_add(global_object, temporal_date->calendar(), *temporal_date, *negated_duration, options));
+    return TRY(calendar_date_add(global_object, temporal_date->calendar(), temporal_date, *negated_duration, options));
+}
+
+// 3.3.21 Temporal.PlainDate.prototype.with ( temporalDateLike [ , options ] ), https://tc39.es/proposal-temporal/#sec-temporal.plaindate.prototype.with
+JS_DEFINE_NATIVE_FUNCTION(PlainDatePrototype::with)
+{
+    auto temporal_date_like = vm.argument(0);
+
+    // 1. Let temporalDate be the this value.
+    // 2. Perform ? RequireInternalSlot(temporalDate, [[InitializedTemporalDate]]).
+    auto* temporal_date = TRY(typed_this_object(global_object));
+
+    // 3. If Type(temporalDateLike) is not Object, then
+    if (!temporal_date_like.is_object()) {
+        // a. Throw a TypeError exception.
+        return vm.throw_completion<TypeError>(global_object, ErrorType::NotAnObject, temporal_date_like.to_string_without_side_effects());
+    }
+
+    // 4. Perform ? RejectObjectWithCalendarOrTimeZone(temporalDateLike).
+    TRY(reject_object_with_calendar_or_time_zone(global_object, temporal_date_like.as_object()));
+
+    // 5. Let calendar be temporalDate.[[Calendar]].
+    auto& calendar = temporal_date->calendar();
+
+    // 6. Let fieldNames be ? CalendarFields(calendar, « "day", "month", "monthCode", "year" »).
+    auto field_names = TRY(calendar_fields(global_object, calendar, { "day"sv, "month"sv, "monthCode"sv, "year"sv }));
+
+    // 7. Let partialDate be ? PreparePartialTemporalFields(temporalDateLike, fieldNames).
+    auto* partial_date = TRY(prepare_partial_temporal_fields(global_object, temporal_date_like.as_object(), field_names));
+
+    // 8. Set options to ? GetOptionsObject(options).
+    auto* options = TRY(get_options_object(global_object, vm.argument(1)));
+
+    // 9. Let fields be ? PrepareTemporalFields(temporalDate, fieldNames, «»).
+    auto* fields = TRY(prepare_temporal_fields(global_object, *temporal_date, field_names, {}));
+
+    // 10. Set fields to ? CalendarMergeFields(calendar, fields, partialDate).
+    fields = TRY(calendar_merge_fields(global_object, calendar, *fields, *partial_date));
+
+    // 11. Set fields to ? PrepareTemporalFields(fields, fieldNames, «»).
+    fields = TRY(prepare_temporal_fields(global_object, *fields, field_names, {}));
+
+    // 12. Return ? DateFromFields(calendar, fields, options).
+    return TRY(date_from_fields(global_object, calendar, *fields, *options));
 }
 
 // 3.3.22 Temporal.PlainDate.prototype.withCalendar ( calendar ), https://tc39.es/proposal-temporal/#sec-temporal.plaindate.prototype.withcalendar
@@ -390,6 +436,128 @@ JS_DEFINE_NATIVE_FUNCTION(PlainDatePrototype::with_calendar)
 
     // 4. Return ? CreateTemporalDate(temporalDate.[[ISOYear]], temporalDate.[[ISOMonth]], temporalDate.[[ISODay]], calendar).
     return TRY(create_temporal_date(global_object, temporal_date->iso_year(), temporal_date->iso_month(), temporal_date->iso_day(), *calendar));
+}
+
+// 3.3.23 Temporal.PlainDate.prototype.until ( other [ , options ] ), https://tc39.es/proposal-temporal/#sec-temporal.plaindate.prototype.until
+JS_DEFINE_NATIVE_FUNCTION(PlainDatePrototype::until)
+{
+    // 1. Let temporalDate be the this value.
+    // 2. Perform ? RequireInternalSlot(temporalDate, [[InitializedTemporalDate]]).
+    auto* temporal_date = TRY(typed_this_object(global_object));
+
+    // 3. Set other to ? ToTemporalDate(other).
+    auto* other = TRY(to_temporal_date(global_object, vm.argument(0)));
+
+    // 4. If ? CalendarEquals(temporalDate.[[Calendar]], other.[[Calendar]]) is false, throw a RangeError exception.
+    if (!TRY(calendar_equals(global_object, temporal_date->calendar(), other->calendar())))
+        return vm.throw_completion<RangeError>(global_object, ErrorType::TemporalDifferentCalendars);
+
+    // 5. Set options to ? GetOptionsObject(options).
+    auto* options = TRY(get_options_object(global_object, vm.argument(1)));
+
+    // 6. Let disallowedUnits be « "hour", "minute", "second", "millisecond", "microsecond", "nanosecond" ».
+    Vector<StringView> disallowed_units { "hour"sv, "minute"sv, "second"sv, "millisecond"sv, "microsecond"sv, "nanosecond"sv };
+
+    // 7. Let smallestUnit be ? ToSmallestTemporalUnit(options, disallowedUnits, "day").
+    auto smallest_unit = TRY(to_smallest_temporal_unit(global_object, *options, disallowed_units, "day"sv));
+
+    // 8. Let largestUnit be ? ToLargestTemporalUnit(options, disallowedUnits, "auto", "day").
+    auto largest_unit = TRY(to_largest_temporal_unit(global_object, *options, disallowed_units, "auto"sv, "day"sv));
+
+    // 9. Perform ? ValidateTemporalUnitRange(largestUnit, smallestUnit).
+    TRY(validate_temporal_unit_range(global_object, largest_unit, *smallest_unit));
+
+    // 10. Let roundingMode be ? ToTemporalRoundingMode(options, "trunc").
+    auto rounding_mode = TRY(to_temporal_rounding_mode(global_object, *options, "trunc"sv));
+
+    // 11. Let roundingIncrement be ? ToTemporalRoundingIncrement(options, undefined, false).
+    auto rounding_increment = TRY(to_temporal_rounding_increment(global_object, *options, {}, false));
+
+    // 12. Let untilOptions be ? MergeLargestUnitOption(options, largestUnit).
+    auto* until_options = TRY(merge_largest_unit_option(global_object, *options, move(largest_unit)));
+
+    // 13. Let result be ? CalendarDateUntil(temporalDate.[[Calendar]], temporalDate, other, untilOptions).
+    auto* result = TRY(calendar_date_until(global_object, temporal_date->calendar(), temporal_date, other, *until_options));
+
+    // NOTE: Result can be reassigned by 14.b, `result` above has the type `Duration*` from calendar_date_until while 14.b has the type `RoundedDuration` from round_duration.
+    //       Thus, we must store the individual parts we're interested in.
+    auto years = result->years();
+    auto months = result->months();
+    auto weeks = result->weeks();
+    auto days = result->days();
+
+    // 14. If smallestUnit is not "day" or roundingIncrement ≠ 1, then
+    if (*smallest_unit != "day"sv || rounding_increment != 1) {
+        // a. Set result to ? RoundDuration(result.[[Years]], result.[[Months]], result.[[Weeks]], result.[[Days]], 0, 0, 0, 0, 0, 0, roundingIncrement, smallestUnit, roundingMode, temporalDate).
+        // See NOTE above about why this is done.
+        auto rounded_result = TRY(round_duration(global_object, years, months, weeks, days, 0, 0, 0, 0, 0, 0, rounding_increment, *smallest_unit, rounding_mode, temporal_date));
+        years = rounded_result.years;
+        months = rounded_result.months;
+        weeks = rounded_result.weeks;
+        days = rounded_result.days;
+    }
+
+    // 15. Return ? CreateTemporalDuration(result.[[Years]], result.[[Months]], result.[[Weeks]], result.[[Days]], 0, 0, 0, 0, 0, 0).
+    // See NOTE above about why `result` isn't used.
+    return TRY(create_temporal_duration(global_object, years, months, weeks, days, 0, 0, 0, 0, 0, 0));
+}
+
+// 3.3.24 Temporal.PlainDate.prototype.since ( other [ , options ] ), https://tc39.es/proposal-temporal/#sec-temporal.plaindate.prototype.since
+JS_DEFINE_NATIVE_FUNCTION(PlainDatePrototype::since)
+{
+    // 1. Let temporalDate be the this value.
+    // 2. Perform ? RequireInternalSlot(temporalDate, [[InitializedTemporalDate]]).
+    auto* temporal_date = TRY(typed_this_object(global_object));
+
+    // 3. Set other to ? ToTemporalDate(other).
+    auto* other = TRY(to_temporal_date(global_object, vm.argument(0)));
+
+    // 4. If ? CalendarEquals(temporalDate.[[Calendar]], other.[[Calendar]]) is false, throw a RangeError exception.
+    if (!TRY(calendar_equals(global_object, temporal_date->calendar(), other->calendar())))
+        return vm.throw_completion<RangeError>(global_object, ErrorType::TemporalDifferentCalendars);
+
+    // 5. Set options to ? GetOptionsObject(options).
+    auto* options = TRY(get_options_object(global_object, vm.argument(1)));
+
+    // 6. Let disallowedUnits be « "hour", "minute", "second", "millisecond", "microsecond", "nanosecond" ».
+    Vector<StringView> disallowed_units { "hour"sv, "minute"sv, "second"sv, "millisecond"sv, "microsecond"sv, "nanosecond"sv };
+
+    // 7. Let smallestUnit be ? ToSmallestTemporalUnit(options, disallowedUnits, "day").
+    auto smallest_unit = TRY(to_smallest_temporal_unit(global_object, *options, disallowed_units, "day"sv));
+
+    // 8. Let largestUnit be ? ToLargestTemporalUnit(options, disallowedUnits, "auto", "day").
+    auto largest_unit = TRY(to_largest_temporal_unit(global_object, *options, disallowed_units, "auto"sv, "day"sv));
+
+    // 9. Perform ? ValidateTemporalUnitRange(largestUnit, smallestUnit).
+    TRY(validate_temporal_unit_range(global_object, largest_unit, *smallest_unit));
+
+    // 10. Let roundingMode be ? ToTemporalRoundingMode(options, "trunc").
+    auto rounding_mode = TRY(to_temporal_rounding_mode(global_object, *options, "trunc"sv));
+
+    // 11. Set roundingMode to ! NegateTemporalRoundingMode(roundingMode).
+    rounding_mode = negate_temporal_rounding_mode(rounding_mode);
+
+    // 12. Let roundingIncrement be ? ToTemporalRoundingIncrement(options, undefined, false).
+    auto rounding_increment = TRY(to_temporal_rounding_increment(global_object, *options, {}, false));
+
+    // 13. Let untilOptions be ? MergeLargestUnitOption(options, largestUnit).
+    auto* until_options = TRY(merge_largest_unit_option(global_object, *options, move(largest_unit)));
+
+    // 14. Let result be ? CalendarDateUntil(temporalDate.[[Calendar]], temporalDate, other, untilOptions).
+    auto* result = TRY(calendar_date_until(global_object, temporal_date->calendar(), temporal_date, other, *until_options));
+
+    // 15. If smallestUnit is "day" and roundingIncrement = 1, then
+    if (*smallest_unit == "day"sv && rounding_increment == 1) {
+        // a. Return ? CreateTemporalDuration(−result.[[Years]], −result.[[Months]], −result.[[Weeks]], −result.[[Days]], 0, 0, 0, 0, 0, 0).
+        return TRY(create_temporal_duration(global_object, -result->years(), -result->months(), -result->weeks(), -result->days(), 0, 0, 0, 0, 0, 0));
+    }
+
+    // 16. Set result to ? RoundDuration(result.[[Years]], result.[[Months]], result.[[Weeks]], result.[[Days]], 0, 0, 0, 0, 0, 0, roundingIncrement, smallestUnit, roundingMode, temporalDate).
+    auto round_result = TRY(round_duration(global_object, result->years(), result->months(), result->weeks(), result->days(), 0, 0, 0, 0, 0, 0, rounding_increment, *smallest_unit, rounding_mode, temporal_date));
+
+    // 17. Return ? CreateTemporalDuration(−result.[[Years]], −result.[[Months]], −result.[[Weeks]], −result.[[Days]], 0, 0, 0, 0, 0, 0).
+    // NOTE: `result` here refers to `round_result`.
+    return TRY(create_temporal_duration(global_object, -round_result.years, -round_result.months, -round_result.weeks, -round_result.days, 0, 0, 0, 0, 0, 0));
 }
 
 // 3.3.25 Temporal.PlainDate.prototype.equals ( other ), https://tc39.es/proposal-temporal/#sec-temporal.plaindate.prototype.equals

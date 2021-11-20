@@ -327,7 +327,7 @@ ThrowCompletionOr<TemporalPlainDateTime> add_date_time(GlobalObject& global_obje
     auto* date_duration = TRY(create_temporal_duration(global_object, years, months, weeks, days + time_result.days, 0, 0, 0, 0, 0, 0));
 
     // 5. Let addedDate be ? CalendarDateAdd(calendar, datePart, dateDuration, options).
-    auto* added_date = TRY(calendar_date_add(global_object, calendar, *date_part, *date_duration, options));
+    auto* added_date = TRY(calendar_date_add(global_object, calendar, date_part, *date_duration, options));
 
     // 6. Return the Record { [[Year]]: addedDate.[[ISOYear]], [[Month]]: addedDate.[[ISOMonth]], [[Day]]: addedDate.[[ISODay]], [[Hour]]: timeResult.[[Hour]], [[Minute]]: timeResult.[[Minute]], [[Second]]: timeResult.[[Second]], [[Millisecond]]: timeResult.[[Millisecond]], [[Microsecond]]: timeResult.[[Microsecond]], [[Nanosecond]]: timeResult.[[Nanosecond]] }.
     return TemporalPlainDateTime { .year = added_date->iso_year(), .month = added_date->iso_month(), .day = added_date->iso_day(), .hour = time_result.hour, .minute = time_result.minute, .second = time_result.second, .millisecond = time_result.millisecond, .microsecond = time_result.microsecond, .nanosecond = time_result.nanosecond };
@@ -397,7 +397,7 @@ ThrowCompletionOr<TemporalDuration> difference_iso_date_time(GlobalObject& globa
     auto* until_options = TRY(merge_largest_unit_option(global_object, *options, move(date_largest_unit)));
 
     // 12. Let dateDifference be ? CalendarDateUntil(calendar, date1, date2, untilOptions).
-    auto* date_difference = TRY(calendar_date_until(global_object, calendar, *date1, *date2, *until_options));
+    auto* date_difference = TRY(calendar_date_until(global_object, calendar, date1, date2, *until_options));
 
     // 13. Let balanceResult be ? BalanceDuration(dateDifference.[[Days]], timeDifference.[[Hours]], timeDifference.[[Minutes]], timeDifference.[[Seconds]], timeDifference.[[Milliseconds]], timeDifference.[[Microseconds]], timeDifference.[[Nanoseconds]], largestUnit).
     auto balance_result_ = TRY(balance_duration(global_object, date_difference->days(), time_difference.hours, time_difference.minutes, time_difference.seconds, time_difference.milliseconds, time_difference.microseconds, *js_bigint(vm, { (i32)time_difference.nanoseconds }), largest_unit));

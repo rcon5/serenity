@@ -46,11 +46,12 @@ public:
     [[nodiscard]] size_t size() const { return m_table.size(); }
     [[nodiscard]] size_t capacity() const { return m_table.capacity(); }
     void clear() { m_table.clear(); }
+    void clear_with_capacity() { m_table.clear_with_capacity(); }
 
     HashSetResult set(const K& key, const V& value) { return m_table.set({ key, value }); }
     HashSetResult set(const K& key, V&& value) { return m_table.set({ key, move(value) }); }
-    HashSetResult try_set(const K& key, const V& value) { return m_table.try_set({ key, value }); }
-    HashSetResult try_set(const K& key, V&& value) { return m_table.try_set({ key, move(value) }); }
+    ErrorOr<HashSetResult> try_set(const K& key, const V& value) { return m_table.try_set({ key, value }); }
+    ErrorOr<HashSetResult> try_set(const K& key, V&& value) { return m_table.try_set({ key, move(value) }); }
 
     bool remove(const K& key)
     {
@@ -91,7 +92,7 @@ public:
     }
 
     void ensure_capacity(size_t capacity) { m_table.ensure_capacity(capacity); }
-    bool try_ensure_capacity(size_t capacity) { return m_table.try_ensure_capacity(capacity); }
+    ErrorOr<void> try_ensure_capacity(size_t capacity) { return m_table.try_ensure_capacity(capacity); }
 
     Optional<typename Traits<V>::PeekType> get(const K& key) const requires(!IsPointer<typename Traits<V>::PeekType>)
     {

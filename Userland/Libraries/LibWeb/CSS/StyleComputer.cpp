@@ -18,7 +18,7 @@
 #include <LibWeb/DOM/Element.h>
 #include <LibWeb/Dump.h>
 #include <LibWeb/FontCache.h>
-#include <LibWeb/Page/BrowsingContext.h>
+#include <LibWeb/HTML/BrowsingContext.h>
 #include <ctype.h>
 #include <stdio.h>
 
@@ -123,13 +123,8 @@ static bool contains(Edge a, Edge b)
     return a == b || b == Edge::All;
 }
 
-static void set_property_expanding_shorthands(StyleProperties& style, CSS::PropertyID property_id, StyleValue const& value, DOM::Document& document, bool is_internally_generated_pseudo_property = false)
+static void set_property_expanding_shorthands(StyleProperties& style, CSS::PropertyID property_id, StyleValue const& value, DOM::Document& document)
 {
-    if (is_pseudo_property(property_id) && !is_internally_generated_pseudo_property) {
-        dbgln("Ignoring non-internally-generated pseudo property: {}", string_from_property_id(property_id));
-        return;
-    }
-
     auto assign_edge_values = [&style](PropertyID top_property, PropertyID right_property, PropertyID bottom_property, PropertyID left_property, auto const& values) {
         if (values.size() == 4) {
             style.set_property(top_property, values[0]);
@@ -298,83 +293,27 @@ static void set_property_expanding_shorthands(StyleProperties& style, CSS::Prope
     }
 
     if (property_id == CSS::PropertyID::Background) {
-        auto set_single_background = [&](CSS::BackgroundStyleValue const& background) {
-            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundColor, background.color(), document);
-            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundImage, background.image(), document);
-            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundRepeatX, background.repeat_x(), document, true);
-            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundRepeatY, background.repeat_y(), document, true);
-        };
-
         if (value.is_background()) {
             auto& background = value.as_background();
-            set_single_background(background);
-            return;
-        }
-        if (value.is_value_list()) {
-            auto& background_list = value.as_value_list().values();
-            // FIXME: Handle multiple backgrounds.
-            if (!background_list.is_empty()) {
-                auto& background = background_list.first();
-                if (background.is_background())
-                    set_single_background(background.as_background());
-            }
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundColor, background.color(), document);
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundImage, background.image(), document);
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundPosition, background.position(), document);
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundSize, background.size(), document);
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundRepeat, background.repeat(), document);
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundAttachment, background.attachment(), document);
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundOrigin, background.origin(), document);
+            set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundClip, background.clip(), document);
             return;
         }
 
         set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundColor, value, document);
         set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundImage, value, document);
-        set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundRepeatX, value, document, true);
-        set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundRepeatY, value, document, true);
-        return;
-    }
-
-    if (property_id == CSS::PropertyID::BackgroundImage) {
-        if (value.is_value_list()) {
-            auto& background_image_list = value.as_value_list().values();
-            // FIXME: Handle multiple backgrounds.
-            if (!background_image_list.is_empty()) {
-                auto& background_image = background_image_list.first();
-                style.set_property(CSS::PropertyID::BackgroundImage, background_image);
-            }
-            return;
-        }
-
-        style.set_property(CSS::PropertyID::BackgroundImage, value);
-        return;
-    }
-
-    if (property_id == CSS::PropertyID::BackgroundRepeat) {
-        if (value.is_value_list()) {
-            auto& background_repeat_list = value.as_value_list().values();
-            // FIXME: Handle multiple backgrounds.
-            if (!background_repeat_list.is_empty()) {
-                auto& maybe_background_repeat = background_repeat_list.first();
-                if (maybe_background_repeat.is_background_repeat()) {
-                    auto& background_repeat = maybe_background_repeat.as_background_repeat();
-                    set_property_expanding_shorthands(style, PropertyID::BackgroundRepeatX, background_repeat.repeat_x(), document, true);
-                    set_property_expanding_shorthands(style, PropertyID::BackgroundRepeatY, background_repeat.repeat_y(), document, true);
-                }
-            }
-            return;
-        }
-        if (value.is_background_repeat()) {
-            auto& background_repeat = value.as_background_repeat();
-            set_property_expanding_shorthands(style, PropertyID::BackgroundRepeatX, background_repeat.repeat_x(), document, true);
-            set_property_expanding_shorthands(style, PropertyID::BackgroundRepeatY, background_repeat.repeat_y(), document, true);
-            return;
-        }
-
-        set_property_expanding_shorthands(style, PropertyID::BackgroundRepeatX, value, document, true);
-        set_property_expanding_shorthands(style, PropertyID::BackgroundRepeatY, value, document, true);
-        return;
-    }
-
-    if (property_id == CSS::PropertyID::BackgroundRepeatX || property_id == CSS::PropertyID::BackgroundRepeatY) {
-        auto value_id = value.to_identifier();
-        if (value_id == CSS::ValueID::RepeatX || value_id == CSS::ValueID::RepeatY)
-            return;
-
-        style.set_property(property_id, value);
+        set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundPosition, value, document);
+        set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundSize, value, document);
+        set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundRepeat, value, document);
+        set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundAttachment, value, document);
+        set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundOrigin, value, document);
+        set_property_expanding_shorthands(style, CSS::PropertyID::BackgroundClip, value, document);
         return;
     }
 
@@ -578,18 +517,10 @@ void StyleComputer::compute_cascaded_values(StyleProperties& style, DOM::Element
     // FIXME: Transition declarations [css-transitions-1]
 }
 
-static NonnullRefPtr<StyleValue> get_initial_value(CSS::PropertyID property_id)
-{
-    auto value = property_initial_value(property_id);
-    if (!value)
-        return InitialStyleValue::the();
-    return value.release_nonnull();
-};
-
 static NonnullRefPtr<StyleValue> get_inherit_value(CSS::PropertyID property_id, DOM::Element const* element)
 {
     if (!element || !element->parent_element() || !element->parent_element()->specified_css_values())
-        return get_initial_value(property_id);
+        return property_initial_value(property_id);
     auto& map = element->parent_element()->specified_css_values()->properties();
     auto it = map.find(property_id);
     VERIFY(it != map.end());
@@ -605,12 +536,12 @@ void StyleComputer::compute_defaulted_property_value(StyleProperties& style, DOM
         if (is_inherited_property(property_id))
             style.m_property_values.set(property_id, get_inherit_value(property_id, element));
         else
-            style.m_property_values.set(property_id, get_initial_value(property_id));
+            style.m_property_values.set(property_id, property_initial_value(property_id));
         return;
     }
 
     if (it->value->is_initial()) {
-        it->value = get_initial_value(property_id);
+        it->value = property_initial_value(property_id);
         return;
     }
 

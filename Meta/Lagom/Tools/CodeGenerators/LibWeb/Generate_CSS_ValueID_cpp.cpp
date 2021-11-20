@@ -36,9 +36,8 @@ int main(int argc, char** argv)
     if (!file->open(Core::OpenMode::ReadOnly))
         return 1;
 
-    auto json = JsonValue::from_string(file->read_all());
-    VERIFY(json.has_value());
-    VERIFY(json.value().is_array());
+    auto json = JsonValue::from_string(file->read_all()).release_value_but_fixme_should_propagate_errors();
+    VERIFY(json.is_array());
 
     StringBuilder builder;
     SourceGenerator generator { builder };
@@ -49,11 +48,11 @@ int main(int argc, char** argv)
 
 namespace Web::CSS {
 
-ValueID value_id_from_string(const StringView& string)
+ValueID value_id_from_string(StringView string)
 {
 )~~~");
 
-    json.value().as_array().for_each([&](auto& name) {
+    json.as_array().for_each([&](auto& name) {
         auto member_generator = generator.fork();
         member_generator.set("name", name.to_string());
         member_generator.set("name:titlecase", title_casify(name.to_string()));
@@ -71,7 +70,7 @@ const char* string_from_value_id(ValueID value_id) {
     switch (value_id) {
 )~~~");
 
-    json.value().as_array().for_each([&](auto& name) {
+    json.as_array().for_each([&](auto& name) {
         auto member_generator = generator.fork();
         member_generator.set("name", name.to_string());
         member_generator.set("name:titlecase", title_casify(name.to_string()));
